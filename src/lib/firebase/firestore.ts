@@ -887,3 +887,28 @@ export async function bulkDeleteManualDictionaryEntries() {
 
   await batch.commit();
 }
+
+export async function rescanLotteryResultsForDateRange(
+  ownerUid: string,
+  startDate: string,
+  endDate: string
+): Promise<number> {
+  const rows = await listLotteryResultsByDateRange(ownerUid, startDate, endDate);
+
+  const preparedRows = rows.map((row) => ({
+    state: row.state,
+    date: row.date,
+    gameType: row.gameType,
+    drawTime: row.drawTime,
+    rawResult: row.rawResult,
+    normalizedResult: row.normalizedResult,
+    sourceType: row.sourceType,
+    boxedKey: row.boxedKey || sortedDigits(row.normalizedResult),
+  })) as Array<
+    Omit<LotteryResult, 'id' | 'ownerUid' | 'importedAt'> & { boxedKey: string }
+  >;
+
+  await scanImportedLotteryRowsForHits(ownerUid, preparedRows);
+
+  return preparedRows.length;
+}
