@@ -7,63 +7,203 @@ import { bulkCreateLotteryResults } from '@/lib/firebase/firestore';
 import type { DrawTime, GameType, LotteryResult } from '@/lib/types';
 
 type ParsedRow = Omit<LotteryResult, 'id' | 'ownerUid' | 'importedAt' | 'boxedKey'>;
+type PreviewRow = ParsedRow & {
+  gameLabel: string;
+  bonusText?: string;
+};
 
 function normalizeResult(value: string): string {
   return value.replace(/\D/g, '');
 }
 
-function parseGameType(value: string): GameType | null {
-  const v = value.trim().toLowerCase();
-  if (v === 'cash3' || v === 'pick3' || v === 'pick 3') return 'cash3';
-  if (v === 'cash4' || v === 'pick4' || v === 'pick 4') return 'cash4';
+function normalizeDate(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.trim();
+  return parsed.toISOString().slice(0, 10);
+}
+
+function extractPrimaryResult(value: string) {
+  const parts = value.split(',').map(part => part.trim()).filter(Boolean);
+  const rawResult = parts[0] ?? '';
+  const normalizedResult = normalizeResult(rawResult);
+  const bonusText = parts.slice(1).join(', ') || undefined;
+
+  return { rawResult, normalizedResult, bonusText };
+}
+
+function inferGameType(gameRaw: string, normalizedResult: string): GameType | null {
+  if (normalizedResult.length === 3) return 'cash3';
+  if (normalizedResult.length === 4) return 'cash4';
+
+  const v = gameRaw.trim().toLowerCase();
+
+  if (
+    v.includes('cash 3') ||
+    v.includes('pick 3') ||
+    v.includes('daily 3') ||
+    v.includes('play 3') ||
+    v.includes('numbers') ||
+    v.includes('pega 3') ||
+    v.includes('dc-3')
+  ) {
+    return 'cash3';
+  }
+
+  if (
+    v.includes('cash 4') ||
+    v.includes('pick 4') ||
+    v.includes('daily 4') ||
+    v.includes('play 4') ||
+    v.includes('win 4') ||
+    v.includes('numbers game') ||
+    v.includes('pega 4') ||
+    v.includes('dc-4')
+  ) {
+    return 'cash4';
+  }
+
   return null;
 }
 
 function parseDrawTime(value: string): DrawTime {
   const v = value.trim().toLowerCase();
-  if (v === 'midday') return 'midday';
-  if (v === 'evening') return 'evening';
-  if (v === 'night') return 'night';
+
+  if (v.includes('night')) return 'night';
+  if (v.includes('evening')) return 'evening';
+
+  if (
+    v.includes('midday') ||
+    v.includes('daytime') ||
+    /\bday\b/.test(v) ||
+    v.includes('morning') ||
+    /\b\d{1,2}:\d{2}\s*(am|pm)\b/i.test(value) ||
+    /\b\d{1,2}(am|pm)\b/i.test(value)
+  ) {
+    return 'midday';
+  }
+
   return 'unknown';
 }
 
-function parsePasteInput(raw: string): ParsedRow[] {
+function isHeaderRow(parts: string[]): boolean {
+  if (parts.length < 3) return false;
+
+  return (
+    parts[0].trim().toLowerCase() === 'game' &&
+    parts[1].trim().toLowerCase() === 'draw date' &&
+    parts[2].trim().toLowerCase() === 'results'
+  );
+}
+
+function splitLineIntoCells(line: string): string[] {
+  if (line.includes('\t')) {
+    return line.split('\t').map(p => p.trim()).filter(Boolean);
+  }
+
+  const datePattern =
+    /((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})/;
+
+  const match = line.match(datePattern);
+  if (match && match.index !== undefined) {
+    const dateText = match[1];
+    const before = line.slice(0, match.index).trim();
+    const after = line.slice(match.index + dateText.length).trim();
+
+    if (before && after) {
+      return [before, dateText, after];
+    }
+  }
+
+  if (line.includes(',')) {
+    return line.split(',').map(p => p.trim()).filter(Boolean);
+  }
+
+  return [line.trim()];
+}
+
+function parsePasteInput(raw: string): PreviewRow[] {
   const lines = raw
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean);
 
-  const rows: ParsedRow[] = [];
+  const rows: PreviewRow[] = [];
+  let currentState = '';
 
   for (const line of lines) {
-    const parts = line.includes('\t')
-      ? line.split('\t').map(p => p.trim())
-      : line.split(',').map(p => p.trim());
+    const parts = splitLineIntoCells(line).filter(Boolean);
 
-    if (parts.length < 5) continue;
+    if (!parts.length) continue;
+    if (isHeaderRow(parts)) continue;
 
-    const [state, date, gameRaw, drawTimeRaw, resultRaw] = parts;
-
-    const gameType = parseGameType(gameRaw);
-    if (!gameType) continue;
-
-    const normalizedResult = normalizeResult(resultRaw);
-    if (
-      (gameType === 'cash3' && normalizedResult.length !== 3) ||
-      (gameType === 'cash4' && normalizedResult.length !== 4)
-    ) {
+    // State-only row like "Georgia"
+    if (parts.length === 1) {
+      currentState = parts[0];
       continue;
     }
 
-    rows.push({
-      state,
-      date,
-      gameType,
-      drawTime: parseDrawTime(drawTimeRaw),
-      rawResult: resultRaw,
-      normalizedResult,
-      sourceType: 'paste',
-    });
+    // Old format support:
+    // state,date,gameType,drawTime,result
+    if (parts.length >= 5) {
+      const [state, date, gameRaw, drawTimeRaw, resultRaw] = parts;
+
+      const { rawResult, normalizedResult, bonusText } = extractPrimaryResult(resultRaw);
+      const gameType = inferGameType(gameRaw, normalizedResult);
+      if (!gameType) continue;
+
+      if (
+        (gameType === 'cash3' && normalizedResult.length !== 3) ||
+        (gameType === 'cash4' && normalizedResult.length !== 4)
+      ) {
+        continue;
+      }
+
+      rows.push({
+        state,
+        date: normalizeDate(date),
+        gameType,
+        drawTime: parseDrawTime(drawTimeRaw),
+        rawResult,
+        normalizedResult,
+        sourceType: 'paste',
+        gameLabel: gameRaw,
+        bonusText,
+      });
+
+      currentState = state;
+      continue;
+    }
+
+    // New format support:
+    // State on one line, then Game / Draw Date / Results below it
+    if (parts.length === 3 && currentState) {
+      const [gameRaw, date, resultRaw] = parts;
+
+      const { rawResult, normalizedResult, bonusText } = extractPrimaryResult(resultRaw);
+      const gameType = inferGameType(gameRaw, normalizedResult);
+      if (!gameType) continue;
+
+      if (
+        (gameType === 'cash3' && normalizedResult.length !== 3) ||
+        (gameType === 'cash4' && normalizedResult.length !== 4)
+      ) {
+        continue;
+      }
+
+      rows.push({
+        state: currentState,
+        date: normalizeDate(date),
+        gameType,
+        drawTime: parseDrawTime(gameRaw),
+        rawResult,
+        normalizedResult,
+        sourceType: 'paste',
+        gameLabel: gameRaw,
+        bonusText,
+      });
+
+      continue;
+    }
   }
 
   return rows;
@@ -85,7 +225,9 @@ export default function ResultsImportPage() {
     }
 
     if (!previewRows.length) {
-      setError('No valid rows were found to import.');
+      setError(
+        'No valid rows were found to import. Paste a state on one line, then Game / Draw Date / Results on the following line(s).'
+      );
       return;
     }
 
@@ -94,7 +236,11 @@ export default function ResultsImportPage() {
     setMessage('');
 
     try {
-      await bulkCreateLotteryResults(user.uid, previewRows);
+      await bulkCreateLotteryResults(
+        user.uid,
+        previewRows.map(({ gameLabel, bonusText, ...row }) => row)
+      );
+
       setMessage(`Imported ${previewRows.length} result row(s).`);
       setInput('');
     } catch (err) {
@@ -122,9 +268,11 @@ export default function ResultsImportPage() {
           <div className="page-header">
             <h1>Results Import</h1>
             <p>
-              Paste results in CSV or tab-separated format:
+              Paste results in either format:
               <br />
-              <strong>state,date,gameType,drawTime,result</strong>
+              <strong>1)</strong> state,date,gameType,drawTime,result
+              <br />
+              <strong>2)</strong> State on one line, then Game / Draw Date / Results on the next line(s)
             </p>
           </div>
         </section>
@@ -136,11 +284,11 @@ export default function ResultsImportPage() {
           <textarea
             id="resultsPaste"
             className="journal-textarea"
-            rows={12}
+            rows={16}
             value={input}
             onChange={e => setInput(e.target.value)}
             placeholder={
-              'GA,2026-04-06,cash3,midday,040\nGA,2026-04-06,cash4,midday,2915\nFL,2026-04-06,cash3,evening,726'
+              'Game\tDraw Date\tResults\nGeorgia\nCash 3 Midday\tTue, Apr 7, 2026\t9-0-2\nFlorida\nPick 4 Midday\tTue, Apr 7, 2026\t8-7-2-5, Fireball: 9'
             }
           />
 
@@ -193,7 +341,10 @@ export default function ResultsImportPage() {
           <div style={{ display: 'grid', gap: '12px' }}>
             {previewRows.length ? (
               previewRows.map((row, index) => (
-                <div key={`${row.state}-${row.date}-${row.gameType}-${row.drawTime}-${index}`} className="journal-card-flat">
+                <div
+                  key={`${row.state}-${row.date}-${row.gameType}-${row.drawTime}-${index}`}
+                  className="journal-card-flat"
+                >
                   <div
                     style={{
                       display: 'grid',
@@ -203,9 +354,14 @@ export default function ResultsImportPage() {
                   >
                     <div><strong>State:</strong> {row.state}</div>
                     <div><strong>Date:</strong> {row.date}</div>
-                    <div><strong>Game:</strong> {row.gameType}</div>
+                    <div><strong>Game Type:</strong> {row.gameType}</div>
+                    <div><strong>Game Label:</strong> {row.gameLabel}</div>
                     <div><strong>Draw:</strong> {row.drawTime}</div>
                     <div><strong>Result:</strong> {row.normalizedResult}</div>
+                    <div><strong>Raw:</strong> {row.rawResult}</div>
+                    {row.bonusText ? (
+                      <div><strong>Bonus:</strong> {row.bonusText}</div>
+                    ) : null}
                   </div>
                 </div>
               ))
