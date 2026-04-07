@@ -272,15 +272,8 @@ export async function listActiveDreamWindowsForDate(
   ownerUid: string,
   date: string
 ): Promise<ActiveDreamWindow[]> {
-  const q = query(
-    collection(db, COLLECTIONS.activeDreamWindows),
-    where('ownerUid', '==', ownerUid),
-    where('activeStart', '<=', date),
-    where('activeEnd', '>=', date)
-  );
-
-  const snap = await getDocs(q);
-  return snap.docs.map(d => mapDoc<ActiveDreamWindow>(d.id, d.data()));
+  const all = await listActiveDreamWindows(ownerUid);
+  return all.filter(window => window.activeStart <= date && window.activeEnd >= date);
 }
 
 export async function createLotteryResult(
@@ -893,22 +886,24 @@ export async function rescanLotteryResultsForDateRange(
   startDate: string,
   endDate: string
 ): Promise<number> {
-  const rows = await listLotteryResultsByDateRange(ownerUid, startDate, endDate);
+  const allRows = await listLotteryResults(ownerUid, 5000);
 
-  const preparedRows = rows.map((row) => ({
-    state: row.state,
-    date: row.date,
-    gameType: row.gameType,
-    drawTime: row.drawTime,
-    rawResult: row.rawResult,
-    normalizedResult: row.normalizedResult,
-    sourceType: row.sourceType,
-    boxedKey: row.boxedKey || sortedDigits(row.normalizedResult),
-  })) as Array<
-    Omit<LotteryResult, 'id' | 'ownerUid' | 'importedAt'> & { boxedKey: string }
-  >;
+  const preparedRows = allRows
+    .filter(row => row.date >= startDate && row.date <= endDate)
+    .map(row => ({
+      state: row.state,
+      date: row.date,
+      gameType: row.gameType,
+      drawTime: row.drawTime,
+      rawResult: row.rawResult,
+      normalizedResult: row.normalizedResult,
+      sourceType: row.sourceType,
+      boxedKey: row.boxedKey || sortedDigits(row.normalizedResult),
+    })) as Array<
+      Omit<LotteryResult, 'id' | 'ownerUid' | 'importedAt'> & { boxedKey: string }
+    >;
 
   await scanImportedLotteryRowsForHits(ownerUid, preparedRows);
-
   return preparedRows.length;
 }
+

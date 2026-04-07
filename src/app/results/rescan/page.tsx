@@ -36,7 +36,9 @@ export default function ResultsRescanPage() {
       setMessage(`Rescanned ${count} result row(s) for ${label}. Straight and boxed hits were re-checked and logged.`);
     } catch (err) {
       console.error(err);
-      setError('Rescan failed. Check Firestore permissions and console logs.');
+      const message =
+        err instanceof Error ? err.message : 'Rescan failed. Check Firestore permissions and console logs.';
+      setError(message);
     } finally {
       setRunning(false);
     }
