@@ -360,9 +360,11 @@ export function buildAutoPinSuggestions(input: {
   for (const family of hotFamilies) {
     const familyId = `${family.gameType}__${family.familyKey}`;
     const familyState = familyMap.get(familyId);
-    const overlapTerms = unique(family.terms).filter((term: string) =>
-      (familyState?.terms || []).map(t => String(t).toLowerCase()).includes(term.toLowerCase())
-    );
+    const overlapTerms = unique(family.terms).filter((term) =>
+  (familyState?.terms || [])
+    .map((t) => String(t).toLowerCase())
+    .includes(String(term).toLowerCase())
+);
 
     const familyBaseScore =
       family.score +

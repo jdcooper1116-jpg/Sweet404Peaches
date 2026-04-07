@@ -77,7 +77,7 @@ export async function upsertOwnerProfile(
   uid: string,
   profile: { displayName: string; email: string }
 ): Promise<void> {
-  const ref = doc(db, COLLECTIONS.ownerProfile, uid);
+  const ref = doc(db, COLLECTIONS.ownerProfiles, uid);
   const snap = await getDoc(ref);
 
   if (snap.exists()) {
@@ -101,7 +101,7 @@ export async function upsertOwnerProfile(
 }
 
 export async function getOwnerProfile(uid: string): Promise<OwnerProfile | null> {
-  const ref = doc(db, COLLECTIONS.ownerProfile, uid);
+  const ref = doc(db, COLLECTIONS.ownerProfiles, uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   return snap.data() as OwnerProfile;
