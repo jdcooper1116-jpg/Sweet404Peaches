@@ -1,66 +1,149 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, NotebookText, Sparkles } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import { listDreamEntries } from '@/lib/firebase/firestore';
-import type { DreamEntry } from '@/lib/types';
+import { listActiveDreamWindows } from '@/lib/firebase/firestore';
+import type { ActiveDreamWindow } from '@/lib/types';
 
-function formatPosted(value: any): string {
-  try {
-    if (!value) return 'Unknown';
-    const date =
-      typeof value?.toDate === 'function'
-        ? value.toDate()
-        : new Date(value);
-    return date.toLocaleString();
-  } catch {
-    return 'Unknown';
+type DreamWindowGroup = {
+  dreamEntryId: string;
+  dreamerId: string;
+  dreamerName: string;
+  activeStart: string;
+  activeEnd: string;
+  isActive: boolean;
+  statesTracked: string[];
+  cash3Numbers: string[];
+  cash4Numbers: string[];
+  termMap: Record<string, { cash3: string[]; cash4: string[] }>;
+  totalWatchItems: number;
+};
+
+function uniqueSorted(values: string[]) {
+  return Array.from(new Set(values)).sort();
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildGroupedWindows(rows: ActiveDreamWindow[]): DreamWindowGroup[] {
+  const map = new Map<string, DreamWindowGroup>();
+
+  for (const row of rows) {
+    const dreamEntryId =
+      (row as ActiveDreamWindow & { dreamEntryId?: string; sourceDreamEntryId?: string }).dreamEntryId ||
+      (row as ActiveDreamWindow & { dreamEntryId?: string; sourceDreamEntryId?: string }).sourceDreamEntryId ||
+      row.id;
+
+    const existing = map.get(dreamEntryId);
+
+    if (!existing) {
+      map.set(dreamEntryId, {
+        dreamEntryId,
+        dreamerId: row.dreamerId,
+        dreamerName: row.dreamerName,
+        activeStart: row.activeStart,
+        activeEnd: row.activeEnd,
+        isActive: !!row.isActive,
+        statesTracked: Array.isArray(row.statesTracked) ? [...row.statesTracked] : [],
+        cash3Numbers: row.gameType === 'cash3' ? [row.number] : [],
+        cash4Numbers: row.gameType === 'cash4' ? [row.number] : [],
+        termMap: {
+          [row.termLabel]: {
+            cash3: row.gameType === 'cash3' ? [row.number] : [],
+            cash4: row.gameType === 'cash4' ? [row.number] : [],
+          },
+        },
+        totalWatchItems: 1,
+      });
+      continue;
+    }
+
+    existing.isActive = existing.isActive || !!row.isActive;
+    existing.statesTracked = uniqueSorted([
+      ...existing.statesTracked,
+      ...(Array.isArray(row.statesTracked) ? row.statesTracked : []),
+    ]);
+
+    if (row.gameType === 'cash3') {
+      existing.cash3Numbers.push(row.number);
+    } else {
+      existing.cash4Numbers.push(row.number);
+    }
+
+    if (!existing.termMap[row.termLabel]) {
+      existing.termMap[row.termLabel] = { cash3: [], cash4: [] };
+    }
+
+    if (row.gameType === 'cash3') {
+      existing.termMap[row.termLabel].cash3.push(row.number);
+    } else {
+      existing.termMap[row.termLabel].cash4.push(row.number);
+    }
+
+    existing.totalWatchItems += 1;
   }
+
+  return Array.from(map.values())
+    .map(group => ({
+      ...group,
+      cash3Numbers: uniqueSorted(group.cash3Numbers),
+      cash4Numbers: uniqueSorted(group.cash4Numbers),
+      statesTracked: uniqueSorted(group.statesTracked),
+      termMap: Object.fromEntries(
+        Object.entries(group.termMap).map(([term, payload]) => [
+          term,
+          {
+            cash3: uniqueSorted(payload.cash3),
+            cash4: uniqueSorted(payload.cash4),
+          },
+        ])
+      ),
+    }))
+    .sort((a, b) => {
+      if (a.activeStart === b.activeStart) {
+        return a.dreamerName.localeCompare(b.dreamerName);
+      }
+      return a.activeStart < b.activeStart ? 1 : -1;
+    });
 }
 
 export default function ActiveWindowsPage() {
-  const { user, loading } = useAuth();
-  const [entries, setEntries] = useState<DreamEntry[]>([]);
-  const [pageLoading, setPageLoading] = useState(true);
+  const { user } = useAuth();
+  const [rows, setRows] = useState<ActiveDreamWindow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
     async function load() {
       if (!user) {
-        setEntries([]);
-        setPageLoading(false);
+        setRows([]);
+        setLoading(false);
         return;
       }
 
       try {
-        setError('');
-        const rows = await listDreamEntries(user.uid);
-        setEntries(rows);
+        const data = await listActiveDreamWindows(user.uid);
+        setRows(data);
       } catch (err) {
         console.error(err);
-        setError('Could not load active dream windows.');
+        setError('Could not load active windows.');
       } finally {
-        setPageLoading(false);
+        setLoading(false);
       }
     }
 
-    if (!loading) {
-      void load();
-    }
-  }, [user, loading]);
+    void load();
+  }, [user]);
 
-  const activeEntries = useMemo(() => {
-    return [...entries]
-      .filter(entry => entry.activeWindowStart && entry.activeWindowEnd)
-      .sort((a, b) => {
-        if (a.activeWindowStart !== b.activeWindowStart) {
-          return b.activeWindowStart.localeCompare(a.activeWindowStart);
-        }
-        return a.dreamerName.localeCompare(b.dreamerName);
-      });
-  }, [entries]);
+  const grouped = useMemo(() => buildGroupedWindows(rows), [rows]);
+  const today = todayIso();
+
+  const activeGroups = grouped.filter(g => g.activeEnd >= today);
+  const expiredGroups = grouped.filter(g => g.activeEnd < today);
 
   return (
     <main
@@ -76,24 +159,77 @@ export default function ActiveWindowsPage() {
 
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
-          <div className="page-header">
-            <h1>Active Dream Windows</h1>
-            <p>
-              One journal card per dream entry, showing when it was posted and
-              the full active timeframe.
-            </p>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: '16px',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div className="page-header">
+              <h1>Dream Active Windows</h1>
+              <p>
+                Each card below is one dream’s 7-day active window. The numbers inside each
+                card are the watch items being tested against uploaded results across states.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/dreams/new" className="btn-secondary">
+                New Dream
+              </Link>
+              <Link href="/hits" className="btn-secondary">
+                Hits Detector
+              </Link>
+              <Link href="/fell-before" className="btn-secondary">
+                As They Fell Before
+              </Link>
+            </div>
           </div>
         </section>
 
-        {pageLoading ? (
+        <section
+          className="journal-card-flat"
+          style={{
+            display: 'grid',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          <div>
+            <div className="journal-label">Dream Windows</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{grouped.length}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Currently Active</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{activeGroups.length}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Expired</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{expiredGroups.length}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Total Watch Items</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>
+              {grouped.reduce((sum, group) => sum + group.totalWatchItems, 0)}
+            </div>
+          </div>
+        </section>
+
+        {loading ? (
           <section className="journal-card">
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
-              Loading active windows...
-            </p>
+            <p>Loading dream windows...</p>
           </section>
-        ) : error ? (
+        ) : null}
+
+        {error ? (
           <section
-            className="journal-card"
+            className="journal-card-flat"
             style={{
               borderColor: '#e9c2c2',
               background: '#fff4f4',
@@ -102,117 +238,141 @@ export default function ActiveWindowsPage() {
           >
             {error}
           </section>
-        ) : activeEntries.length === 0 ? (
+        ) : null}
+
+        {!loading && !grouped.length ? (
           <section className="journal-card">
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                marginBottom: '10px',
-                color: 'var(--deep-plum)',
-              }}
-            >
-              <Sparkles size={18} />
-              <strong>No active dream windows yet</strong>
-            </div>
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
-              Parse and save a dream first, and its active timeframe will appear here.
-            </p>
+            <p>No dream windows found yet.</p>
           </section>
-        ) : (
+        ) : null}
+
+        {activeGroups.length ? (
           <section style={{ display: 'grid', gap: '16px' }}>
-            {activeEntries.map(entry => (
-              <article key={entry.id} className="journal-card">
+            <div className="page-header">
+              <h1>Currently Active</h1>
+              <p>These dreams are still inside their 7-day watch period.</p>
+            </div>
+
+            {activeGroups.map(group => (
+              <section key={group.dreamEntryId} className="journal-card" style={{ display: 'grid', gap: '18px' }}>
                 <div
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     gap: '16px',
-                    alignItems: 'flex-start',
                     flexWrap: 'wrap',
+                    alignItems: 'flex-start',
                   }}
                 >
-                  <div>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '10px',
-                        color: 'var(--deep-plum)',
-                        marginBottom: '8px',
-                      }}
-                    >
-                      <NotebookText size={18} />
-                      <strong style={{ fontSize: '20px' }}>{entry.dreamerName}</strong>
-                    </div>
-
+                  <div style={{ display: 'grid', gap: '6px' }}>
+                    <h2 style={{ margin: 0 }}>{group.dreamerName || 'Unknown Dreamer'}</h2>
                     <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
-                      Posted: {formatPosted(entry.uploadedAt)}
+                      Dream Window: {group.activeStart} → {group.activeEnd}
+                    </div>
+                    <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                      Dream Entry ID: {group.dreamEntryId}
                     </div>
                   </div>
 
                   <div
                     className="journal-card-flat"
-                    style={{ minWidth: '220px', textAlign: 'center' }}
+                    style={{
+                      minWidth: '220px',
+                      display: 'grid',
+                      gap: '8px',
+                    }}
                   >
-                    <div className="journal-label">Active Timeframe</div>
-                    <div style={{ fontSize: '15px', color: 'var(--ink)' }}>
-                      {entry.activeWindowStart} → {entry.activeWindowEnd}
-                    </div>
+                    <div><strong>Status:</strong> Active</div>
+                    <div><strong>Cash 3:</strong> {group.cash3Numbers.length}</div>
+                    <div><strong>Cash 4:</strong> {group.cash4Numbers.length}</div>
+                    <div><strong>Total Watch Items:</strong> {group.totalWatchItems}</div>
+                    <div><strong>States Tracked:</strong> {group.statesTracked.length}</div>
                   </div>
                 </div>
 
                 <div
                   style={{
                     display: 'grid',
-                    gap: '12px',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
-                    marginTop: '18px',
+                    gap: '16px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
                   }}
                 >
                   <div className="journal-card-flat">
-                    <div className="journal-label">Mapped Terms</div>
-                    <div>{entry.termMappings.length}</div>
+                    <strong>Cash 3 Watch Numbers</strong>
+                    <p style={{ marginTop: '10px', color: 'var(--ink-light)' }}>
+                      {group.cash3Numbers.length ? group.cash3Numbers.join(', ') : 'None'}
+                    </p>
                   </div>
 
                   <div className="journal-card-flat">
-                    <div className="journal-label">Tracked Numbers</div>
-                    <div>{entry.allNumbers.length}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Status</div>
-                    <div>{entry.isReviewed ? 'Parsed & Active' : 'Draft Window'}</div>
+                    <strong>Cash 4 Watch Numbers</strong>
+                    <p style={{ marginTop: '10px', color: 'var(--ink-light)' }}>
+                      {group.cash4Numbers.length ? group.cash4Numbers.join(', ') : 'None'}
+                    </p>
                   </div>
                 </div>
 
-                {entry.termMappings.length ? (
-                  <div className="journal-card-flat" style={{ marginTop: '16px' }}>
-                    <div className="journal-label">Mapped Terms</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
-                      {entry.termMappings.map(mapping => (
-                        <span
-                          key={`${entry.id}-${mapping.term}`}
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: '999px',
-                            background: 'rgba(201,168,76,0.14)',
-                            border: '1px solid rgba(201,168,76,0.35)',
-                            color: 'var(--deep-plum)',
-                            fontSize: '14px',
-                          }}
-                        >
-                          {mapping.term}
-                        </span>
-                      ))}
-                    </div>
+                <div className="journal-card-flat">
+                  <strong>Mapped Terms in This Dream</strong>
+
+                  <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+                    {Object.entries(group.termMap).map(([term, payload]) => (
+                      <div
+                        key={term}
+                        style={{
+                          border: '1px solid rgba(90, 52, 74, 0.12)',
+                          borderRadius: '16px',
+                          padding: '12px',
+                          background: 'rgba(255,255,255,0.45)',
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, marginBottom: '8px' }}>{term}</div>
+                        <div style={{ fontSize: '14px', color: 'var(--ink-light)' }}>
+                          <strong>Cash 3:</strong> {payload.cash3.length ? payload.cash3.join(', ') : 'None'}
+                        </div>
+                        <div style={{ fontSize: '14px', color: 'var(--ink-light)', marginTop: '4px' }}>
+                          <strong>Cash 4:</strong> {payload.cash4.length ? payload.cash4.join(', ') : 'None'}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
-              </article>
+                </div>
+
+                <div className="journal-card-flat">
+                  <strong>States Being Tested</strong>
+                  <p style={{ marginTop: '10px', color: 'var(--ink-light)' }}>
+                    {group.statesTracked.length ? group.statesTracked.join(', ') : 'None'}
+                  </p>
+                </div>
+              </section>
             ))}
           </section>
-        )}
+        ) : null}
+
+        {expiredGroups.length ? (
+          <section style={{ display: 'grid', gap: '16px' }}>
+            <div className="page-header">
+              <h1>Expired Windows</h1>
+              <p>These dreams are no longer inside the active 7-day watch period.</p>
+            </div>
+
+            {expiredGroups.map(group => (
+              <section key={group.dreamEntryId} className="journal-card-flat" style={{ opacity: 0.82 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+                  <div>
+                    <strong>{group.dreamerName || 'Unknown Dreamer'}</strong>
+                    <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '6px' }}>
+                      {group.activeStart} → {group.activeEnd}
+                    </div>
+                  </div>
+                  <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                    Cash 3: {group.cash3Numbers.length} • Cash 4: {group.cash4Numbers.length}
+                  </div>
+                </div>
+              </section>
+            ))}
+          </section>
+        ) : null}
       </section>
     </main>
   );
