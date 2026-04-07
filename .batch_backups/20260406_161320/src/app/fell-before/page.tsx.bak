@@ -1,0 +1,305 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { BookMarked, Plus, Sparkles } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  listDreamers,
+  listPersonalHitMappings,
+  upsertPersonalHitMapping,
+} from '@/lib/firebase/firestore';
+
+function makeToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export default function FellBeforePage() {
+  const { user, loading } = useAuth();
+
+  const [dreamers, setDreamers] = useState<any[]>([]);
+  const [items, setItems] = useState<any[]>([]);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const [dreamerFilter, setDreamerFilter] = useState('ALL');
+
+  const [manualDreamerId, setManualDreamerId] = useState('owner-self');
+  const [manualDreamerName, setManualDreamerName] = useState('Me');
+  const [termLabel, setTermLabel] = useState('');
+  const [number, setNumber] = useState('');
+  const [gameType, setGameType] = useState<'cash3' | 'cash4'>('cash3');
+  const [state, setState] = useState('GA');
+  const [hitType, setHitType] = useState<'straight' | 'boxed'>('straight');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setDreamers([]);
+        setItems([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const [dreamerRows, memoryRows] = await Promise.all([
+          listDreamers(user.uid),
+          listPersonalHitMappings(user.uid),
+        ]);
+
+        setDreamers(dreamerRows);
+        setItems(memoryRows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load As They Fell Before.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const filteredItems = useMemo(() => {
+    const subset =
+      dreamerFilter === 'ALL'
+        ? items
+        : items.filter((item: any) => item.dreamerName === dreamerFilter);
+
+    return [...subset].sort((a: any, b: any) => {
+      if ((a.hitCount || 0) !== (b.hitCount || 0)) return (b.hitCount || 0) - (a.hitCount || 0);
+      if (a.termLabel !== b.termLabel) return a.termLabel.localeCompare(b.termLabel);
+      return a.number.localeCompare(b.number);
+    });
+  }, [items, dreamerFilter]);
+
+  async function handleManualAdd(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!user) {
+      setError('You must be signed in.');
+      return;
+    }
+
+    if (!termLabel.trim() || !number.trim() || !state.trim()) {
+      setError('Please complete dreamer, term, number, and state.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const selectedDreamer =
+        dreamers.find((d: any) => d.id === manualDreamerId) ?? null;
+
+      const effectiveDreamerName =
+        (selectedDreamer?.displayName ?? manualDreamerName.trim()) || 'Me';
+
+      await upsertPersonalHitMapping(user.uid, {
+        dreamerId: selectedDreamer?.id ?? 'owner-self',
+        dreamerName: effectiveDreamerName,
+        termLabel: termLabel.trim(),
+        number: number.trim(),
+        gameType,
+        hitType,
+        state: state.trim().toUpperCase(),
+        drawTime: 'unknown',
+        drawDate: makeToday(),
+        sourceDreamEntryId: 'manual',
+        daysFromDream: 0,
+        sameDay: false,
+      });
+
+      const refreshed = await listPersonalHitMappings(user.uid);
+      setItems(refreshed);
+
+      setTermLabel('');
+      setNumber('');
+      setGameType('cash3');
+      setState('GA');
+      setHitType('straight');
+      setMessage('Personal hit dictionary entry saved.');
+    } catch (err) {
+      console.error(err);
+      setError('Could not save personal dictionary entry.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>As They Fell Before</h1>
+            <p>
+              Personalized hit dictionaries by dreamer. Only proven numbers live here.
+            </p>
+          </div>
+        </section>
+
+        <section className="journal-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
+            <Plus size={18} />
+            <strong>Manual Add to Personal Dictionary</strong>
+          </div>
+
+          <form onSubmit={handleManualAdd} style={{ display: 'grid', gap: '14px' }}>
+            <div>
+              <label className="journal-label">Dreamer</label>
+              <select className="journal-select" value={manualDreamerId} onChange={e => setManualDreamerId(e.target.value)}>
+                <option value="owner-self">Me / Owner Journal</option>
+                {dreamers.map((dreamer: any) => (
+                  <option key={dreamer.id} value={dreamer.id}>
+                    {dreamer.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="journal-label">Term</label>
+              <input className="journal-input" value={termLabel} onChange={e => setTermLabel(e.target.value)} placeholder="cat" />
+            </div>
+
+            <div>
+              <label className="journal-label">Number</label>
+              <input className="journal-input" value={number} onChange={e => setNumber(e.target.value)} placeholder="802" />
+            </div>
+
+            <div>
+              <label className="journal-label">Game Type</label>
+              <select className="journal-select" value={gameType} onChange={e => setGameType(e.target.value as 'cash3' | 'cash4')}>
+                <option value="cash3">cash3</option>
+                <option value="cash4">cash4</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="journal-label">State</label>
+              <input className="journal-input" value={state} onChange={e => setState(e.target.value)} placeholder="GA" />
+            </div>
+
+            <div>
+              <label className="journal-label">Hit Type</label>
+              <select className="journal-select" value={hitType} onChange={e => setHitType(e.target.value as 'straight' | 'boxed')}>
+                <option value="straight">straight</option>
+                <option value="boxed">boxed</option>
+              </select>
+            </div>
+
+            {message ? (
+              <div className="journal-card-flat" style={{ borderColor: '#cfe5c8', background: '#f5fbf2', color: '#315a2b' }}>
+                {message}
+              </div>
+            ) : null}
+
+            {error ? (
+              <div className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
+                {error}
+              </div>
+            ) : null}
+
+            <div>
+              <button type="submit" className="btn-primary" disabled={saving}>
+                {saving ? 'Saving...' : 'Save Personal Entry'}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="journal-card-flat">
+          <label className="journal-label">Filter by Dreamer</label>
+          <select className="journal-select" value={dreamerFilter} onChange={e => setDreamerFilter(e.target.value)}>
+            <option value="ALL">All Dreamers</option>
+            {Array.from(new Set(items.map((item: any) => item.dreamerName))).sort().map((name: any) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading personalized dictionary...</p>
+          </section>
+        ) : filteredItems.length === 0 ? (
+          <section className="journal-card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: 'var(--deep-plum)' }}>
+              <Sparkles size={18} />
+              <strong>No proven hits yet</strong>
+            </div>
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Save hit matches or manually add proven hits to build this dictionary.
+            </p>
+          </section>
+        ) : (
+          <section style={{ display: 'grid', gap: '14px' }}>
+            {filteredItems.map((item: any, index: number) => (
+              <article key={item.id} className="journal-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
+                      <BookMarked size={18} />
+                      <strong style={{ fontSize: '20px' }}>#{index + 1} — {item.termLabel}</strong>
+                    </div>
+                    <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                      Dreamer: {item.dreamerName}
+                    </div>
+                  </div>
+
+                  <div className="journal-card-flat" style={{ minWidth: '150px', textAlign: 'center' }}>
+                    <div className="journal-label">Rank / Hit Count</div>
+                    <div style={{ fontSize: '28px', color: 'var(--deep-plum)', fontWeight: 700 }}>
+                      {item.hitCount || 0}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', marginTop: '16px' }}>
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Number</div>
+                    <div>{item.number}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">State</div>
+                    <div>{item.state}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Game</div>
+                    <div>{item.gameType}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Hit Type</div>
+                    <div>{item.hitType}</div>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}

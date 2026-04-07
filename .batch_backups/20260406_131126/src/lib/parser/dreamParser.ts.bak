@@ -1,0 +1,264 @@
+import type {
+  ExtractedNumber,
+  ParseResult,
+  ParsedLine,
+  TermMapping,
+} from '@/lib/types';
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+function singularizeWord(word: string): string {
+  if (word.length <= 3) return word;
+  if (word.endsWith('ss')) return word;
+  if (word.endsWith('s')) return word.slice(0, -1);
+  return word;
+}
+
+function canonicalizeTerm(term: string): string {
+  return normalizeWhitespace(term.toLowerCase())
+    .split(' ')
+    .map(singularizeWord)
+    .join(' ');
+}
+
+function classifyNumber(value: string): 'cash3' | 'cash4' | 'archive' {
+  if (/^\d{3}$/.test(value)) return 'cash3';
+  if (/^\d{4}$/.test(value)) return 'cash4';
+  return 'archive';
+}
+
+function cleanLineForParsing(line: string): string {
+  return line
+    .replace(/[*_/\\|]+/g, ' ')
+    .replace(/[.]{2,}/g, ' ')
+    .replace(/[-]{2,}/g, ' ')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getStructuredPrimaryTerm(original: string): string | null {
+  const firstDigitIndex = original.search(/\d/);
+  if (firstDigitIndex === -1) return null;
+
+  const prefixRaw = original.slice(0, firstDigitIndex).trim();
+  if (!prefixRaw) return null;
+
+  if (/[.!?]/.test(prefixRaw)) return null;
+
+  const cleanedPrefix = cleanLineForParsing(prefixRaw).toLowerCase();
+  if (!cleanedPrefix) return null;
+
+  const words = cleanedPrefix.split(' ').filter(Boolean);
+
+  if (words.length >= 1 && words.length <= 4) {
+    return normalizeWhitespace(cleanedPrefix);
+  }
+
+  return null;
+}
+
+function extractNarrativeTerms(line: string): string[] {
+  const cleaned = cleanLineForParsing(line).toLowerCase();
+  const words = (cleaned.match(/[a-z]+/g) || []).filter(Boolean);
+
+  if (!words.length) return [];
+
+  const stopwords = new Set([
+    'a','an','the','and','or','of','to','with','on','in','at','for','from','by',
+    'into','onto','up','down','over','under','it','is','was','were','be','been',
+    'being','i','me','my','we','our','you','your',
+  ]);
+
+  const contentWords = words.filter(w => !stopwords.has(w));
+
+  const singles = contentWords.filter(w => w.length > 2);
+  const bigrams: string[] = [];
+
+  for (let i = 0; i < contentWords.length - 1; i += 1) {
+    const first = contentWords[i];
+    const second = contentWords[i + 1];
+    if (first && second) {
+      bigrams.push(`${first} ${second}`);
+    }
+  }
+
+  return unique([...singles, ...bigrams]).map(term => normalizeWhitespace(term));
+}
+
+function buildRelatedTerms(term: string): string[] {
+  const cleaned = normalizeWhitespace(term.toLowerCase());
+  const words = cleaned.split(' ').filter(Boolean);
+
+  const stopwords = new Set([
+    'a','an','the','and','or','of','to','with','on','in','at','for','from','by',
+    'into','onto','up','down','over','under',
+  ]);
+
+  const modifierWords = new Set([
+    'running',
+    'chasing',
+    'driving',
+    'walking',
+    'flying',
+    'swimming',
+    'looking',
+    'watching',
+    'seeing',
+    'holding',
+    'carrying',
+    'riding',
+    'falling',
+    'climbing',
+    'jumping',
+    'moving',
+    'coming',
+    'going',
+  ]);
+
+  const aliases = words
+    .filter(
+      word =>
+        word.length > 2 &&
+        !stopwords.has(word) &&
+        !modifierWords.has(word)
+    )
+    .map(word => canonicalizeTerm(word));
+
+  const termCanonical = canonicalizeTerm(term);
+
+  return unique(aliases).filter(alias => alias !== termCanonical);
+}
+
+export function parseDreamText(rawText: string): ParseResult {
+  const cleanedText = rawText.replace(/\r\n/g, '\n').trim();
+  const rawLines = cleanedText
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const lines: ParsedLine[] = [];
+  const termMap = new Map<string, TermMapping>();
+  const allNumbers: ExtractedNumber[] = [];
+
+  let lastTerms: string[] = [];
+
+  rawLines.forEach((original, lineIndex) => {
+    const cleaned = cleanLineForParsing(original);
+    const numbers = cleaned.match(/\d+/g) || [];
+
+    const structuredPrimary = getStructuredPrimaryTerm(original);
+
+    let terms: string[] = [];
+
+    if (structuredPrimary) {
+      terms = [structuredPrimary];
+      lastTerms = [structuredPrimary];
+    } else {
+      const fallbackTerms = extractNarrativeTerms(cleaned);
+      const numbersOnly = fallbackTerms.length === 0 && numbers.length > 0;
+
+      if (numbersOnly) {
+        terms = lastTerms;
+      } else {
+        terms = fallbackTerms;
+        if (fallbackTerms.length > 0) {
+          lastTerms = fallbackTerms;
+        }
+      }
+    }
+
+    const isNumbersOnly = terms.length === 0 && numbers.length > 0;
+
+    lines.push({
+      original,
+      cleaned,
+      terms,
+      numbers,
+      isNumbersOnly,
+      lineIndex,
+    });
+
+    if (!terms.length) return;
+
+    for (const rawTerm of terms) {
+      const normalizedTerm = canonicalizeTerm(rawTerm);
+      const displayTerm = normalizeWhitespace(rawTerm);
+      const relatedTerms = buildRelatedTerms(displayTerm);
+
+      if (!termMap.has(normalizedTerm)) {
+        termMap.set(normalizedTerm, {
+          term: displayTerm,
+          normalizedTerm,
+          relatedTerms,
+          cash3Numbers: [],
+          cash4Numbers: [],
+          archivedNumbers: [],
+          lineContexts: [],
+        });
+      }
+
+      const mapping = termMap.get(normalizedTerm)!;
+      mapping.relatedTerms = unique([...(mapping.relatedTerms || []), ...relatedTerms]);
+      mapping.lineContexts.push(original);
+
+      for (const value of numbers) {
+        const gameType = classifyNumber(value);
+
+        if (gameType === 'cash3') {
+          mapping.cash3Numbers.push(value);
+        } else if (gameType === 'cash4') {
+          mapping.cash4Numbers.push(value);
+        } else {
+          mapping.archivedNumbers.push(value);
+        }
+
+        allNumbers.push({
+          value,
+          gameType,
+          associatedTerms: [displayTerm],
+          raw: value,
+          lineIndex,
+        });
+      }
+    }
+  });
+
+  const termMappings = Array.from(termMap.values()).map(mapping => ({
+    ...mapping,
+    relatedTerms: unique(mapping.relatedTerms || []),
+    cash3Numbers: unique(mapping.cash3Numbers),
+    cash4Numbers: unique(mapping.cash4Numbers),
+    archivedNumbers: unique(mapping.archivedNumbers),
+    lineContexts: unique(mapping.lineContexts),
+  }));
+
+  const cash3Numbers = unique(
+    allNumbers.filter(n => n.gameType === 'cash3').map(n => n.value)
+  );
+
+  const cash4Numbers = unique(
+    allNumbers.filter(n => n.gameType === 'cash4').map(n => n.value)
+  );
+
+  const archivedNumbers = unique(
+    allNumbers.filter(n => n.gameType === 'archive').map(n => n.value)
+  );
+
+  return {
+    rawText,
+    cleanedText,
+    lines,
+    termMappings,
+    allNumbers,
+    cash3Numbers,
+    cash4Numbers,
+    archivedNumbers,
+  };
+}

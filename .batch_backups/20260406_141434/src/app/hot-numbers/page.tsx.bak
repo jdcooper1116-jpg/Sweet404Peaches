@@ -1,0 +1,342 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { Flame, Sparkles } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  listActiveDreamWindows,
+  listPersonalHitMappings,
+} from '@/lib/firebase/firestore';
+import type { ActiveDreamWindow, PersonalHitMapping, GameType } from '@/lib/types';
+
+type RankedNumber = {
+  number: string;
+  gameType: GameType;
+  score: number;
+  activeCount: number;
+  dreamerNames: string[];
+  terms: string[];
+  priorHits: number;
+  georgiaHits: number;
+  boxedHits: number;
+  straightHits: number;
+  reasons: string[];
+};
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+export default function HotNumbersPage() {
+  const { user, loading } = useAuth();
+  const [windows, setWindows] = useState<ActiveDreamWindow[]>([]);
+  const [memory, setMemory] = useState<PersonalHitMapping[]>([]);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setWindows([]);
+        setMemory([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const [windowRows, memoryRows] = await Promise.all([
+          listActiveDreamWindows(user.uid),
+          listPersonalHitMappings(user.uid),
+        ]);
+
+        setWindows(windowRows);
+        setMemory(memoryRows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load hot-number data.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const ranked = useMemo(() => {
+    const grouped = new Map<string, RankedNumber>();
+
+    for (const win of windows) {
+      const key = `${win.gameType}__${win.number}`;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          number: win.number,
+          gameType: win.gameType,
+          score: 0,
+          activeCount: 0,
+          dreamerNames: [],
+          terms: [],
+          priorHits: 0,
+          georgiaHits: 0,
+          boxedHits: 0,
+          straightHits: 0,
+          reasons: [],
+        });
+      }
+
+      const item = grouped.get(key)!;
+      item.activeCount += 1;
+      item.dreamerNames.push(win.dreamerName);
+      item.terms.push(win.termLabel);
+    }
+
+    for (const item of grouped.values()) {
+      const relatedMemory = memory.filter(
+        m => m.number === item.number && m.gameType === item.gameType
+      );
+
+      item.priorHits = relatedMemory.reduce((sum, row) => sum + (row.hitCount || 0), 0);
+      item.georgiaHits = relatedMemory
+        .filter(row => row.state === 'GA')
+        .reduce((sum, row) => sum + (row.hitCount || 0), 0);
+      item.boxedHits = relatedMemory
+        .filter(row => row.hitType === 'boxed')
+        .reduce((sum, row) => sum + (row.hitCount || 0), 0);
+      item.straightHits = relatedMemory
+        .filter(row => row.hitType === 'straight')
+        .reduce((sum, row) => sum + (row.hitCount || 0), 0);
+
+      item.dreamerNames = unique(item.dreamerNames);
+      item.terms = unique(item.terms);
+
+      item.score =
+        item.activeCount * 10 +
+        item.priorHits * 6 +
+        item.georgiaHits * 5 +
+        item.straightHits * 3 +
+        item.boxedHits * 2 +
+        item.dreamerNames.length * 4 +
+        item.terms.length * 3;
+
+      const reasons: string[] = [];
+      reasons.push(`Active in ${item.activeCount} current window(s)`);
+
+      if (item.terms.length) {
+        reasons.push(`Linked to ${item.terms.length} term(s): ${item.terms.join(', ')}`);
+      }
+
+      if (item.priorHits > 0) {
+        reasons.push(`Has ${item.priorHits} prior saved hit(s)`);
+      }
+
+      if (item.georgiaHits > 0) {
+        reasons.push(`Georgia history: ${item.georgiaHits} hit(s)`);
+      }
+
+      if (item.straightHits > 0) {
+        reasons.push(`Straight memory: ${item.straightHits}`);
+      }
+
+      if (item.boxedHits > 0) {
+        reasons.push(`Boxed memory: ${item.boxedHits}`);
+      }
+
+      item.reasons = reasons;
+    }
+
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.score !== b.score) return b.score - a.score;
+      if (a.gameType !== b.gameType) return a.gameType.localeCompare(b.gameType);
+      return a.number.localeCompare(b.number);
+    });
+  }, [windows, memory]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Hot Numbers</h1>
+            <p>
+              First-pass ranking based on active windows, prior hit memory, and
+              Georgia-first weighting.
+            </p>
+          </div>
+        </section>
+
+        <section className="journal-card-flat">
+          <div
+            style={{
+              display: 'grid',
+              gap: '12px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            }}
+          >
+            <div>
+              <div className="journal-label">Active Windows</div>
+              <div>{windows.length}</div>
+            </div>
+            <div>
+              <div className="journal-label">Memory Records</div>
+              <div>{memory.length}</div>
+            </div>
+            <div>
+              <div className="journal-label">Ranked Numbers</div>
+              <div>{ranked.length}</div>
+            </div>
+          </div>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Loading hot-number data...
+            </p>
+          </section>
+        ) : error ? (
+          <section
+            className="journal-card"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
+            {error}
+          </section>
+        ) : ranked.length === 0 ? (
+          <section className="journal-card">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '10px',
+                color: 'var(--deep-plum)',
+              }}
+            >
+              <Sparkles size={18} />
+              <strong>No hot numbers yet</strong>
+            </div>
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Create active windows first, then saved hits will make this ranking smarter.
+            </p>
+          </section>
+        ) : (
+          <section style={{ display: 'grid', gap: '16px' }}>
+            {ranked.map((item, index) => (
+              <article key={`${item.gameType}__${item.number}`} className="journal-card">
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '16px',
+                    alignItems: 'flex-start',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        color: 'var(--deep-plum)',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      <Flame size={18} />
+                      <strong style={{ fontSize: '22px' }}>
+                        #{index + 1} — {item.number}
+                      </strong>
+                    </div>
+
+                    <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                      {item.gameType} • Dreamers: {item.dreamerNames.join(', ') || '—'}
+                    </div>
+                  </div>
+
+                  <div
+                    className="journal-card-flat"
+                    style={{ minWidth: '170px', textAlign: 'center' }}
+                  >
+                    <div className="journal-label">Score</div>
+                    <div
+                      style={{
+                        fontSize: '30px',
+                        color: 'var(--deep-plum)',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                      }}
+                    >
+                      {item.score}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '12px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                    marginTop: '18px',
+                  }}
+                >
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Active Windows</div>
+                    <div>{item.activeCount}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Prior Hits</div>
+                    <div>{item.priorHits}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Georgia Hits</div>
+                    <div>{item.georgiaHits}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Straight</div>
+                    <div>{item.straightHits}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Boxed</div>
+                    <div>{item.boxedHits}</div>
+                  </div>
+                </div>
+
+                <div className="journal-card-flat" style={{ marginTop: '16px' }}>
+                  <div className="journal-label">Reasons</div>
+                  <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--ink-light)' }}>
+                    {item.reasons.map(reason => (
+                      <li key={reason} style={{ marginBottom: '6px' }}>
+                        {reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}

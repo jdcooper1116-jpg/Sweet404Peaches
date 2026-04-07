@@ -1,0 +1,738 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd ~/sweet404peaces
+
+STAMP="$(date +%Y%m%d_%H%M%S)"
+BACKUP_DIR=".batch_backups/$STAMP"
+
+mkdir -p "$BACKUP_DIR/src/app/forecast-board"
+mkdir -p "$BACKUP_DIR/src/components/layout"
+
+[ -f src/app/forecast-board/page.tsx ] && cp src/app/forecast-board/page.tsx "$BACKUP_DIR/src/app/forecast-board/page.tsx.bak"
+[ -f src/components/layout/Sidebar.tsx ] && cp src/components/layout/Sidebar.tsx "$BACKUP_DIR/src/components/layout/Sidebar.tsx.bak"
+
+mkdir -p src/app/forecast-board
+cat > src/app/forecast-board/page.tsx <<'TSX'
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { BarChart3, Flame, MapPinned, Sparkles, Target } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  listActiveDreamWindows,
+  listDreamers,
+  listPersonalHitMappings,
+} from '@/lib/firebase/firestore';
+import type { ActiveDreamWindow, PersonalHitMapping } from '@/lib/types';
+import { US_STATES } from '@/lib/types';
+import { summarizeNumberFamilies } from '@/lib/sync/numberFamilies';
+
+type RankedNumber = {
+  number: string;
+  gameType: 'cash3' | 'cash4';
+  hitType: 'straight' | 'boxed';
+  hitCount: number;
+  states: string[];
+};
+
+type TermPlaylistGroup = {
+  termLabel: string;
+  totalHits: number;
+  rankedNumbers: RankedNumber[];
+};
+
+type WatchNumber = {
+  key: string;
+  number: string;
+  gameType: 'cash3' | 'cash4';
+  score: number;
+  familyKeys: string[];
+  familyForms: string[];
+  termLabels: string[];
+  stateHits: number;
+  totalHits: number;
+  reasons: string[];
+};
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+export default function ForecastBoardPage() {
+  const { user, loading } = useAuth();
+  const [windows, setWindows] = useState<ActiveDreamWindow[]>([]);
+  const [memory, setMemory] = useState<PersonalHitMapping[]>([]);
+  const [dreamers, setDreamers] = useState<any[]>([]);
+  const [dreamerFilter, setDreamerFilter] = useState('ALL');
+  const [selectedState, setSelectedState] = useState('GA');
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setWindows([]);
+        setMemory([]);
+        setDreamers([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const [windowRows, memoryRows, dreamerRows] = await Promise.all([
+          listActiveDreamWindows(user.uid),
+          listPersonalHitMappings(user.uid),
+          listDreamers(user.uid),
+        ]);
+
+        setWindows(windowRows);
+        setMemory(memoryRows);
+        setDreamers(dreamerRows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load forecast board data.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const visibleDreamerNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const row of windows) {
+      if (row.dreamerName) names.add(row.dreamerName);
+    }
+    for (const row of dreamers) {
+      if (row.displayName) names.add(row.displayName);
+    }
+    return Array.from(names).sort();
+  }, [windows, dreamers]);
+
+  const filteredWindows = useMemo(() => {
+    return dreamerFilter === 'ALL'
+      ? windows
+      : windows.filter(
+          item => item.dreamerName === dreamerFilter || item.dreamerId === dreamerFilter
+        );
+  }, [windows, dreamerFilter]);
+
+  const filteredMemory = useMemo(() => {
+    return dreamerFilter === 'ALL'
+      ? memory
+      : memory.filter(
+          item => item.dreamerName === dreamerFilter || item.dreamerId === dreamerFilter
+        );
+  }, [memory, dreamerFilter]);
+
+  const hotFamilies = useMemo(() => {
+    return summarizeNumberFamilies(filteredWindows, filteredMemory);
+  }, [filteredWindows, filteredMemory]);
+
+  const selectedStateRows = useMemo(() => {
+    return filteredMemory.filter(row => row.state === selectedState);
+  }, [filteredMemory, selectedState]);
+
+  const groupedTerms = useMemo<TermPlaylistGroup[]>(() => {
+    const termMap = new Map<string, any[]>();
+
+    for (const row of selectedStateRows) {
+      if (!termMap.has(row.termLabel)) {
+        termMap.set(row.termLabel, []);
+      }
+      termMap.get(row.termLabel)!.push(row);
+    }
+
+    return Array.from(termMap.entries())
+      .map(([termLabel, rows]) => {
+        const numberMap = new Map<string, RankedNumber>();
+
+        for (const row of rows) {
+          const key = `${row.number}__${row.gameType}__${row.hitType}`;
+
+          if (!numberMap.has(key)) {
+            numberMap.set(key, {
+              number: row.number,
+              gameType: row.gameType,
+              hitType: row.hitType,
+              hitCount: 0,
+              states: [],
+            });
+          }
+
+          const item = numberMap.get(key)!;
+          item.hitCount += row.hitCount || 0;
+          item.states.push(row.state);
+        }
+
+        const rankedNumbers = Array.from(numberMap.values())
+          .map(item => ({
+            ...item,
+            states: unique(item.states).sort(),
+          }))
+          .sort((a, b) => {
+            if (a.hitCount !== b.hitCount) return b.hitCount - a.hitCount;
+            if (a.gameType !== b.gameType) return a.gameType.localeCompare(b.gameType);
+            return a.number.localeCompare(b.number);
+          });
+
+        return {
+          termLabel,
+          totalHits: rows.reduce((sum: number, row: any) => sum + (row.hitCount || 0), 0),
+          rankedNumbers,
+        };
+      })
+      .sort((a, b) => {
+        if (a.totalHits !== b.totalHits) return b.totalHits - a.totalHits;
+        return a.termLabel.localeCompare(b.termLabel);
+      });
+  }, [selectedStateRows]);
+
+  const watchNumbers = useMemo<WatchNumber[]>(() => {
+    const map = new Map<string, WatchNumber>();
+
+    for (const family of hotFamilies) {
+      for (const form of family.forms) {
+        const key = `${family.gameType}__${form}`;
+
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            number: form,
+            gameType: family.gameType,
+            score: 0,
+            familyKeys: [],
+            familyForms: [],
+            termLabels: [],
+            stateHits: 0,
+            totalHits: 0,
+            reasons: [],
+          });
+        }
+
+        const item = map.get(key)!;
+        item.score += family.score;
+        item.familyKeys.push(family.familyKey);
+        item.familyForms.push(...family.forms);
+        item.termLabels.push(...family.terms);
+        item.reasons.push(`Hot family ${family.familyKey} score ${family.score}`);
+      }
+    }
+
+    for (const termGroup of groupedTerms) {
+      for (const ranked of termGroup.rankedNumbers) {
+        const key = `${ranked.gameType}__${ranked.number}`;
+
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            number: ranked.number,
+            gameType: ranked.gameType,
+            score: 0,
+            familyKeys: [],
+            familyForms: [],
+            termLabels: [],
+            stateHits: 0,
+            totalHits: 0,
+            reasons: [],
+          });
+        }
+
+        const item = map.get(key)!;
+        item.score += ranked.hitCount * 12;
+        item.stateHits += ranked.hitCount;
+        item.totalHits += ranked.hitCount;
+        item.termLabels.push(termGroup.termLabel);
+        item.reasons.push(`${selectedState} proven term hit support: ${termGroup.termLabel} (${ranked.hitCount})`);
+      }
+    }
+
+    for (const row of filteredMemory) {
+      const key = `${row.gameType}__${row.number}`;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          number: row.number,
+          gameType: row.gameType,
+          score: 0,
+          familyKeys: [],
+          familyForms: [],
+          termLabels: [],
+          stateHits: 0,
+          totalHits: 0,
+          reasons: [],
+        });
+      }
+
+      const item = map.get(key)!;
+      const count = row.hitCount || 0;
+      item.totalHits += count;
+
+      if (row.state === selectedState) {
+        item.stateHits += count;
+        item.score += count * 5;
+      }
+
+      item.termLabels.push(row.termLabel);
+    }
+
+    return Array.from(map.values())
+      .map(item => ({
+        ...item,
+        familyKeys: unique(item.familyKeys).sort(),
+        familyForms: unique(item.familyForms).sort(),
+        termLabels: unique(item.termLabels).sort(),
+        reasons: unique(item.reasons),
+      }))
+      .filter(item => item.score > 0)
+      .sort((a, b) => {
+        if (a.score !== b.score) return b.score - a.score;
+        if (a.stateHits !== b.stateHits) return b.stateHits - a.stateHits;
+        if (a.gameType !== b.gameType) return a.gameType.localeCompare(b.gameType);
+        return a.number.localeCompare(b.number);
+      });
+  }, [hotFamilies, groupedTerms, filteredMemory, selectedState]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Forecast Board</h1>
+            <p>
+              Evidence-based watch board built from hot families, dreamer scope,
+              state-specific proven hits, and ranked term support.
+            </p>
+          </div>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading forecast board...</p>
+          </section>
+        ) : error ? (
+          <section className="journal-card" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
+            {error}
+          </section>
+        ) : (
+          <>
+            <section className="journal-card-flat">
+              <div
+                style={{
+                  display: 'grid',
+                  gap: '16px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                }}
+              >
+                <div>
+                  <label className="journal-label">Dreamer Scope</label>
+                  <select
+                    className="journal-select"
+                    value={dreamerFilter}
+                    onChange={e => setDreamerFilter(e.target.value)}
+                  >
+                    <option value="ALL">All Dreamers</option>
+                    {visibleDreamerNames.map(name => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="journal-label">State Focus</label>
+                  <select
+                    className="journal-select"
+                    value={selectedState}
+                    onChange={e => setSelectedState(e.target.value)}
+                  >
+                    {US_STATES.map(state => (
+                      <option key={state} value={state}>
+                        {state}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </section>
+
+            <section className="journal-card-flat">
+              <div
+                style={{
+                  display: 'grid',
+                  gap: '12px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                }}
+              >
+                <div>
+                  <div className="journal-label">Active Windows</div>
+                  <div>{filteredWindows.length}</div>
+                </div>
+                <div>
+                  <div className="journal-label">Proven Hit Records</div>
+                  <div>{filteredMemory.length}</div>
+                </div>
+                <div>
+                  <div className="journal-label">Hot Families</div>
+                  <div>{hotFamilies.length}</div>
+                </div>
+                <div>
+                  <div className="journal-label">Numbers to Watch</div>
+                  <div>{watchNumbers.length}</div>
+                </div>
+              </div>
+            </section>
+
+            <section className="journal-card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
+                <Flame size={18} />
+                <strong>Primary Watch Families</strong>
+              </div>
+
+              {hotFamilies.length === 0 ? (
+                <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
+                  No hot families available in this scope yet.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '14px' }}>
+                  {hotFamilies.slice(0, 12).map((item, index) => (
+                    <article key={`${item.gameType}__${item.familyKey}`} className="journal-card-flat">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, color: 'var(--deep-plum)', fontSize: '20px', marginBottom: '8px' }}>
+                            #{index + 1} — Family {item.familyKey} ({item.gameType})
+                          </div>
+                          <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                            Forms: {item.forms.join(', ') || '—'}
+                          </div>
+                          <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '6px' }}>
+                            Terms: {item.terms.join(', ') || '—'}
+                          </div>
+                          <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '6px' }}>
+                            Dreamers: {item.dreamers.join(', ') || '—'}
+                          </div>
+                        </div>
+
+                        <div className="journal-card-flat" style={{ minWidth: '150px', textAlign: 'center' }}>
+                          <div className="journal-label">Score</div>
+                          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--deep-plum)' }}>
+                            {item.score}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="journal-card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
+                <MapPinned size={18} />
+                <strong>{selectedState} State-backed Term Groups</strong>
+              </div>
+
+              {groupedTerms.length === 0 ? (
+                <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
+                  No proven term groups for {selectedState} in this scope yet.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  {groupedTerms.slice(0, 12).map(group => (
+                    <article key={`${selectedState}-${group.termLabel}`} className="journal-card-flat">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, color: 'var(--deep-plum)', fontSize: '18px', marginBottom: '8px' }}>
+                            {group.termLabel}
+                          </div>
+                          <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                            Total proven hits: {group.totalHits}
+                          </div>
+                        </div>
+
+                        <div className="journal-card-flat" style={{ minWidth: '140px', textAlign: 'center' }}>
+                          <div className="journal-label">Ranked Numbers</div>
+                          <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--deep-plum)' }}>
+                            {group.rankedNumbers.length}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gap: '10px', marginTop: '14px' }}>
+                        {group.rankedNumbers.slice(0, 5).map((item, index) => (
+                          <div key={`${group.termLabel}-${item.number}-${item.gameType}-${item.hitType}`} className="journal-card-flat" style={{ background: 'rgba(255,255,255,0.72)' }}>
+                            <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+                              <div>
+                                <div className="journal-label">Rank</div>
+                                <div>#{index + 1}</div>
+                              </div>
+                              <div>
+                                <div className="journal-label">Number</div>
+                                <div>{item.number}</div>
+                              </div>
+                              <div>
+                                <div className="journal-label">Game</div>
+                                <div>{item.gameType}</div>
+                              </div>
+                              <div>
+                                <div className="journal-label">Type</div>
+                                <div>{item.hitType}</div>
+                              </div>
+                              <div>
+                                <div className="journal-label">Hit Count</div>
+                                <div>{item.hitCount}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="journal-card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
+                <Target size={18} />
+                <strong>Numbers to Watch Now</strong>
+              </div>
+
+              {watchNumbers.length === 0 ? (
+                <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
+                  No watch numbers available in this scope yet.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  {watchNumbers.slice(0, 20).map((item, index) => (
+                    <article key={item.key} className="journal-card-flat">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, color: 'var(--deep-plum)', fontSize: '20px', marginBottom: '8px' }}>
+                            #{index + 1} — {item.number} ({item.gameType})
+                          </div>
+                          <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                            Families: {item.familyKeys.join(', ') || '—'}
+                          </div>
+                          <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '6px' }}>
+                            Terms: {item.termLabels.join(', ') || '—'}
+                          </div>
+                        </div>
+
+                        <div className="journal-card-flat" style={{ minWidth: '150px', textAlign: 'center' }}>
+                          <div className="journal-label">Watch Score</div>
+                          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--deep-plum)' }}>
+                            {item.score}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', marginTop: '14px' }}>
+                        <div className="journal-card-flat">
+                          <div className="journal-label">{selectedState} Hits</div>
+                          <div>{item.stateHits}</div>
+                        </div>
+
+                        <div className="journal-card-flat">
+                          <div className="journal-label">Total Proven Hits</div>
+                          <div>{item.totalHits}</div>
+                        </div>
+
+                        <div className="journal-card-flat">
+                          <div className="journal-label">Family Forms</div>
+                          <div>{item.familyForms.length}</div>
+                        </div>
+                      </div>
+
+                      <div className="journal-card-flat" style={{ marginTop: '14px' }}>
+                        <div className="journal-label">Reasons</div>
+                        <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--ink-light)' }}>
+                          {item.reasons.map(reason => (
+                            <li key={reason} style={{ marginBottom: '6px' }}>
+                              {reason}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="journal-card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
+                <BarChart3 size={18} />
+                <strong>Board Snapshot</strong>
+              </div>
+
+              <div style={{ display: 'grid', gap: '10px' }}>
+                <div className="journal-card-flat">
+                  <div className="journal-label">Current Scope</div>
+                  <div>{dreamerFilter === 'ALL' ? 'All Dreamers' : dreamerFilter}</div>
+                </div>
+
+                <div className="journal-card-flat">
+                  <div className="journal-label">Current State Focus</div>
+                  <div>{selectedState}</div>
+                </div>
+
+                <div className="journal-card-flat">
+                  <div className="journal-label">Top Watch Numbers</div>
+                  <div>{watchNumbers.slice(0, 8).map(item => item.number).join(', ') || 'None'}</div>
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+TSX
+
+cat > src/components/layout/Sidebar.tsx <<'TSX'
+'use client';
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import {
+  BarChart3,
+  BookMarked,
+  BookOpen,
+  BookText,
+  BookType,
+  CalendarRange,
+  Download,
+  Flame,
+  LayoutDashboard,
+  MapPinned,
+  MessageCircleHeart,
+  MoonStar,
+  ReceiptText,
+  SearchCheck,
+  Sparkles,
+  Users,
+} from 'lucide-react';
+import GlobalChatDock from '@/components/chat/GlobalChatDock';
+
+const navItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/dreams', label: 'Dream Journal', icon: BookText },
+  { href: '/dreams/new', label: 'New Dream', icon: BookOpen },
+  { href: '/dreamers', label: 'Dreamers', icon: Users },
+  { href: '/dictionary', label: 'Universal Dictionary', icon: BookType },
+  { href: '/windows', label: 'Active Windows', icon: CalendarRange },
+  { href: '/results', label: 'Results Log', icon: ReceiptText },
+  { href: '/results/import', label: 'Results Import', icon: Download },
+  { href: '/hits', label: 'Hit Scanner', icon: SearchCheck },
+  { href: '/fell-before', label: 'As They Fell Before', icon: BookMarked },
+  { href: '/hot-numbers', label: 'Hot Families', icon: Flame },
+  { href: '/playlists', label: 'State Playlists', icon: MapPinned },
+  { href: '/universal-scope', label: 'Universal Scope', icon: Sparkles },
+  { href: '/forecast-board', label: 'Forecast Board', icon: BarChart3 },
+  { href: '/chat', label: 'Chat', icon: MessageCircleHeart },
+];
+
+export default function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside
+      style={{
+        width: '280px',
+        minHeight: '100vh',
+        padding: '24px 18px',
+        borderRight: '1px solid var(--border-muted)',
+        background:
+          'linear-gradient(180deg, rgba(250,247,242,0.98) 0%, rgba(242,237,228,0.95) 100%)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '18px',
+      }}
+    >
+      <div className="journal-card-flat">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+          <MoonStar size={22} color="var(--deep-plum)" />
+          <div>
+            <div style={{ fontSize: '24px', fontStyle: 'italic', color: 'var(--deep-plum)', lineHeight: 1 }}>
+              Sweet404Peaches
+            </div>
+            <div style={{ fontSize: '12px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--ink-light)', marginTop: '6px' }}>
+              Where Dreams Leave Numbers
+            </div>
+          </div>
+        </div>
+
+        <p style={{ margin: 0, fontSize: '14px', color: 'var(--ink-light)', lineHeight: 1.5 }}>
+          Your private dream journal for symbols, numbers, synchronicity, and future tracking.
+        </p>
+      </div>
+
+      <nav className="journal-card-flat" style={{ display: 'grid', gap: '10px' }}>
+        <div style={{ fontSize: '12px', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '4px' }}>
+          Journal Navigation
+        </div>
+
+        {navItems.map(item => {
+          const Icon = item.icon;
+          const active = pathname === item.href;
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                borderRadius: '12px',
+                padding: '12px 14px',
+                border: active ? '1px solid rgba(201,168,76,0.55)' : '1px solid transparent',
+                background: active ? 'rgba(201,168,76,0.14)' : 'rgba(255,255,255,0.55)',
+                color: active ? 'var(--deep-plum)' : 'var(--ink)',
+                fontWeight: active ? 700 : 500,
+              }}
+            >
+              <Icon size={18} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      <GlobalChatDock />
+
+      <div className="journal-card-flat" style={{ marginTop: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', color: 'var(--deep-plum)' }}>
+          <Sparkles size={16} />
+          <strong>Current Build Phase</strong>
+        </div>
+        <p style={{ margin: 0, fontSize: '14px', color: 'var(--ink-light)', lineHeight: 1.5 }}>
+          Forecast Board is ready. The next step would be refining recommendation logic and adding stronger state-weighted signals.
+        </p>
+      </div>
+    </aside>
+  );
+}
+TSX
+
+echo "Forecast board batch complete."
+echo "Backups saved to: $BACKUP_DIR"

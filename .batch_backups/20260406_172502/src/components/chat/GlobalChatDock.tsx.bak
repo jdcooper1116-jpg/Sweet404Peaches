@@ -1,0 +1,227 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { MessageCircleHeart, Send, Sparkles } from 'lucide-react';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  listActiveDreamWindows,
+  listDreamEntries,
+  listDreamHits,
+  listDreamers,
+  listLotteryResults,
+  listPersonalHitMappings,
+} from '@/lib/firebase/firestore';
+import { answerJournalQuestion, type JournalChatData } from '@/lib/chat/journalChat';
+
+function promptsForPath(pathname: string): string[] {
+  if (pathname.startsWith('/hot-numbers')) {
+    return [
+      'What are my hottest number families right now?',
+      'Which number families repeat across terms?',
+      'Show me Georgia families.',
+    ];
+  }
+
+  if (pathname.startsWith('/dreamers')) {
+    return [
+      'How many dreamers do I have?',
+      'Which dreamer has the most active numbers?',
+      'What numbers are active for Me?',
+    ];
+  }
+
+  if (pathname.startsWith('/universal-scope')) {
+    return [
+      'Which number families repeat across dreamers?',
+      'Which number families repeat across terms?',
+      'What are my hottest number families right now?',
+    ];
+  }
+
+  if (pathname.startsWith('/hits')) {
+    return [
+      'Show me boxed hits.',
+      'Show me straight hits.',
+      'Show me Georgia families.',
+    ];
+  }
+
+  if (pathname.startsWith('/results')) {
+    return [
+      'Show me recent imported results.',
+      'Show me Georgia families.',
+      'What are my hottest number families right now?',
+    ];
+  }
+
+  if (pathname.startsWith('/dreams')) {
+    return [
+      'What are my hottest number families right now?',
+      'Which dreamer has the most active numbers?',
+      'Which number families repeat across terms?',
+    ];
+  }
+
+  return [
+    'What are my hottest number families right now?',
+    'Which number families repeat across dreamers?',
+    'Show me Georgia families.',
+  ];
+}
+
+export default function GlobalChatDock() {
+  const pathname = usePathname();
+  const { user, loading } = useAuth();
+
+  const [dreams, setDreams] = useState<any[]>([]);
+  const [windows, setWindows] = useState<any[]>([]);
+  const [hits, setHits] = useState<any[]>([]);
+  const [memory, setMemory] = useState<any[]>([]);
+  const [results, setResults] = useState<any[]>([]);
+  const [dreamers, setDreamers] = useState<any[]>([]);
+
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [dockLoading, setDockLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setDockLoading(false);
+        return;
+      }
+
+      try {
+        const [dreamRows, windowRows, hitRows, memoryRows, resultRows, dreamerRows] =
+          await Promise.all([
+            listDreamEntries(user.uid),
+            listActiveDreamWindows(user.uid),
+            listDreamHits(user.uid),
+            listPersonalHitMappings(user.uid),
+            listLotteryResults(user.uid, 300),
+            listDreamers(user.uid),
+          ]);
+
+        setDreams(dreamRows);
+        setWindows(windowRows);
+        setHits(hitRows);
+        setMemory(memoryRows);
+        setResults(resultRows);
+        setDreamers(dreamerRows);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setDockLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const chatData = useMemo<JournalChatData>(() => {
+    return {
+      dreams,
+      windows,
+      hits,
+      memory,
+      results,
+      dreamers,
+    };
+  }, [dreams, windows, hits, memory, results, dreamers]);
+
+  const prompts = useMemo(() => promptsForPath(pathname), [pathname]);
+
+  function ask(question: string) {
+    setInput(question);
+    setAnswer(answerJournalQuestion(question, chatData));
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className="journal-card-flat" style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+      <button
+        type="button"
+        className="btn-secondary"
+        onClick={() => setOpen(v => !v)}
+        style={{ width: '100%' }}
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+          <MessageCircleHeart size={16} />
+          {open ? 'Hide Chat Dock' : 'Open Chat Dock'}
+        </span>
+      </button>
+
+      {open ? (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              color: 'var(--deep-plum)',
+            }}
+          >
+            <Sparkles size={16} />
+            <strong>Quick Questions</strong>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {prompts.map(prompt => (
+              <button
+                key={prompt}
+                type="button"
+                className="btn-secondary"
+                onClick={() => ask(prompt)}
+                disabled={dockLoading}
+                style={{ fontSize: '12px', padding: '8px 10px' }}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            className="journal-textarea"
+            rows={4}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Ask about families, dreamers, hits, or recent results..."
+          />
+
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => ask(input)}
+              disabled={dockLoading || !input.trim()}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <Send size={14} />
+                Ask
+              </span>
+            </button>
+
+            <Link href="/chat" className="btn-secondary">
+              Open Full Chat
+            </Link>
+          </div>
+
+          <div className="journal-card-flat" style={{ background: 'rgba(255,255,255,0.75)' }}>
+            <div className="journal-label">Answer</div>
+            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, color: 'var(--ink-light)' }}>
+              {dockLoading
+                ? 'Loading chat data...'
+                : answer || 'Use a quick question or ask your own.'}
+            </div>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}

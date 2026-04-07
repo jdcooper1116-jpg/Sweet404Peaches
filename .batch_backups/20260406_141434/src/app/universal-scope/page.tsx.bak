@@ -1,0 +1,407 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { Sparkles, Users } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import { listActiveDreamWindows } from '@/lib/firebase/firestore';
+import type { ActiveDreamWindow } from '@/lib/types';
+
+type RepeatedNumber = {
+  key: string;
+  number: string;
+  gameType: 'cash3' | 'cash4';
+  count: number;
+  dreamers: string[];
+  terms: string[];
+  score: number;
+};
+
+type RepeatedTerm = {
+  key: string;
+  term: string;
+  count: number;
+  dreamers: string[];
+  numbers: string[];
+  score: number;
+};
+
+type ConvergenceGroup = {
+  key: string;
+  number: string;
+  gameType: 'cash3' | 'cash4';
+  dreamers: string[];
+  terms: string[];
+  count: number;
+  score: number;
+};
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+export default function UniversalScopePage() {
+  const { user, loading } = useAuth();
+  const [windows, setWindows] = useState<ActiveDreamWindow[]>([]);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setWindows([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const rows = await listActiveDreamWindows(user.uid);
+        setWindows(rows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load Universal Scope data.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const repeatedNumbers = useMemo<RepeatedNumber[]>(() => {
+    const map = new Map<string, RepeatedNumber>();
+
+    for (const win of windows) {
+      const key = `${win.gameType}__${win.number}`;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          number: win.number,
+          gameType: win.gameType,
+          count: 0,
+          dreamers: [],
+          terms: [],
+          score: 0,
+        });
+      }
+
+      const item = map.get(key)!;
+      item.count += 1;
+      item.dreamers.push(win.dreamerName);
+      item.terms.push(win.termLabel);
+    }
+
+    for (const item of map.values()) {
+      item.dreamers = unique(item.dreamers).sort();
+      item.terms = unique(item.terms).sort();
+      item.score =
+        item.count * 10 +
+        item.dreamers.length * 6 +
+        item.terms.length * 4;
+    }
+
+    return Array.from(map.values())
+      .filter(item => item.count > 0)
+      .sort((a, b) => {
+        if (a.score !== b.score) return b.score - a.score;
+        if (a.gameType !== b.gameType) return a.gameType.localeCompare(b.gameType);
+        return a.number.localeCompare(b.number);
+      });
+  }, [windows]);
+
+  const repeatedTerms = useMemo<RepeatedTerm[]>(() => {
+    const map = new Map<string, RepeatedTerm>();
+
+    for (const win of windows) {
+      const key = win.termLabel.toLowerCase();
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          term: win.termLabel,
+          count: 0,
+          dreamers: [],
+          numbers: [],
+          score: 0,
+        });
+      }
+
+      const item = map.get(key)!;
+      item.count += 1;
+      item.dreamers.push(win.dreamerName);
+      item.numbers.push(win.number);
+    }
+
+    for (const item of map.values()) {
+      item.dreamers = unique(item.dreamers).sort();
+      item.numbers = unique(item.numbers).sort();
+      item.score =
+        item.count * 8 +
+        item.dreamers.length * 5 +
+        item.numbers.length * 4;
+    }
+
+    return Array.from(map.values())
+      .filter(item => item.count > 0)
+      .sort((a, b) => {
+        if (a.score !== b.score) return b.score - a.score;
+        return a.term.localeCompare(b.term);
+      });
+  }, [windows]);
+
+  const convergenceGroups = useMemo<ConvergenceGroup[]>(() => {
+    return repeatedNumbers
+      .filter(item => item.dreamers.length > 1 || item.terms.length > 1)
+      .map(item => ({
+        key: item.key,
+        number: item.number,
+        gameType: item.gameType,
+        dreamers: item.dreamers,
+        terms: item.terms,
+        count: item.count,
+        score: item.score,
+      }))
+      .sort((a, b) => {
+        if (a.score !== b.score) return b.score - a.score;
+        return a.number.localeCompare(b.number);
+      });
+  }, [repeatedNumbers]);
+
+  const activeRanges = useMemo(() => {
+    const ranges = windows.map(win => `${win.activeStart} → ${win.activeEnd}`);
+    return unique(ranges).sort();
+  }, [windows]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Universal Scope</h1>
+            <p>
+              This is the collective dream field across all active dreams in the
+              current 7-day windows.
+            </p>
+          </div>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Loading Universal Scope...
+            </p>
+          </section>
+        ) : error ? (
+          <section
+            className="journal-card"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
+            {error}
+          </section>
+        ) : windows.length === 0 ? (
+          <section className="journal-card">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '10px',
+                color: 'var(--deep-plum)',
+              }}
+            >
+              <Sparkles size={18} />
+              <strong>No active dream field yet</strong>
+            </div>
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Save parsed dreams first and their active windows will feed Universal Scope.
+            </p>
+          </section>
+        ) : (
+          <>
+            <section className="journal-card-flat">
+              <div
+                style={{
+                  display: 'grid',
+                  gap: '12px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                }}
+              >
+                <div>
+                  <div className="journal-label">Active Windows</div>
+                  <div>{windows.length}</div>
+                </div>
+
+                <div>
+                  <div className="journal-label">Repeated Numbers</div>
+                  <div>{repeatedNumbers.length}</div>
+                </div>
+
+                <div>
+                  <div className="journal-label">Repeated Terms</div>
+                  <div>{repeatedTerms.length}</div>
+                </div>
+
+                <div>
+                  <div className="journal-label">Convergence Groups</div>
+                  <div>{convergenceGroups.length}</div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '16px' }}>
+                <div className="journal-label">Active Window Ranges</div>
+                <div style={{ color: 'var(--ink-light)' }}>
+                  {activeRanges.join(' • ')}
+                </div>
+              </div>
+            </section>
+
+            <section className="journal-card">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginBottom: '14px',
+                  color: 'var(--deep-plum)',
+                }}
+              >
+                <Sparkles size={18} />
+                <strong>Top Repeated Numbers</strong>
+              </div>
+
+              <div style={{ display: 'grid', gap: '14px' }}>
+                {repeatedNumbers.slice(0, 20).map((item, index) => (
+                  <article key={item.key} className="journal-card-flat">
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: '16px',
+                        alignItems: 'flex-start',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            color: 'var(--deep-plum)',
+                            fontSize: '20px',
+                            marginBottom: '8px',
+                          }}
+                        >
+                          #{index + 1} — {item.number} ({item.gameType})
+                        </div>
+                        <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                          Terms: {item.terms.join(', ') || '—'}
+                        </div>
+                        <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '6px' }}>
+                          Dreamers: {item.dreamers.join(', ') || '—'}
+                        </div>
+                      </div>
+
+                      <div className="journal-card-flat" style={{ minWidth: '150px', textAlign: 'center' }}>
+                        <div className="journal-label">Score</div>
+                        <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--deep-plum)' }}>
+                          {item.score}
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="journal-card">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginBottom: '14px',
+                  color: 'var(--deep-plum)',
+                }}
+              >
+                <Users size={18} />
+                <strong>Cross-Dreamer Convergence</strong>
+              </div>
+
+              {convergenceGroups.length === 0 ? (
+                <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
+                  No multi-dreamer or multi-term convergence detected yet.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '14px' }}>
+                  {convergenceGroups.slice(0, 20).map(item => (
+                    <article key={item.key} className="journal-card-flat">
+                      <div style={{ fontWeight: 700, color: 'var(--deep-plum)', marginBottom: '8px' }}>
+                        {item.number} ({item.gameType})
+                      </div>
+
+                      <div style={{ display: 'grid', gap: '8px', fontSize: '14px' }}>
+                        <div><strong>Dreamers:</strong> {item.dreamers.join(', ') || '—'}</div>
+                        <div><strong>Terms:</strong> {item.terms.join(', ') || '—'}</div>
+                        <div><strong>Occurrences:</strong> {item.count}</div>
+                        <div><strong>Score:</strong> {item.score}</div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="journal-card">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginBottom: '14px',
+                  color: 'var(--deep-plum)',
+                }}
+              >
+                <Sparkles size={18} />
+                <strong>Repeated Terms</strong>
+              </div>
+
+              <div style={{ display: 'grid', gap: '14px' }}>
+                {repeatedTerms.slice(0, 20).map(item => (
+                  <article key={item.key} className="journal-card-flat">
+                    <div style={{ fontWeight: 700, color: 'var(--deep-plum)', marginBottom: '8px' }}>
+                      {item.term}
+                    </div>
+
+                    <div style={{ display: 'grid', gap: '8px', fontSize: '14px' }}>
+                      <div><strong>Count:</strong> {item.count}</div>
+                      <div><strong>Dreamers:</strong> {item.dreamers.join(', ') || '—'}</div>
+                      <div><strong>Numbers:</strong> {item.numbers.join(', ') || '—'}</div>
+                      <div><strong>Score:</strong> {item.score}</div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}

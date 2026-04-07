@@ -1,0 +1,182 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { CalendarRange, Sparkles } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import { listActiveDreamWindows } from '@/lib/firebase/firestore';
+import type { ActiveDreamWindow } from '@/lib/types';
+
+export default function ActiveWindowsPage() {
+  const { user, loading } = useAuth();
+  const [windows, setWindows] = useState<ActiveDreamWindow[]>([]);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setWindows([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const rows = await listActiveDreamWindows(user.uid);
+        setWindows(rows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load active dream windows.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, ActiveDreamWindow[]>();
+
+    for (const item of windows) {
+      const key = `${item.activeStart}__${item.activeEnd}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(item);
+    }
+
+    return Array.from(map.entries()).map(([key, values]) => {
+      const [start, end] = key.split('__');
+      return {
+        start,
+        end,
+        values: values.sort((a, b) => a.termLabel.localeCompare(b.termLabel)),
+      };
+    });
+  }, [windows]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Active Dream Windows</h1>
+            <p>
+              These are the currently tracked numbers created from parsed dreams
+              and their 7-day active windows.
+            </p>
+          </div>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Loading active windows...
+            </p>
+          </section>
+        ) : error ? (
+          <section
+            className="journal-card"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
+            {error}
+          </section>
+        ) : grouped.length === 0 ? (
+          <section className="journal-card">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '10px',
+                color: 'var(--deep-plum)',
+              }}
+            >
+              <Sparkles size={18} />
+              <strong>No active windows yet</strong>
+            </div>
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Parse and save a dream first, and its numbers will appear here.
+            </p>
+          </section>
+        ) : (
+          <section style={{ display: 'grid', gap: '18px' }}>
+            {grouped.map(group => (
+              <article key={`${group.start}-${group.end}`} className="journal-card">
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    marginBottom: '16px',
+                    color: 'var(--deep-plum)',
+                  }}
+                >
+                  <CalendarRange size={18} />
+                  <strong>
+                    {group.start} → {group.end}
+                  </strong>
+                </div>
+
+                <div style={{ display: 'grid', gap: '12px' }}>
+                  {group.values.map(item => (
+                    <div key={item.id} className="journal-card-flat">
+                      <div
+                        style={{
+                          display: 'grid',
+                          gap: '8px',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                        }}
+                      >
+                        <div>
+                          <div className="journal-label">Dreamer</div>
+                          <div>{item.dreamerName}</div>
+                        </div>
+
+                        <div>
+                          <div className="journal-label">Term</div>
+                          <div>{item.termLabel}</div>
+                        </div>
+
+                        <div>
+                          <div className="journal-label">Number</div>
+                          <div>{item.number}</div>
+                        </div>
+
+                        <div>
+                          <div className="journal-label">Game</div>
+                          <div>{item.gameType}</div>
+                        </div>
+
+                        <div>
+                          <div className="journal-label">States Tracked</div>
+                          <div>{item.statesTracked.join(', ')}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}

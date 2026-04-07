@@ -1,0 +1,287 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { MapPinned, Sparkles } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  listActiveDreamWindows,
+  listPersonalHitMappings,
+} from '@/lib/firebase/firestore';
+import { US_STATES, type ActiveDreamWindow, type PersonalHitMapping } from '@/lib/types';
+
+type StatePlaylistItem = {
+  state: string;
+  activeNumbers: string[];
+  cash3Numbers: string[];
+  cash4Numbers: string[];
+  totalWindows: number;
+  georgiaWeightedScore: number;
+  priorHits: number;
+};
+
+export default function PlaylistsPage() {
+  const { user, loading } = useAuth();
+  const [windows, setWindows] = useState<ActiveDreamWindow[]>([]);
+  const [memory, setMemory] = useState<PersonalHitMapping[]>([]);
+  const [selectedState, setSelectedState] = useState('GA');
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setWindows([]);
+        setMemory([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const [windowRows, memoryRows] = await Promise.all([
+          listActiveDreamWindows(user.uid),
+          listPersonalHitMappings(user.uid),
+        ]);
+
+        setWindows(windowRows);
+        setMemory(memoryRows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load state playlists.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const playlistMap = useMemo(() => {
+    const map = new Map<string, StatePlaylistItem>();
+
+    for (const state of US_STATES) {
+      map.set(state, {
+        state,
+        activeNumbers: [],
+        cash3Numbers: [],
+        cash4Numbers: [],
+        totalWindows: 0,
+        georgiaWeightedScore: 0,
+        priorHits: 0,
+      });
+    }
+
+    for (const win of windows) {
+      for (const state of win.statesTracked) {
+        if (!map.has(state)) continue;
+        const item = map.get(state)!;
+        item.activeNumbers.push(win.number);
+        item.totalWindows += 1;
+
+        if (win.gameType === 'cash3') item.cash3Numbers.push(win.number);
+        if (win.gameType === 'cash4') item.cash4Numbers.push(win.number);
+      }
+    }
+
+    for (const item of map.values()) {
+      item.activeNumbers = Array.from(new Set(item.activeNumbers)).sort();
+      item.cash3Numbers = Array.from(new Set(item.cash3Numbers)).sort();
+      item.cash4Numbers = Array.from(new Set(item.cash4Numbers)).sort();
+
+      const stateHits = memory.filter(row => row.state === item.state);
+      item.priorHits = stateHits.reduce((sum, row) => sum + (row.hitCount || 0), 0);
+
+      item.georgiaWeightedScore =
+        item.totalWindows * (item.state === 'GA' ? 3 : 1) +
+        item.priorHits * (item.state === 'GA' ? 2 : 1);
+    }
+
+    return map;
+  }, [windows, memory]);
+
+  const selected = playlistMap.get(selectedState);
+
+  const rankedStates = useMemo(() => {
+    return Array.from(playlistMap.values()).sort((a, b) => {
+      if (a.georgiaWeightedScore !== b.georgiaWeightedScore) {
+        return b.georgiaWeightedScore - a.georgiaWeightedScore;
+      }
+      return a.state.localeCompare(b.state);
+    });
+  }, [playlistMap]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>State Playlists</h1>
+            <p>
+              Georgia-first state view of active numbers, with all states tracked
+              automatically in the background.
+            </p>
+          </div>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading playlists...</p>
+          </section>
+        ) : error ? (
+          <section
+            className="journal-card"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
+            {error}
+          </section>
+        ) : (
+          <>
+            <section className="journal-card-flat">
+              <label className="journal-label" htmlFor="stateSelect">
+                Select State
+              </label>
+              <select
+                id="stateSelect"
+                className="journal-select"
+                value={selectedState}
+                onChange={e => setSelectedState(e.target.value)}
+              >
+                {US_STATES.map(state => (
+                  <option key={state} value={state}>
+                    {state}
+                  </option>
+                ))}
+              </select>
+            </section>
+
+            {selected ? (
+              <section className="journal-card">
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    marginBottom: '16px',
+                    color: 'var(--deep-plum)',
+                  }}
+                >
+                  <MapPinned size={18} />
+                  <strong style={{ fontSize: '22px' }}>{selected.state} Playlist</strong>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '12px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                  }}
+                >
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Active Windows</div>
+                    <div>{selected.totalWindows}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Prior Hits</div>
+                    <div>{selected.priorHits}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Playlist Score</div>
+                    <div>{selected.georgiaWeightedScore}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: '16px', marginTop: '18px' }}>
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Cash 3 Numbers</div>
+                    <div style={{ color: 'var(--ink-light)' }}>
+                      {selected.cash3Numbers.length ? selected.cash3Numbers.join(', ') : 'None'}
+                    </div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Cash 4 Numbers</div>
+                    <div style={{ color: 'var(--ink-light)' }}>
+                      {selected.cash4Numbers.length ? selected.cash4Numbers.join(', ') : 'None'}
+                    </div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">All Active Numbers</div>
+                    <div style={{ color: 'var(--ink-light)' }}>
+                      {selected.activeNumbers.length ? selected.activeNumbers.join(', ') : 'None'}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            <section className="journal-card">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginBottom: '14px',
+                  color: 'var(--deep-plum)',
+                }}
+              >
+                <Sparkles size={18} />
+                <strong>Ranked States</strong>
+              </div>
+
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {rankedStates.slice(0, 12).map(item => (
+                  <div key={item.state} className="journal-card-flat">
+                    <div
+                      style={{
+                        display: 'grid',
+                        gap: '10px',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                      }}
+                    >
+                      <div>
+                        <div className="journal-label">State</div>
+                        <div>{item.state}</div>
+                      </div>
+                      <div>
+                        <div className="journal-label">Windows</div>
+                        <div>{item.totalWindows}</div>
+                      </div>
+                      <div>
+                        <div className="journal-label">Prior Hits</div>
+                        <div>{item.priorHits}</div>
+                      </div>
+                      <div>
+                        <div className="journal-label">Score</div>
+                        <div>{item.georgiaWeightedScore}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}

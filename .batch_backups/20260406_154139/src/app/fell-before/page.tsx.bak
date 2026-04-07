@@ -1,0 +1,207 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { BookMarked, Sparkles } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import { listPersonalHitMappings } from '@/lib/firebase/firestore';
+import type { PersonalHitMapping } from '@/lib/types';
+
+export default function FellBeforePage() {
+  const { user, loading } = useAuth();
+  const [items, setItems] = useState<PersonalHitMapping[]>([]);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setItems([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const rows = await listPersonalHitMappings(user.uid);
+        setItems(rows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load As They Fell Before.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => {
+      if (a.hitCount !== b.hitCount) return b.hitCount - a.hitCount;
+      if (a.drawDate !== b.drawDate) return b.drawDate.localeCompare(a.drawDate);
+      return a.termLabel.localeCompare(b.termLabel);
+    });
+  }, [items]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>As They Fell Before</h1>
+            <p>
+              Your proven dream-to-number memory layer. These are the numbers
+              that have already hit for you.
+            </p>
+          </div>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Loading personal hit memory...
+            </p>
+          </section>
+        ) : error ? (
+          <section
+            className="journal-card"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
+            {error}
+          </section>
+        ) : sortedItems.length === 0 ? (
+          <section className="journal-card">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '10px',
+                color: 'var(--deep-plum)',
+              }}
+            >
+              <Sparkles size={18} />
+              <strong>No proven hits yet</strong>
+            </div>
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
+              Save hit matches from the Hit Scanner and they will appear here.
+            </p>
+          </section>
+        ) : (
+          <section style={{ display: 'grid', gap: '14px' }}>
+            {sortedItems.map(item => (
+              <article key={item.id} className="journal-card">
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '16px',
+                    alignItems: 'flex-start',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        color: 'var(--deep-plum)',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      <BookMarked size={18} />
+                      <strong style={{ fontSize: '20px' }}>{item.termLabel}</strong>
+                    </div>
+
+                    <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                      Dreamer: {item.dreamerName}
+                    </div>
+                  </div>
+
+                  <div
+                    className="journal-card-flat"
+                    style={{ minWidth: '170px', textAlign: 'center' }}
+                  >
+                    <div className="journal-label">Hit Count</div>
+                    <div
+                      style={{
+                        fontSize: '30px',
+                        color: 'var(--deep-plum)',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                      }}
+                    >
+                      {item.hitCount}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '12px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    marginTop: '18px',
+                  }}
+                >
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Number</div>
+                    <div>{item.number}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Game</div>
+                    <div>{item.gameType}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Hit Type</div>
+                    <div>{item.hitType}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">State</div>
+                    <div>{item.state}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Draw Time</div>
+                    <div>{item.drawTime}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Draw Date</div>
+                    <div>{item.drawDate}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Timing</div>
+                    <div>{item.sameDay ? 'Same day' : `${item.daysFromDream} day(s) later`}</div>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}

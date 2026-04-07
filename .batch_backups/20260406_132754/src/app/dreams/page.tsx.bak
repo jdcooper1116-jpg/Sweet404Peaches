@@ -1,0 +1,267 @@
+'use client';
+
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { BookMarked, Plus, Users } from 'lucide-react';
+import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import { listDreamEntries } from '@/lib/firebase/firestore';
+import type { DreamEntry } from '@/lib/types';
+
+export default function DreamsPage() {
+  const { user, loading } = useAuth();
+  const [entries, setEntries] = useState<DreamEntry[]>([]);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [dreamerFilter, setDreamerFilter] = useState('ALL');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setEntries([]);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        setError('');
+        const rows = await listDreamEntries(user.uid);
+        setEntries(rows);
+      } catch (err) {
+        console.error(err);
+        setError('Could not load dream entries from Firestore.');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    if (!loading) {
+      void load();
+    }
+  }, [user, loading]);
+
+  const dreamerNames = useMemo(() => {
+    return Array.from(new Set(entries.map(e => e.dreamerName))).sort();
+  }, [entries]);
+
+  const filteredEntries = useMemo(() => {
+    const subset =
+      dreamerFilter === 'ALL'
+        ? entries
+        : entries.filter(entry => entry.dreamerName === dreamerFilter);
+
+    return [...subset].sort((a, b) => {
+      if (a.dreamDate !== b.dreamDate) return b.dreamDate.localeCompare(a.dreamDate);
+      return a.dreamerName.localeCompare(b.dreamerName);
+    });
+  }, [entries, dreamerFilter]);
+
+  return (
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        background:
+          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+      }}
+    >
+      <Sidebar />
+
+      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+        <section className="journal-card">
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: '16px',
+              alignItems: 'flex-start',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div className="page-header">
+              <h1>Dream Log</h1>
+              <p>
+                Your saved dream entries and active 7-day journal history, now
+                filterable by dreamer.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/dreamers" className="btn-secondary">
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                  <Users size={16} />
+                  Manage Dreamers
+                </span>
+              </Link>
+
+              <Link href="/dreams/new" className="btn-primary">
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                  <Plus size={16} />
+                  New Dream
+                </span>
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <section className="journal-card-flat">
+          <label className="journal-label" htmlFor="dreamerFilter">
+            Filter by Dreamer
+          </label>
+          <select
+            id="dreamerFilter"
+            className="journal-select"
+            value={dreamerFilter}
+            onChange={e => setDreamerFilter(e.target.value)}
+          >
+            <option value="ALL">All Dreamers</option>
+            {dreamerNames.map(name => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </section>
+
+        {pageLoading ? (
+          <section className="journal-card">
+            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading dreams...</p>
+          </section>
+        ) : error ? (
+          <section
+            className="journal-card"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
+            {error}
+          </section>
+        ) : filteredEntries.length === 0 ? (
+          <section className="journal-card">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '10px',
+                color: 'var(--deep-plum)',
+              }}
+            >
+              <BookMarked size={18} />
+              <strong>No dreams in this view yet</strong>
+            </div>
+
+            <p style={{ color: 'var(--ink-light)', margin: 0 }}>
+              Save a dream entry and it will appear here.
+            </p>
+          </section>
+        ) : (
+          <section style={{ display: 'grid', gap: '16px' }}>
+            {filteredEntries.map(entry => (
+              <article key={entry.id} className="journal-card">
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '16px',
+                    alignItems: 'flex-start',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        letterSpacing: '0.18em',
+                        textTransform: 'uppercase',
+                        color: 'var(--ink-muted)',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      {entry.dreamDate} • {entry.dreamerName}
+                    </div>
+
+                    <h2
+                      style={{
+                        margin: 0,
+                        fontSize: '22px',
+                        color: 'var(--deep-plum)',
+                        fontStyle: 'italic',
+                      }}
+                    >
+                      {entry.isReviewed ? 'Parsed Dream Entry' : 'Dream Draft'}
+                    </h2>
+                  </div>
+
+                  <div
+                    className="journal-card-flat"
+                    style={{
+                      padding: '10px 12px',
+                      minWidth: '210px',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.12em',
+                        color: 'var(--ink-muted)',
+                        marginBottom: '6px',
+                      }}
+                    >
+                      Active Window
+                    </div>
+                    <div style={{ fontSize: '14px', color: 'var(--ink)' }}>
+                      {entry.activeWindowStart} → {entry.activeWindowEnd}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '12px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    marginTop: '16px',
+                  }}
+                >
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Reviewed</div>
+                    <div>{entry.isReviewed ? 'Yes' : 'No'}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Mapped Terms</div>
+                    <div>{entry.termMappings.length}</div>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <div className="journal-label">All Numbers</div>
+                    <div>{entry.allNumbers.length}</div>
+                  </div>
+                </div>
+
+                <p
+                  style={{
+                    marginTop: '16px',
+                    marginBottom: '0',
+                    color: 'var(--ink)',
+                    lineHeight: 1.7,
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {entry.rawText.length > 320
+                    ? `${entry.rawText.slice(0, 320)}...`
+                    : entry.rawText}
+                </p>
+              </article>
+            ))}
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}

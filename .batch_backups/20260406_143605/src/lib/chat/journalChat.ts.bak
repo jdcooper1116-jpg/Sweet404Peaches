@@ -1,0 +1,244 @@
+import type {
+  ActiveDreamWindow,
+  DreamEntry,
+  DreamHit,
+  Dreamer,
+  LotteryResult,
+  PersonalHitMapping,
+} from '@/lib/types';
+import { summarizeNumberFamilies } from '@/lib/sync/numberFamilies';
+
+export type JournalChatData = {
+  dreams: DreamEntry[];
+  windows: ActiveDreamWindow[];
+  hits: DreamHit[];
+  memory: PersonalHitMapping[];
+  results: LotteryResult[];
+  dreamers: Dreamer[];
+};
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+function normalize(text: string): string {
+  return text.toLowerCase().trim();
+}
+
+function includesAny(text: string, terms: string[]): boolean {
+  return terms.some(term => text.includes(term));
+}
+
+function formatList(values: string[], empty = 'None found.'): string {
+  if (!values.length) return empty;
+  return values.join(', ');
+}
+
+function topRepeatedTerms(windows: ActiveDreamWindow[], limit = 10) {
+  const map = new Map<string, { term: string; count: number; dreamers: string[]; numbers: string[] }>();
+
+  for (const win of windows) {
+    const key = win.termLabel.toLowerCase();
+    if (!map.has(key)) {
+      map.set(key, {
+        term: win.termLabel,
+        count: 0,
+        dreamers: [],
+        numbers: [],
+      });
+    }
+
+    const item = map.get(key)!;
+    item.count += 1;
+    item.dreamers.push(win.dreamerName);
+    item.numbers.push(win.number);
+  }
+
+  return Array.from(map.values())
+    .map(item => ({
+      ...item,
+      dreamers: unique(item.dreamers),
+      numbers: unique(item.numbers),
+    }))
+    .sort((a, b) => b.count - a.count || a.term.localeCompare(b.term))
+    .slice(0, limit);
+}
+
+function recentResults(results: LotteryResult[], limit = 12) {
+  return [...results]
+    .sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      if (a.state !== b.state) return a.state.localeCompare(b.state);
+      if (a.gameType !== b.gameType) return a.gameType.localeCompare(b.gameType);
+      return a.drawTime.localeCompare(b.drawTime);
+    })
+    .slice(0, limit);
+}
+
+function findDreamerByQuestion(question: string, dreamers: Dreamer[]): Dreamer | null {
+  const q = normalize(question);
+
+  for (const dreamer of dreamers) {
+    if (q.includes(dreamer.displayName.toLowerCase())) return dreamer;
+    if (dreamer.alias && q.includes(dreamer.alias.toLowerCase())) return dreamer;
+  }
+
+  return null;
+}
+
+export function answerJournalQuestion(question: string, data: JournalChatData): string {
+  const q = normalize(question);
+
+  if (!q) {
+    return 'Ask me about hot families, repeated number families, active windows, dreamers, Georgia hits, boxed hits, or recent results.';
+  }
+
+  if (includesAny(q, ['hot family', 'hottest family', 'box family', 'number family', 'repeating numbers across terms', 'synchronicity'])) {
+    const topFamilies = summarizeNumberFamilies(data.windows, data.memory).slice(0, 10);
+    if (!topFamilies.length) return 'There are no active number families yet. Save a parsed dream first.';
+
+    return [
+      'Top active number families right now:',
+      ...topFamilies.map(
+        item =>
+          `• Family ${item.familyKey} (${item.gameType}) — forms: ${formatList(item.forms)}; terms: ${formatList(item.terms)}; dreamers: ${formatList(item.dreamers)}; score: ${item.score}`
+      ),
+    ].join('\n');
+  }
+
+  if (includesAny(q, ['hot number', 'hottest', 'hot numbers', 'active numbers'])) {
+    const topFamilies = summarizeNumberFamilies(data.windows, data.memory).slice(0, 10);
+    if (!topFamilies.length) return 'There are no active number families yet.';
+
+    return [
+      'Top active number families right now:',
+      ...topFamilies.map(
+        item =>
+          `• Family ${item.familyKey} (${item.gameType}) — active forms: ${formatList(item.forms)}`
+      ),
+    ].join('\n');
+  }
+
+  if (includesAny(q, ['repeated term', 'repeating term', 'terms repeat', 'repeated terms'])) {
+    const top = topRepeatedTerms(data.windows, 10);
+    if (!top.length) return 'No repeated terms found yet.';
+
+    return [
+      'Top repeated terms in the current active field:',
+      ...top.map(
+        item =>
+          `• ${item.term} — ${item.count} occurrence(s); dreamers: ${formatList(item.dreamers)}; numbers: ${formatList(item.numbers)}`
+      ),
+    ].join('\n');
+  }
+
+  if (includesAny(q, ['how many dreamers', 'saved dreamers', 'dreamers do i have'])) {
+    if (!data.dreamers.length) return 'You do not have any saved dreamers yet.';
+    return `You currently have ${data.dreamers.length} saved dreamer(s): ${data.dreamers.map(d => d.displayName).join(', ')}.`;
+  }
+
+  if (includesAny(q, ['active windows', 'how many windows', 'current windows'])) {
+    if (!data.windows.length) return 'There are no active dream windows yet.';
+    return `You currently have ${data.windows.length} active dream window record(s).`;
+  }
+
+  if (includesAny(q, ['georgia hit', 'ga hit', 'hits in georgia'])) {
+    const gaHits = data.memory.filter(item => item.state === 'GA');
+    if (!gaHits.length) return 'There are no saved Georgia hits yet.';
+
+    const summary = gaHits
+      .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
+      .slice(0, 10)
+      .map(item => `• ${item.termLabel} → ${item.number} (${item.gameType}, ${item.hitType}) — ${item.hitCount} hit(s)`)
+      .join('\n');
+
+    return `Top saved Georgia hit memories:\n${summary}`;
+  }
+
+  if (includesAny(q, ['straight hit', 'straight hits'])) {
+    const straight = data.memory.filter(item => item.hitType === 'straight');
+    if (!straight.length) return 'There are no saved straight hits yet.';
+
+    return [
+      'Saved straight-hit memories:',
+      ...straight
+        .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
+        .slice(0, 10)
+        .map(item => `• ${item.termLabel} → ${item.number} (${item.gameType}, ${item.state}) — ${item.hitCount} hit(s)`),
+    ].join('\n');
+  }
+
+  if (includesAny(q, ['boxed hit', 'boxed hits'])) {
+    const boxed = data.memory.filter(item => item.hitType === 'boxed');
+    if (!boxed.length) return 'There are no saved boxed hits yet.';
+
+    return [
+      'Saved boxed-hit memories:',
+      ...boxed
+        .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
+        .slice(0, 10)
+        .map(item => `• ${item.termLabel} → ${item.number} (${item.gameType}, ${item.state}) — ${item.hitCount} hit(s)`),
+    ].join('\n');
+  }
+
+  if (includesAny(q, ['recent results', 'latest results', 'imported results'])) {
+    const rows = recentResults(data.results, 12);
+    if (!rows.length) return 'There are no imported results yet.';
+
+    return [
+      'Most recent imported results:',
+      ...rows.map(
+        row =>
+          `• ${row.state} ${row.date} ${row.gameType} ${row.drawTime} — ${row.normalizedResult}`
+      ),
+    ].join('\n');
+  }
+
+  const dreamer = findDreamerByQuestion(q, data.dreamers);
+  if (dreamer && includesAny(q, ['numbers', 'active', 'dreamer', 'journal'])) {
+    const dreamerWindows = data.windows.filter(
+      item => item.dreamerId === dreamer.id || item.dreamerName === dreamer.displayName
+    );
+
+    if (!dreamerWindows.length) {
+      return `${dreamer.displayName} does not have any active windows yet.`;
+    }
+
+    const families = summarizeNumberFamilies(dreamerWindows, data.memory);
+    const topFamilyText = families.length
+      ? families
+          .slice(0, 5)
+          .map(item => `Family ${item.familyKey}: ${item.forms.join(', ')}`)
+          .join(' • ')
+      : 'None';
+
+    const numbers = unique(dreamerWindows.map(item => item.number)).sort();
+    const terms = unique(dreamerWindows.map(item => item.termLabel)).sort();
+
+    return [
+      `Current active view for ${dreamer.displayName}:`,
+      `• Active numbers: ${formatList(numbers)}`,
+      `• Active terms: ${formatList(terms)}`,
+      `• Window count: ${dreamerWindows.length}`,
+      `• Strongest families: ${topFamilyText}`,
+    ].join('\n');
+  }
+
+  if (includesAny(q, ['help', 'what can i ask', 'what can you do'])) {
+    return [
+      'You can ask things like:',
+      '• What are my hottest number families right now?',
+      '• Which box families repeat across terms?',
+      '• Show me Georgia hits.',
+      '• Show me straight hits.',
+      '• Show me boxed hits.',
+      '• What numbers are active for [dreamer name]?',
+      '• Show me recent imported results.',
+    ].join('\n');
+  }
+
+  return [
+    'I could not match that question yet.',
+    'Try asking about number families, hot families, repeated terms, Georgia hits, boxed hits, active windows, or recent results.',
+  ].join('\n');
+}

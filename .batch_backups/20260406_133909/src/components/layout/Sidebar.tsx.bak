@@ -1,0 +1,192 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import {
+  BookMarked,
+  BookOpen,
+  BookText,
+  CalendarRange,
+  Download,
+  Flame,
+  LayoutDashboard,
+  MapPinned,
+  MoonStar,
+  ReceiptText,
+  SearchCheck,
+  Sparkles,
+  Users,
+} from 'lucide-react';
+
+const navItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/dreams', label: 'Dream Log', icon: BookText },
+  { href: '/dreams/new', label: 'New Dream', icon: BookOpen },
+  { href: '/dreamers', label: 'Dreamers', icon: Users },
+  { href: '/windows', label: 'Active Windows', icon: CalendarRange },
+  { href: '/results', label: 'Results Log', icon: ReceiptText },
+  { href: '/results/import', label: 'Results Import', icon: Download },
+  { href: '/hits', label: 'Hit Scanner', icon: SearchCheck },
+  { href: '/fell-before', label: 'As They Fell Before', icon: BookMarked },
+  { href: '/hot-numbers', label: 'Hot Numbers', icon: Flame },
+  { href: '/playlists', label: 'State Playlists', icon: MapPinned },
+];
+
+export default function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside
+      style={{
+        width: '280px',
+        minHeight: '100vh',
+        padding: '24px 18px',
+        borderRight: '1px solid var(--border-muted)',
+        background:
+          'linear-gradient(180deg, rgba(250,247,242,0.98) 0%, rgba(242,237,228,0.95) 100%)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '18px',
+      }}
+    >
+      <div className="journal-card-flat">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+          <MoonStar size={22} color="var(--deep-plum)" />
+          <div>
+            <div
+              style={{
+                fontSize: '24px',
+                fontStyle: 'italic',
+                color: 'var(--deep-plum)',
+                lineHeight: 1,
+              }}
+            >
+              Sweet404Peaches
+            </div>
+            <div
+              style={{
+                fontSize: '12px',
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: 'var(--ink-light)',
+                marginTop: '6px',
+              }}
+            >
+              Where Dreams Leave Numbers
+            </div>
+          </div>
+        </div>
+
+        <p
+          style={{
+            margin: 0,
+            fontSize: '14px',
+            color: 'var(--ink-light)',
+            lineHeight: 1.5,
+          }}
+        >
+          Your private dream journal for symbols, numbers, synchronicity, and
+          future tracking.
+        </p>
+      </div>
+
+      <nav className="journal-card-flat" style={{ display: 'grid', gap: '10px' }}>
+        <div
+          style={{
+            fontSize: '12px',
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'var(--ink-muted)',
+            marginBottom: '4px',
+          }}
+        >
+          Journal Navigation
+        </div>
+
+        {navItems.map(item => {
+          const Icon = item.icon;
+          const active = pathname === item.href;
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                borderRadius: '12px',
+                padding: '12px 14px',
+                border: active
+                  ? '1px solid rgba(201,168,76,0.55)'
+                  : '1px solid transparent',
+                background: active
+                  ? 'rgba(201,168,76,0.14)'
+                  : 'rgba(255,255,255,0.55)',
+                color: active ? 'var(--deep-plum)' : 'var(--ink)',
+                fontWeight: active ? 700 : 500,
+              }}
+            >
+              <Icon size={18} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div className="journal-card-flat" style={{ display: 'grid', gap: '10px' }}>
+        <div
+          style={{
+            fontSize: '12px',
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'var(--ink-muted)',
+          }}
+        >
+          Coming Next
+        </div>
+
+        {['Universal Scope', 'Chat'].map(item => (
+          <div
+            key={item}
+            style={{
+              borderRadius: '10px',
+              padding: '10px 12px',
+              background: 'rgba(255,255,255,0.55)',
+              color: 'var(--ink-light)',
+              fontSize: '14px',
+            }}
+          >
+            {item}
+          </div>
+        ))}
+      </div>
+
+      <div className="journal-card-flat" style={{ marginTop: 'auto' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginBottom: '8px',
+            color: 'var(--deep-plum)',
+          }}
+        >
+          <Sparkles size={16} />
+          <strong>Current Build Phase</strong>
+        </div>
+        <p
+          style={{
+            margin: 0,
+            fontSize: '14px',
+            color: 'var(--ink-light)',
+            lineHeight: 1.5,
+          }}
+        >
+          Dreamer management is ready. Next we can build Universal Scope or a
+          smarter state-based forecast layer.
+        </p>
+      </div>
+    </aside>
+  );
+}
