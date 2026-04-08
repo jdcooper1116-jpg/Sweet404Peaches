@@ -1700,3 +1700,28 @@ export async function runBacktestReplayForDream(
 
   return summary;
 }
+
+export async function getLatestDreamEntry(ownerUid: string): Promise<any | null> {
+  const q = query(
+    collection(db, COLLECTIONS.dreamEntries),
+    where('ownerUid', '==', ownerUid),
+    limit(50)
+  );
+
+  const snap = await getDocs(q);
+  const rows = snap.docs.map(d => mapDoc<any>(d.id, d.data()));
+
+  if (!rows.length) return null;
+
+  rows.sort((a, b) => {
+    const aDate = String(a.dreamDate ?? '');
+    const bDate = String(b.dreamDate ?? '');
+    if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+
+    const aCreated = String(a.createdAt?.seconds ?? a.createdAt ?? '');
+    const bCreated = String(b.createdAt?.seconds ?? b.createdAt ?? '');
+    return aCreated < bCreated ? 1 : -1;
+  });
+
+  return rows[0];
+}

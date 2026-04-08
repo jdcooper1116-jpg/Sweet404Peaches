@@ -1,152 +1,264 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { Brain, Pin, Sparkles, Target, Trophy, WandSparkles } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
-  createPinnedPlay,
-  listActiveDreamWindows,
-  listDreamEntries,
-  listDreamers,
+  getBacktestSummaryForDream,
+  listBacktestDreams,
   listPersonalHitMappings,
-  listPinnedPlays,
 } from '@/lib/firebase/firestore';
-import { summarizeNumberFamilies } from '@/lib/sync/numberFamilies';
 import {
-  buildAutoPinSuggestions,
-  buildDreamerReliabilityStats,
-  buildDuplicateSignals,
-  buildStateWeightStats,
-  buildTermStrengthStats,
-} from '@/lib/intelligence/scoring';
-import { US_STATES } from '@/lib/types';
+  buildGroupedTermDictionary,
+  flattenDictionary,
+  type PersonalMappingRow,
+} from '@/lib/intelligence/termDictionary';
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
+type BacktestSummaryLite = {
+  backtestDreamId: string;
+  dreamDate?: string;
+  totalHits?: number;
+  straightHits?: number;
+  boxedHits?: number;
+  bestState?: string;
+  bestTerm?: string;
+  uniqueStates?: string[];
+};
 
-export default function IntelligencePage() {
-  const { user, loading } = useAuth();
+type InsightCard = {
+  title: string;
+  body: string;
+};
 
-  const [dreams, setDreams] = useState<any[]>([]);
-  const [windows, setWindows] = useState<any[]>([]);
-  const [memory, setMemory] = useState<any[]>([]);
-  const [pins, setPins] = useState<any[]>([]);
-  const [dreamers, setDreamers] = useState<any[]>([]);
-  const [dreamerScope, setDreamerScope] = useState('ALL');
-  const [selectedState, setSelectedState] = useState('GA');
-  const [playDate, setPlayDate] = useState(todayIso());
-  const [pageLoading, setPageLoading] = useState(true);
-  const [pinningKey, setPinningKey] = useState('');
-  const [message, setMessage] = useState('');
+export default function IntelligenceHubPage() {
+  const { user } = useAuth();
+
+  const [mappingRows, setMappingRows] = useState<PersonalMappingRow[]>([]);
+  const [backtestSummaries, setBacktestSummaries] = useState<BacktestSummaryLite[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [termSearch, setTermSearch] = useState('');
+  const [stateSearch, setStateSearch] = useState('');
 
   useEffect(() => {
     async function load() {
       if (!user) {
-        setDreams([]);
-        setWindows([]);
-        setMemory([]);
-        setPins([]);
-        setDreamers([]);
-        setPageLoading(false);
+        setMappingRows([]);
+        setBacktestSummaries([]);
+        setLoading(false);
         return;
       }
 
       try {
-        setError('');
-        const [dreamRows, windowRows, memoryRows, pinRows, dreamerRows] = await Promise.all([
-          listDreamEntries(user.uid),
-          listActiveDreamWindows(user.uid),
-          listPersonalHitMappings(user.uid),
-          listPinnedPlays(user.uid),
-          listDreamers(user.uid),
-        ]);
+        const liveMappings = await listPersonalHitMappings(user.uid);
+        const dreams = await listBacktestDreams(user.uid);
 
-        setDreams(dreamRows);
-        setWindows(windowRows);
-        setMemory(memoryRows);
-        setPins(pinRows);
-        setDreamers(dreamerRows);
+        const summaries = await Promise.all(
+          dreams.map(async (dream: any) => {
+            const summary = await getBacktestSummaryForDream(user.uid, dream.id);
+            return summary
+              ? {
+                  backtestDreamId: dream.id,
+                  dreamDate: dream.dreamDate,
+                  totalHits: summary.totalHits ?? 0,
+                  straightHits: summary.straightHits ?? 0,
+                  boxedHits: summary.boxedHits ?? 0,
+                  bestState: summary.bestState ?? '',
+                  bestTerm: summary.bestTerm ?? '',
+                  uniqueStates: Array.isArray(summary.uniqueStates) ? summary.uniqueStates : [],
+                }
+              : null;
+          })
+        );
+
+        setMappingRows(liveMappings as PersonalMappingRow[]);
+        setBacktestSummaries(summaries.filter(Boolean) as BacktestSummaryLite[]);
       } catch (err) {
         console.error(err);
-        setError('Could not load Intelligence Hub data.');
+        setError('Could not load Intelligence Hub.');
       } finally {
-        setPageLoading(false);
+        setLoading(false);
       }
     }
 
-    if (!loading) void load();
-  }, [user, loading]);
+    void load();
+  }, [user]);
 
-  const visibleDreamerScopes = useMemo(() => {
-    const names = new Set<string>();
-    names.add('ALL');
-    for (const row of windows) if (row.dreamerName) names.add(row.dreamerName);
-    for (const row of dreamers) if (row.displayName) names.add(row.displayName);
-    for (const row of pins) if (row.dreamerScope) names.add(row.dreamerScope);
-    return Array.from(names).sort();
-  }, [windows, dreamers, pins]);
+  const grouped = useMemo(() => buildGroupedTermDictionary(mappingRows), [mappingRows]);
+  const flattened = useMemo(() => flattenDictionary(grouped), [grouped]);
 
-  const filteredWindows = useMemo(() => {
-    return dreamerScope === 'ALL'
-      ? windows
-      : windows.filter((row: any) => row.dreamerName === dreamerScope || row.dreamerId === dreamerScope);
-  }, [windows, dreamerScope]);
+  const filteredRecords = useMemo(() => {
+    return flattened.filter((record) => {
+      const termOk = termSearch.trim()
+        ? record.term.toLowerCase().includes(termSearch.trim().toLowerCase())
+        : true;
 
-  const filteredMemory = useMemo(() => {
-    return dreamerScope === 'ALL'
-      ? memory
-      : memory.filter((row: any) => row.dreamerName === dreamerScope || row.dreamerId === dreamerScope);
-  }, [memory, dreamerScope]);
+      const stateOk = stateSearch.trim()
+        ? record.state.toLowerCase().includes(stateSearch.trim().toLowerCase())
+        : true;
 
-  const hotFamilies = useMemo(() => summarizeNumberFamilies(filteredWindows, filteredMemory), [filteredWindows, filteredMemory]);
-  const termStrengthRows = useMemo(() => buildTermStrengthStats(filteredMemory), [filteredMemory]);
-  const dreamerReliabilityRows = useMemo(() => buildDreamerReliabilityStats(pins), [pins]);
-  const stateWeightRows = useMemo(() => buildStateWeightStats(filteredMemory), [filteredMemory]);
-  const duplicateSignals = useMemo(() => buildDuplicateSignals(dreams, filteredMemory), [dreams, filteredMemory]);
-
-  const autoPinSuggestions = useMemo(() => {
-    return buildAutoPinSuggestions({
-      hotFamilies,
-      filteredMemory,
-      selectedState,
-      dreamerScope,
-      reliabilityRows: dreamerReliabilityRows,
+      return termOk && stateOk;
     });
-  }, [hotFamilies, filteredMemory, selectedState, dreamerScope, dreamerReliabilityRows]);
+  }, [flattened, termSearch, stateSearch]);
 
-  async function pinSuggestion(row: any) {
-    if (!user) return;
+  const topStates = useMemo(() => {
+    const map = new Map<
+      string,
+      { score: number; hits: number; straight: number; boxed: number; numbers: Set<string> }
+    >();
 
-    try {
-      setPinningKey(row.key);
-      setMessage('');
-      setError('');
+    for (const row of filteredRecords) {
+      if (!map.has(row.state)) {
+        map.set(row.state, {
+          score: 0,
+          hits: 0,
+          straight: 0,
+          boxed: 0,
+          numbers: new Set<string>(),
+        });
+      }
 
-      await createPinnedPlay(user.uid, {
-        playDate,
-        dreamerScope,
-        state: selectedState,
-        playType: row.playType,
-        label: row.label,
-        number: row.number,
-        familyKey: row.familyKey,
-        gameType: row.gameType,
-        score: row.score,
-        reasons: row.reasons,
-        notes: '',
-      });
-
-      setMessage(`Pinned: ${row.label}`);
-    } catch (err) {
-      console.error(err);
-      setError('Could not pin suggestion.');
-    } finally {
-      setPinningKey('');
+      const current = map.get(row.state)!;
+      current.score += row.stateStrengthScore;
+      current.hits += row.hitCount;
+      current.straight += row.straightCount;
+      current.boxed += row.boxedCount;
+      current.numbers.add(row.number);
     }
-  }
+
+    return Array.from(map.entries())
+      .map(([state, value]) => ({
+        state,
+        score: value.score,
+        hits: value.hits,
+        straight: value.straight,
+        boxed: value.boxed,
+        uniqueNumbers: value.numbers.size,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12);
+  }, [filteredRecords]);
+
+  const topTerms = useMemo(() => {
+    const map = new Map<
+      string,
+      { hits: number; states: Set<string>; numbers: Set<string>; straight: number; boxed: number }
+    >();
+
+    for (const row of filteredRecords) {
+      if (!map.has(row.term)) {
+        map.set(row.term, {
+          hits: 0,
+          states: new Set<string>(),
+          numbers: new Set<string>(),
+          straight: 0,
+          boxed: 0,
+        });
+      }
+
+      const current = map.get(row.term)!;
+      current.hits += row.hitCount;
+      current.states.add(row.state);
+      current.numbers.add(row.number);
+      current.straight += row.straightCount;
+      current.boxed += row.boxedCount;
+    }
+
+    return Array.from(map.entries())
+      .map(([term, value]) => ({
+        term,
+        hits: value.hits,
+        stateCount: value.states.size,
+        numberCount: value.numbers.size,
+        straight: value.straight,
+        boxed: value.boxed,
+      }))
+      .sort((a, b) => b.hits - a.hits)
+      .slice(0, 12);
+  }, [filteredRecords]);
+
+  const bestBacktestStates = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const row of backtestSummaries) {
+      if (!row.bestState) continue;
+      map.set(row.bestState, (map.get(row.bestState) ?? 0) + 1);
+    }
+
+    return Array.from(map.entries())
+      .map(([state, count]) => ({ state, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [backtestSummaries]);
+
+  const bestBacktestTerms = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const row of backtestSummaries) {
+      if (!row.bestTerm) continue;
+      map.set(row.bestTerm, (map.get(row.bestTerm) ?? 0) + 1);
+    }
+
+    return Array.from(map.entries())
+      .map(([term, count]) => ({ term, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [backtestSummaries]);
+
+  const archiveTotals = useMemo(() => {
+    return backtestSummaries.reduce(
+      (acc, row) => {
+        acc.dreams += 1;
+        acc.totalHits += Number(row.totalHits ?? 0);
+        acc.straight += Number(row.straightHits ?? 0);
+        acc.boxed += Number(row.boxedHits ?? 0);
+        return acc;
+      },
+      { dreams: 0, totalHits: 0, straight: 0, boxed: 0 }
+    );
+  }, [backtestSummaries]);
+
+  const insightCards = useMemo<InsightCard[]>(() => {
+    const cards: InsightCard[] = [];
+
+    if (topStates[0]) {
+      cards.push({
+        title: 'Strongest Live State Pattern',
+        body: `${topStates[0].state} leads the live dictionary with a state strength score of ${topStates[0].score} across ${topStates[0].hits} logged hit(s).`,
+      });
+    }
+
+    if (topTerms[0]) {
+      cards.push({
+        title: 'Most Active Term',
+        body: `${topTerms[0].term} currently has the heaviest live footprint with ${topTerms[0].hits} hit(s) across ${topTerms[0].stateCount} state(s).`,
+      });
+    }
+
+    if (bestBacktestStates[0]) {
+      cards.push({
+        title: 'Most Repeated Backtest State',
+        body: `${bestBacktestStates[0].state} appears most often as the best state across your completed backtests (${bestBacktestStates[0].count} time(s)).`,
+      });
+    }
+
+    if (bestBacktestTerms[0]) {
+      cards.push({
+        title: 'Most Repeated Backtest Term',
+        body: `${bestBacktestTerms[0].term} shows up most often as the strongest term in historical replay summaries (${bestBacktestTerms[0].count} time(s)).`,
+      });
+    }
+
+    if (!cards.length) {
+      cards.push({
+        title: 'No Pattern Cards Yet',
+        body: 'Load more live hits and completed backtests to generate pattern intelligence.',
+      });
+    }
+
+    return cards;
+  }, [topStates, topTerms, bestBacktestStates, bestBacktestTerms]);
 
   return (
     <main
@@ -162,227 +274,265 @@ export default function IntelligencePage() {
 
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
-          <div className="page-header">
-            <h1>Intelligence Hub</h1>
-            <p>
-              Final intelligence layer for auto-suggested pins, term strength,
-              dreamer reliability, state weighting, and duplicate cleanup signals.
-            </p>
-          </div>
-        </section>
-
-        <section className="journal-card-flat">
           <div
             style={{
-              display: 'grid',
+              display: 'flex',
+              justifyContent: 'space-between',
               gap: '16px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              alignItems: 'flex-start',
+              flexWrap: 'wrap',
             }}
           >
-            <div>
-              <label className="journal-label">Dreamer Scope</label>
-              <select className="journal-select" value={dreamerScope} onChange={e => setDreamerScope(e.target.value)}>
-                {visibleDreamerScopes.map(scope => (
-                  <option key={scope} value={scope}>
-                    {scope}
-                  </option>
-                ))}
-              </select>
+            <div className="page-header">
+              <h1>Intelligence Hub</h1>
+              <p>
+                Deep pattern analysis across your live dictionary memory and your historical backtest archive.
+              </p>
             </div>
 
-            <div>
-              <label className="journal-label">State Focus</label>
-              <select className="journal-select" value={selectedState} onChange={e => setSelectedState(e.target.value)}>
-                {US_STATES.map(state => (
-                  <option key={state} value={state}>
-                    {state}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="journal-label">Play Date</label>
-              <input type="date" className="journal-input" value={playDate} onChange={e => setPlayDate(e.target.value)} />
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/backtesting/archive" className="btn-secondary">
+                Backtest Archive
+              </Link>
+              <Link href="/forecast-board" className="btn-secondary">
+                Forecast Board
+              </Link>
+              <Link href="/playlists" className="btn-secondary">
+                State Playlist
+              </Link>
             </div>
           </div>
         </section>
 
-        {message ? (
-          <div className="journal-card-flat" style={{ borderColor: '#cfe5c8', background: '#f5fbf2', color: '#315a2b' }}>
-            {message}
+        <section
+          className="journal-card-flat"
+          style={{
+            display: 'grid',
+            gap: '16px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          }}
+        >
+          <div>
+            <label className="journal-label" htmlFor="termSearch">
+              Filter by Term
+            </label>
+            <input
+              id="termSearch"
+              className="journal-input"
+              value={termSearch}
+              onChange={(e) => setTermSearch(e.target.value)}
+              placeholder="Ex: dancing"
+            />
           </div>
+
+          <div>
+            <label className="journal-label" htmlFor="stateSearch">
+              Filter by State
+            </label>
+            <input
+              id="stateSearch"
+              className="journal-input"
+              value={stateSearch}
+              onChange={(e) => setStateSearch(e.target.value)}
+              placeholder="Ex: Illinois"
+            />
+          </div>
+        </section>
+
+        <section
+          className="journal-card-flat"
+          style={{
+            display: 'grid',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          <div>
+            <div className="journal-label">Live Dictionary Rows</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{filteredRecords.length}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Completed Backtests</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.dreams}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Backtest Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.totalHits}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Backtest Straight Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.straight}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Backtest Boxed Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.boxed}</div>
+          </div>
+        </section>
+
+        {loading ? (
+          <section className="journal-card">
+            <p>Loading Intelligence Hub...</p>
+          </section>
         ) : null}
 
         {error ? (
-          <div className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
+          <section
+            className="journal-card-flat"
+            style={{
+              borderColor: '#e9c2c2',
+              background: '#fff4f4',
+              color: '#8a2f2f',
+            }}
+          >
             {error}
-          </div>
+          </section>
         ) : null}
 
-        {pageLoading ? (
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Pattern Cards</h1>
+            <p>High-level findings generated from both live memory and historical research.</p>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gap: '12px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              marginTop: '12px',
+            }}
+          >
+            {insightCards.map((card) => (
+              <div key={card.title} className="journal-card-flat">
+                <strong>{card.title}</strong>
+                <p style={{ marginTop: '8px', color: 'var(--ink-light)', lineHeight: 1.6 }}>
+                  {card.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section
+          style={{
+            display: 'grid',
+            gap: '24px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          }}
+        >
           <section className="journal-card">
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading intelligence...</p>
+            <div className="page-header">
+              <h1>Top Live States</h1>
+              <p>States with the strongest active dictionary footprint right now.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              {topStates.length ? topStates.map((row, index) => (
+                <div key={row.state} className="journal-card-flat">
+                  <div><strong>#{index + 1} {row.state}</strong></div>
+                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
+                    Score: {row.score} • Hits: {row.hits} • Straight: {row.straight} • Boxed: {row.boxed} • Numbers: {row.uniqueNumbers}
+                  </div>
+                </div>
+              )) : <p>No live state intelligence yet.</p>}
+            </div>
           </section>
-        ) : (
-          <>
-            <section className="journal-card-flat">
-              <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-                <div><div className="journal-label">Hot Families</div><div>{hotFamilies.length}</div></div>
-                <div><div className="journal-label">Auto-Suggest Pins</div><div>{autoPinSuggestions.length}</div></div>
-                <div><div className="journal-label">Strong Terms</div><div>{termStrengthRows.length}</div></div>
-                <div><div className="journal-label">Duplicate Alerts</div><div>{duplicateSignals.length}</div></div>
-              </div>
-            </section>
 
-            <section className="journal-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
-                <WandSparkles size={18} />
-                <strong>Auto-Suggested Pins</strong>
-              </div>
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Live Terms</h1>
+              <p>Terms creating the heaviest cross-state activity in the live dictionary.</p>
+            </div>
 
-              {autoPinSuggestions.length === 0 ? (
-                <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
-                  No auto-pin suggestions in this scope yet.
-                </div>
-              ) : (
-                <div style={{ display: 'grid', gap: '14px' }}>
-                  {autoPinSuggestions.slice(0, 16).map((row, index) => (
-                    <article key={row.key} className="journal-card-flat">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                        <div>
-                          <div style={{ fontWeight: 700, color: 'var(--deep-plum)', fontSize: '20px', marginBottom: '8px' }}>
-                            #{index + 1} — {row.label}
-                          </div>
-                          <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
-                            Type: {row.playType} • State: {row.state}
-                          </div>
-                          <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '4px' }}>
-                            {row.number ? `Number: ${row.number}` : `Family: ${row.familyKey || '—'}`}
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'grid', gap: '10px' }}>
-                          <div className="journal-card-flat" style={{ minWidth: '150px', textAlign: 'center' }}>
-                            <div className="journal-label">Score</div>
-                            <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--deep-plum)' }}>
-                              {row.score}
-                            </div>
-                          </div>
-
-                          <button type="button" className="btn-primary" disabled={pinningKey === row.key} onClick={() => pinSuggestion(row)}>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                              <Pin size={14} />
-                              {pinningKey === row.key ? 'Pinning...' : 'Pin Suggestion'}
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="journal-card-flat" style={{ marginTop: '12px' }}>
-                        <div className="journal-label">Reasons</div>
-                        <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--ink-light)' }}>
-                          {row.reasons.map(reason => (
-                            <li key={reason} style={{ marginBottom: '6px' }}>{reason}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="journal-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
-                <Target size={18} />
-                <strong>Strongest Terms</strong>
-              </div>
-              <div style={{ display: 'grid', gap: '12px' }}>
-                {termStrengthRows.slice(0, 12).map(row => (
-                  <div key={row.term} className="journal-card-flat">
-                    <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
-                      <div><div className="journal-label">Term</div><div>{row.term}</div></div>
-                      <div><div className="journal-label">Total Hits</div><div>{row.totalHits}</div></div>
-                      <div><div className="journal-label">Strongest State</div><div>{row.strongestState}</div></div>
-                      <div><div className="journal-label">Unique Numbers</div><div>{row.uniqueNumbers}</div></div>
-                      <div><div className="journal-label">Score</div><div>{row.score}</div></div>
-                    </div>
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              {topTerms.length ? topTerms.map((row, index) => (
+                <div key={row.term} className="journal-card-flat">
+                  <div><strong>#{index + 1} {row.term}</strong></div>
+                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
+                    Hits: {row.hits} • States: {row.stateCount} • Numbers: {row.numberCount} • Straight: {row.straight} • Boxed: {row.boxed}
                   </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="journal-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
-                <Trophy size={18} />
-                <strong>Dreamer Reliability</strong>
-              </div>
-              <div style={{ display: 'grid', gap: '12px' }}>
-                {dreamerReliabilityRows.slice(0, 12).map(row => (
-                  <div key={row.dreamerScope} className="journal-card-flat">
-                    <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
-                      <div><div className="journal-label">Scope</div><div>{row.dreamerScope}</div></div>
-                      <div><div className="journal-label">Pins</div><div>{row.totalPins}</div></div>
-                      <div><div className="journal-label">Won</div><div>{row.won}</div></div>
-                      <div><div className="journal-label">Win Rate</div><div>{(row.winRate * 100).toFixed(1)}%</div></div>
-                      <div><div className="journal-label">Score</div><div>{row.score.toFixed(1)}</div></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="journal-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
-                <Brain size={18} />
-                <strong>State Weighting</strong>
-              </div>
-              <div style={{ display: 'grid', gap: '12px' }}>
-                {stateWeightRows.slice(0, 12).map(row => (
-                  <div key={row.state} className="journal-card-flat">
-                    <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
-                      <div><div className="journal-label">State</div><div>{row.state}</div></div>
-                      <div><div className="journal-label">Total Hits</div><div>{row.totalHits}</div></div>
-                      <div><div className="journal-label">Unique Terms</div><div>{row.uniqueTerms}</div></div>
-                      <div><div className="journal-label">Unique Numbers</div><div>{row.uniqueNumbers}</div></div>
-                      <div><div className="journal-label">Score</div><div>{row.score}</div></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="journal-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: 'var(--deep-plum)' }}>
-                <Sparkles size={18} />
-                <strong>Duplicate Cleanup Signals</strong>
-              </div>
-
-              {duplicateSignals.length === 0 ? (
-                <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
-                  No cleanup alerts detected in this scope.
                 </div>
-              ) : (
-                <div style={{ display: 'grid', gap: '12px' }}>
-                  {duplicateSignals.slice(0, 16).map((row, index) => (
-                    <div key={`${row.kind}-${index}-${row.label}`} className="journal-card-flat">
-                      <div style={{ fontWeight: 700, color: 'var(--deep-plum)', marginBottom: '8px' }}>
-                        {row.label}
-                      </div>
-                      <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
-                        {row.detail}
-                      </div>
-                      <div style={{ marginTop: '6px', color: 'var(--ink-light)', fontSize: '14px' }}>
-                        Score: {row.score} • Type: {row.kind}
-                      </div>
-                    </div>
-                  ))}
+              )) : <p>No live term intelligence yet.</p>}
+            </div>
+          </section>
+        </section>
+
+        <section
+          style={{
+            display: 'grid',
+            gap: '24px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          }}
+        >
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Backtest States</h1>
+              <p>States most often emerging as the best-performing backtest state.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              {bestBacktestStates.length ? bestBacktestStates.map((row, index) => (
+                <div key={row.state} className="journal-card-flat">
+                  <div><strong>#{index + 1} {row.state}</strong></div>
+                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
+                    Best-state appearances: {row.count}
+                  </div>
                 </div>
-              )}
-            </section>
-          </>
-        )}
+              )) : <p>No backtest state intelligence yet.</p>}
+            </div>
+          </section>
+
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Backtest Terms</h1>
+              <p>Terms most often emerging as the strongest historical replay term.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              {bestBacktestTerms.length ? bestBacktestTerms.map((row, index) => (
+                <div key={row.term} className="journal-card-flat">
+                  <div><strong>#{index + 1} {row.term}</strong></div>
+                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
+                    Best-term appearances: {row.count}
+                  </div>
+                </div>
+              )) : <p>No backtest term intelligence yet.</p>}
+            </div>
+          </section>
+        </section>
+
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Questions You Should Be Able to Ask the Chat</h1>
+            <p>These are the kinds of evidence-aware prompts the app is now approaching.</p>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gap: '10px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              marginTop: '12px',
+            }}
+          >
+            {[
+              'Which term performs strongest in Illinois?',
+              'What state has repeated most often for dancing?',
+              'Which backtested term produced the most straight hits?',
+              'What is the strongest live state right now?',
+              'Which terms hit fast and which terms are slow-burn?',
+              'Which states keep repeating across live mode and backtesting?',
+            ].map((prompt) => (
+              <div key={prompt} className="journal-card-flat">
+                {prompt}
+              </div>
+            ))}
+          </div>
+        </section>
       </section>
     </main>
   );
