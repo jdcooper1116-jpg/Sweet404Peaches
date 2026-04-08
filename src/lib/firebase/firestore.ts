@@ -907,3 +907,125 @@ export async function rescanLotteryResultsForDateRange(
   return preparedRows.length;
 }
 
+
+async function deleteOwnedDocsInCollection(
+  ownerUid: string,
+  collectionName: string
+): Promise<number> {
+  const snap = await getDocs(
+    query(collection(db, collectionName), where('ownerUid', '==', ownerUid))
+  );
+
+  if (snap.empty) return 0;
+
+  const docs = snap.docs;
+  let deleted = 0;
+
+  for (let i = 0; i < docs.length; i += 400) {
+    const batch = writeBatch(db);
+    const chunk = docs.slice(i, i + 400);
+
+    for (const docSnap of chunk) {
+      batch.delete(docSnap.ref);
+      deleted += 1;
+    }
+
+    await batch.commit();
+  }
+
+  return deleted;
+}
+
+export async function hardResetOwnerData(ownerUid: string): Promise<Record<string, number>> {
+  const deleted: Record<string, number> = {};
+
+  const resetCollections = [
+    COLLECTIONS.dreamers,
+    COLLECTIONS.dreamEntries,
+    COLLECTIONS.activeDreamWindows,
+    COLLECTIONS.lotteryResults,
+    COLLECTIONS.dreamHits,
+    COLLECTIONS.pinnedPlays,
+
+    // legacy / optional collections — harmless if empty
+    'predictionSnapshots',
+    'universalScopeSnapshots',
+    'chatLogs',
+    'performanceSnapshots',
+    'forecastBoardSnapshots',
+    'intelligenceSnapshots',
+    'hotFamilies',
+  ];
+
+  for (const name of resetCollections) {
+    deleted[name] = await deleteOwnedDocsInCollection(ownerUid, name);
+  }
+
+  return deleted;
+}
+
+async function fullResetDeleteOwnedDocsInCollection(
+  ownerUid: string,
+  collectionName: string
+): Promise<number> {
+  const snap = await getDocs(
+    query(collection(db, collectionName), where('ownerUid', '==', ownerUid))
+  );
+
+  if (snap.empty) return 0;
+
+  let deleted = 0;
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    const chunk = snap.docs.slice(i, i + 400);
+
+    for (const docSnap of chunk) {
+      batch.delete(docSnap.ref);
+      deleted += 1;
+    }
+
+    await batch.commit();
+  }
+
+  return deleted;
+}
+
+export async function fullResetOwnerData(ownerUid: string): Promise<Record<string, number>> {
+  const deleted: Record<string, number> = {};
+
+  // owner profile is keyed by uid, not ownerUid
+  const ownerProfileRef = doc(db, COLLECTIONS.ownerProfiles, ownerUid);
+  const ownerProfileSnap = await getDoc(ownerProfileRef);
+  if (ownerProfileSnap.exists()) {
+    await deleteDoc(ownerProfileRef);
+    deleted[COLLECTIONS.ownerProfiles] = 1;
+  } else {
+    deleted[COLLECTIONS.ownerProfiles] = 0;
+  }
+
+  const resetCollections = [
+    COLLECTIONS.dreamers,
+    COLLECTIONS.dreamEntries,
+    COLLECTIONS.activeDreamWindows,
+    COLLECTIONS.lotteryResults,
+    COLLECTIONS.dreamHits,
+    COLLECTIONS.personalHitMappings,
+    COLLECTIONS.termNumberMappings,
+    COLLECTIONS.pinnedPlays,
+
+    // optional legacy collections
+    'predictionSnapshots',
+    'universalScopeSnapshots',
+    'chatLogs',
+    'performanceSnapshots',
+    'forecastBoardSnapshots',
+    'intelligenceSnapshots',
+    'hotFamilies',
+  ];
+
+  for (const name of resetCollections) {
+    deleted[name] = await fullResetDeleteOwnedDocsInCollection(ownerUid, name);
+  }
+
+  return deleted;
+}

@@ -113,20 +113,82 @@ export default function NewDreamPage() {
         email: user.email || '',
       });
 
-      if (parseResult && parseResult.termMappings.length > 0) {
-        await createDreamEntryWithWindows(user.uid, {
-          dreamerId: effectiveDreamerId,
-          dreamerName: effectiveDreamerName,
-          rawText: dreamText,
-          cleanedText: parseResult.cleanedText,
-          dreamDate,
-          termMappings: parseResult.termMappings,
-          sourceType: 'manual',
-          notes: '',
-          isReviewed: true,
-        });
+      if (parseResult) {
+        const existingCash3 = new Set(
+          parseResult.termMappings.flatMap(mapping => mapping.cash3Numbers)
+        );
+        const existingCash4 = new Set(
+          parseResult.termMappings.flatMap(mapping => mapping.cash4Numbers)
+        );
 
-        setMessage('Parsed dream saved with active 7-day windows.');
+        const directCash3 = parseResult.cash3Numbers.filter(
+          value => !existingCash3.has(value)
+        );
+        const directCash4 = parseResult.cash4Numbers.filter(
+          value => !existingCash4.has(value)
+        );
+
+        const syntheticMappings: ParseResult['termMappings'] = [];
+
+        if (directCash3.length) {
+  syntheticMappings.push({
+    term: 'direct-cash3',
+    normalizedTerm: 'direct-cash3',
+    relatedTerms: [],
+    cash3Numbers: directCash3,
+    cash4Numbers: [],
+    archivedNumbers: [],
+    lineContexts: [],
+  });
+}
+
+if (directCash4.length) {
+  syntheticMappings.push({
+    term: 'direct-cash4',
+    normalizedTerm: 'direct-cash4',
+    relatedTerms: [],
+    cash3Numbers: [],
+    cash4Numbers: directCash4,
+    archivedNumbers: [],
+    lineContexts: [],
+  });
+}
+         const saveMappings = [...parseResult.termMappings, ...syntheticMappings];
+
+        if (saveMappings.length > 0) {
+          await createDreamEntryWithWindows(user.uid, {
+            dreamerId: effectiveDreamerId,
+            dreamerName: effectiveDreamerName,
+            rawText: dreamText,
+            cleanedText: parseResult.cleanedText,
+            dreamDate,
+            termMappings: saveMappings,
+            sourceType: 'manual',
+            notes: '',
+            isReviewed: true,
+          });
+
+          setMessage('Parsed dream saved with active 7-day windows.');
+        } else {
+          const range = buildDreamDateRange(dreamDate);
+
+          await createDreamEntry(user.uid, {
+            dreamerId: effectiveDreamerId,
+            dreamerName: effectiveDreamerName,
+            rawText: dreamText,
+            cleanedText: dreamText.trim(),
+            dreamDate,
+            termMappings: [],
+            allNumbers: [],
+            activeWindowStart: range.start,
+            activeWindowEnd: range.end,
+            sourceType: 'manual',
+            notes: '',
+            isReviewed: false,
+          });
+
+          setMessage('Draft saved to Firestore.');
+        }
       } else {
         const range = buildDreamDateRange(dreamDate);
 
