@@ -329,6 +329,26 @@ function makeDreamHitDocId(input: {
     .join('__');
 }
 
+function normalizeStateKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[.,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function shouldTrackState(trackedStates: string[], rowState: string): boolean {
+  if (!trackedStates.length) return true;
+
+  // Treat very large tracked lists as effectively 'all states'
+  if (trackedStates.length >= 45) return true;
+
+  const normalizedTracked = trackedStates.map(normalizeStateKey);
+  const normalizedRow = normalizeStateKey(rowState);
+
+  return normalizedTracked.includes(normalizedRow);
+}
+
 async function scanImportedLotteryRowsForHits(
   ownerUid: string,
   rows: Array<
@@ -354,7 +374,7 @@ async function scanImportedLotteryRowsForHits(
         ? ((window as any).statesTracked as string[])
         : [];
 
-      if (trackedStates.length && !trackedStates.includes(row.state)) continue;
+      if (!shouldTrackState(trackedStates, row.state)) continue;
 
       const isStraight = window.number === row.normalizedResult;
       const isBoxed = window.boxedKey === row.boxedKey;
@@ -515,20 +535,34 @@ export async function upsertPersonalHitMapping(
     where('termLabel', '==', input.termLabel),
     where('number', '==', input.number),
     where('gameType', '==', input.gameType),
+    where('state', '==', input.state),
     limit(1)
   );
 
   const snap = await getDocs(q);
 
+  const straightDelta = input.hitType === 'straight' ? 1 : 0;
+  const boxedDelta = input.hitType === 'boxed' ? 1 : 0;
+  const stateStrengthDelta = input.hitType === 'straight' ? 3 : 1;
+
   if (!snap.empty) {
     const existing = snap.docs[0];
-    const current = existing.data() as PersonalHitMapping;
+    const current = existing.data() as PersonalHitMapping & {
+      straightCount?: number;
+      boxedCount?: number;
+      stateStrengthScore?: number;
+      lastHitDate?: string;
+    };
 
     await updateDoc(doc(db, COLLECTIONS.personalHitMappings, existing.id), {
       hitCount: (current.hitCount ?? 0) + 1,
+      straightCount: (current.straightCount ?? 0) + straightDelta,
+      boxedCount: (current.boxedCount ?? 0) + boxedDelta,
+      stateStrengthScore: (current.stateStrengthScore ?? 0) + stateStrengthDelta,
       state: input.state,
       drawTime: input.drawTime,
       drawDate: input.drawDate,
+      lastHitDate: input.drawDate,
       hitType: input.hitType,
       sourceDreamEntryId: input.sourceDreamEntryId,
       daysFromDream: input.daysFromDream,
@@ -543,6 +577,10 @@ export async function upsertPersonalHitMapping(
     ownerUid,
     ...input,
     hitCount: 1,
+    straightCount: straightDelta,
+    boxedCount: boxedDelta,
+    stateStrengthScore: stateStrengthDelta,
+    lastHitDate: input.drawDate,
     createdAt: nowTs(),
     updatedAt: nowTs(),
   });
