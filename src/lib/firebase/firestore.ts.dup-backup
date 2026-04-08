@@ -1379,69 +1379,173 @@ export async function listBacktestDreams(ownerUid: string): Promise<any[]> {
   });
 }
 
-export async function bulkCreateBacktestResults(
-  ownerUid: string,
-  backtestDreamId: string,
-  rows: Array<
-    Omit<LotteryResult, 'id' | 'ownerUid' | 'importedAt' | 'boxedKey'> & {
-      gameLabel?: string;
-      bonusText?: string;
-    }
-  >
-): Promise<void> {
-  if (!rows.length) return;
+function buildBacktestSyntheticMappings(parseResult: any) {
+  const termMappings = Array.isArray(parseResult?.termMappings)
+    ? [...parseResult.termMappings]
+    : [];
 
-  const batch = writeBatch(db);
+  const existingCash3 = new Set(
+    termMappings.flatMap((mapping: any) =>
+      Array.isArray(mapping?.cash3Numbers) ? mapping.cash3Numbers : []
+    )
+  );
 
-  for (const row of rows) {
-    const ref = doc(collection(db, 'backtestResults'));
-    batch.set(ref, {
-      ownerUid,
-      backtestDreamId,
-      ...row,
-      boxedKey: sortedDigits(row.normalizedResult),
-      importedAt: nowTs(),
+  const existingCash4 = new Set(
+    termMappings.flatMap((mapping: any) =>
+      Array.isArray(mapping?.cash4Numbers) ? mapping.cash4Numbers : []
+    )
+  );
+
+  const directCash3 = Array.isArray(parseResult?.cash3Numbers)
+    ? parseResult.cash3Numbers.filter((value: string) => !existingCash3.has(value))
+    : [];
+
+  const directCash4 = Array.isArray(parseResult?.cash4Numbers)
+    ? parseResult.cash4Numbers.filter((value: string) => !existingCash4.has(value))
+    : [];
+
+  if (directCash3.length) {
+    termMappings.push({
+      term: 'direct-cash3',
+      normalizedTerm: 'direct-cash3',
+      relatedTerms: [],
+      cash3Numbers: directCash3,
+      cash4Numbers: [],
+      archivedNumbers: [],
+      lineContexts: [],
     });
   }
 
-  await batch.commit();
+  if (directCash4.length) {
+    termMappings.push({
+      term: 'direct-cash4',
+      normalizedTerm: 'direct-cash4',
+      relatedTerms: [],
+      cash3Numbers: [],
+      cash4Numbers: directCash4,
+      archivedNumbers: [],
+      lineContexts: [],
+    });
+  }
 
-  await setDoc(
-    doc(db, 'backtestWindows', backtestDreamId),
-    {
-      status: 'results-loaded',
-      updatedAt: nowTs(),
-    },
-    { merge: true }
-  );
-
-  await setDoc(
-    doc(db, 'backtestDreams', backtestDreamId),
-    {
-      status: 'results-loaded',
-      updatedAt: nowTs(),
-    },
-    { merge: true }
-  );
+  return termMappings;
 }
 
-export async function listBacktestResultsForDream(
+function flattenBacktestNumbers(
+  termMappings: any[],
+  key: 'cash3Numbers' | 'cash4Numbers'
+): string[] {
+  const values = new Set<string>();
+
+  for (const mapping of termMappings) {
+    const items = Array.isArray(mapping?.[key]) ? mapping[key] : [];
+    for (const value of items) {
+      values.add(String(value));
+    }
+  }
+
+  return Array.from(values);
+}
+
+export async function createBacktestDreamIntake(
   ownerUid: string,
-  backtestDreamId: string
-): Promise<any[]> {
+  input: {
+    dreamDate: string;
+    rawText: string;
+    source: string;
+    confidence: string;
+    notes?: string;
+    parseResult: any;
+  }
+): Promise<string> {
+  const termMappings = buildBacktestSyntheticMappings(input.parseResult);
+  const activeWindowStart = input.dreamDate;
+  const activeWindowEnd = addDays(input.dreamDate, 6);
+
+  const cash3Numbers = flattenBacktestNumbers(termMappings, 'cash3Numbers');
+  const cash4Numbers = flattenBacktestNumbers(termMappings, 'cash4Numbers');
+
+  const payload = cleanUndefined({
+    ownerUid,
+    dreamDate: input.dreamDate,
+    rawText: input.rawText,
+    cleanedText: input.parseResult?.cleanedText ?? input.rawText.trim(),
+    source: input.source,
+    confidence: input.confidence,
+    notes: input.notes ?? '',
+    mode: 'backtest',
+    status: 'intake-saved',
+    parsedTermMappings: termMappings,
+    cash3Numbers,
+    cash4Numbers,
+    archivedNumbers: Array.isArray(input.parseResult?.archivedNumbers)
+      ? input.parseResult.archivedNumbers
+      : [],
+    activeWindowStart,
+    activeWindowEnd,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+
+  const backtestRef = await addDoc(collection(db, 'backtestDreams'), payload);
+  const backtestDreamId = backtestRef.id;
+
+  await setDoc(doc(db, 'backtestWindows', backtestDreamId), {
+    ownerUid,
+    backtestDreamId,
+    dreamDate: input.dreamDate,
+    activeStart: activeWindowStart,
+    activeEnd: activeWindowEnd,
+    termMappings,
+    cash3Numbers,
+    cash4Numbers,
+    status: 'pending-results',
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+
+  for (const mapping of termMappings) {
+    const termLabel = String(mapping?.term ?? '').trim() || 'unknown-term';
+
+    for (const value of Array.isArray(mapping?.cash3Numbers) ? mapping.cash3Numbers : []) {
+      await createTermNumberMapping(ownerUid, {
+        termLabel,
+        number: String(value),
+        gameType: 'cash3',
+        source: 'parsed',
+        confidenceBasis: `backtest-intake:${input.dreamDate}`,
+        rawContext: input.rawText.slice(0, 500),
+      });
+    }
+
+    for (const value of Array.isArray(mapping?.cash4Numbers) ? mapping.cash4Numbers : []) {
+      await createTermNumberMapping(ownerUid, {
+        termLabel,
+        number: String(value),
+        gameType: 'cash4',
+        source: 'parsed',
+        confidenceBasis: `backtest-intake:${input.dreamDate}`,
+        rawContext: input.rawText.slice(0, 500),
+      });
+    }
+  }
+
+  return backtestDreamId;
+}
+
+export async function listBacktestDreams(ownerUid: string): Promise<any[]> {
   const q = query(
-    collection(db, 'backtestResults'),
+    collection(db, 'backtestDreams'),
     where('ownerUid', '==', ownerUid),
-    where('backtestDreamId', '==', backtestDreamId),
-    limit(1000)
+    limit(50)
   );
 
   const snap = await getDocs(q);
   const rows = snap.docs.map(d => mapDoc<any>(d.id, d.data()));
 
   return rows.sort((a, b) => {
-    const aKey = `${String(a.date ?? '')} ${String(a.drawTime ?? '')}`;
-    const bKey = `${String(b.date ?? '')} ${String(b.drawTime ?? '')}`;
-    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+    const aDate = String(a.dreamDate ?? '');
+    const bDate = String(b.dreamDate ?? '');
+    return aDate < bDate ? 1 : -1;
   });
 }
