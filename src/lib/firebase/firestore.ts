@@ -1445,3 +1445,258 @@ export async function listBacktestResultsForDream(
     return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
   });
 }
+
+export async function getBacktestDreamById(
+  ownerUid: string,
+  backtestDreamId: string
+): Promise<any | null> {
+  const ref = doc(db, 'backtestDreams', backtestDreamId);
+  const snap = await getDoc(ref);
+
+  if (!snap.exists()) return null;
+
+  const row = mapDoc<any>(snap.id, snap.data());
+  if (row.ownerUid !== ownerUid) return null;
+
+  return row;
+}
+
+export async function listBacktestHitsForDream(
+  ownerUid: string,
+  backtestDreamId: string
+): Promise<any[]> {
+  const q = query(
+    collection(db, 'backtestHits'),
+    where('ownerUid', '==', ownerUid),
+    where('backtestDreamId', '==', backtestDreamId),
+    limit(1000)
+  );
+
+  const snap = await getDocs(q);
+  const rows = snap.docs.map(d => mapDoc<any>(d.id, d.data()));
+
+  return rows.sort((a, b) => {
+    const aKey = `${String(a.drawDate ?? '')} ${String(a.drawTime ?? '')}`;
+    const bKey = `${String(b.drawDate ?? '')} ${String(b.drawTime ?? '')}`;
+    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+  });
+}
+
+export async function getBacktestSummaryForDream(
+  ownerUid: string,
+  backtestDreamId: string
+): Promise<any | null> {
+  const ref = doc(db, 'backtestSummaries', backtestDreamId);
+  const snap = await getDoc(ref);
+
+  if (!snap.exists()) return null;
+
+  const row = mapDoc<any>(snap.id, snap.data());
+  if (row.ownerUid !== ownerUid) return null;
+
+  return row;
+}
+
+async function clearBacktestHitsForDream(
+  ownerUid: string,
+  backtestDreamId: string
+): Promise<void> {
+  const q = query(
+    collection(db, 'backtestHits'),
+    where('ownerUid', '==', ownerUid),
+    where('backtestDreamId', '==', backtestDreamId),
+    limit(1000)
+  );
+
+  const snap = await getDocs(q);
+  if (snap.empty) return;
+
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    const chunk = snap.docs.slice(i, i + 400);
+
+    for (const docSnap of chunk) {
+      batch.delete(docSnap.ref);
+    }
+
+    await batch.commit();
+  }
+}
+
+export async function runBacktestReplayForDream(
+  ownerUid: string,
+  backtestDreamId: string
+): Promise<any> {
+  const dream = await getBacktestDreamById(ownerUid, backtestDreamId);
+  if (!dream) {
+    throw new Error('Backtest dream not found.');
+  }
+
+  const results = await listBacktestResultsForDream(ownerUid, backtestDreamId);
+  if (!results.length) {
+    throw new Error('No historical results are attached to this backtest dream yet.');
+  }
+
+  await clearBacktestHitsForDream(ownerUid, backtestDreamId);
+
+  const termMappings = Array.isArray(dream.parsedTermMappings)
+    ? dream.parsedTermMappings
+    : [];
+
+  const activeStart = String(dream.activeWindowStart ?? dream.dreamDate ?? '');
+  const stateCounts = new Map<string, number>();
+  const termCounts = new Map<string, number>();
+
+  let totalHits = 0;
+  let straightHits = 0;
+  let boxedHits = 0;
+
+  for (const mapping of termMappings) {
+    const termLabel = String(mapping?.term ?? '').trim() || 'unknown-term';
+
+    const matchGroups: Array<{ gameType: 'cash3' | 'cash4'; numbers: string[] }> = [
+      {
+        gameType: 'cash3',
+        numbers: Array.isArray(mapping?.cash3Numbers) ? mapping.cash3Numbers.map(String) : [],
+      },
+      {
+        gameType: 'cash4',
+        numbers: Array.isArray(mapping?.cash4Numbers) ? mapping.cash4Numbers.map(String) : [],
+      },
+    ];
+
+    for (const group of matchGroups) {
+      for (const number of group.numbers) {
+        const targetBoxedKey = sortedDigits(number);
+
+        for (const row of results) {
+          if (row.gameType !== group.gameType) continue;
+
+          const rowBoxedKey = row.boxedKey || sortedDigits(row.normalizedResult);
+          const isStraight = row.normalizedResult === number;
+          const isBoxed = rowBoxedKey === targetBoxedKey;
+
+          if (!isStraight && !isBoxed) continue;
+
+          const hitType: 'straight' | 'boxed' = isStraight ? 'straight' : 'boxed';
+          const daysFromDream = activeStart
+            ? daysBetweenDateStrings(activeStart, row.date)
+            : 0;
+          const sameDay = daysFromDream === 0;
+
+          const hitId = [
+            backtestDreamId,
+            termLabel,
+            number,
+            row.state,
+            row.date,
+            row.drawTime,
+            hitType,
+            row.normalizedResult,
+          ]
+            .map((value) =>
+              String(value ?? '')
+                .replace(/[^a-zA-Z0-9_-]/g, '_')
+            )
+            .join('__');
+
+          await setDoc(
+            doc(db, 'backtestHits', hitId),
+            {
+              ownerUid,
+              backtestDreamId,
+              dreamDate: dream.dreamDate,
+              termLabel,
+              number,
+              gameType: group.gameType,
+              state: row.state,
+              drawDate: row.date,
+              drawTime: row.drawTime,
+              rawResult: row.rawResult,
+              normalizedResult: row.normalizedResult,
+              resultBoxedKey: rowBoxedKey,
+              hitType,
+              daysFromDream,
+              sameDay,
+              createdAt: nowTs(),
+            },
+            { merge: true }
+          );
+
+          await upsertPersonalHitMapping(ownerUid, {
+            dreamerId: 'owner-self',
+            dreamerName: 'Sweet404Peaches',
+            termLabel,
+            number,
+            gameType: group.gameType,
+            state: row.state,
+            drawTime: row.drawTime,
+            drawDate: row.date,
+            hitType,
+            sourceDreamEntryId: `backtest:${backtestDreamId}`,
+            daysFromDream,
+            sameDay,
+          } as any);
+
+          await createTermNumberMapping(ownerUid, {
+            termLabel,
+            number,
+            gameType: group.gameType,
+            source: 'parsed',
+            confidenceBasis: `backtest-hit:${row.date}:${row.state}:${hitType}`,
+            rawContext: String(dream.rawText ?? '').slice(0, 500),
+          });
+
+          totalHits += 1;
+          if (hitType === 'straight') straightHits += 1;
+          if (hitType === 'boxed') boxedHits += 1;
+
+          stateCounts.set(row.state, (stateCounts.get(row.state) ?? 0) + 1);
+          termCounts.set(termLabel, (termCounts.get(termLabel) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  const bestState =
+    Array.from(stateCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+  const bestTerm =
+    Array.from(termCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+  const summary = {
+    ownerUid,
+    backtestDreamId,
+    dreamDate: dream.dreamDate,
+    totalHits,
+    straightHits,
+    boxedHits,
+    uniqueStates: Array.from(stateCounts.keys()),
+    bestState,
+    bestTerm,
+    status: 'replay-complete',
+    updatedAt: nowTs(),
+    createdAt: nowTs(),
+  };
+
+  await setDoc(doc(db, 'backtestSummaries', backtestDreamId), summary, { merge: true });
+
+  await setDoc(
+    doc(db, 'backtestDreams', backtestDreamId),
+    {
+      status: 'replay-complete',
+      updatedAt: nowTs(),
+    },
+    { merge: true }
+  );
+
+  await setDoc(
+    doc(db, 'backtestWindows', backtestDreamId),
+    {
+      status: 'replay-complete',
+      updatedAt: nowTs(),
+    },
+    { merge: true }
+  );
+
+  return summary;
+}

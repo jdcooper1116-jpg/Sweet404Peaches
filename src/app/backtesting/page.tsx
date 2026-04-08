@@ -20,7 +20,13 @@ const cards = [
     href: '/backtesting/replay',
     title: 'Replay Lab',
     description:
-      'Run the backtest logic conceptually: dream terms, watch numbers, hits, timelines, and replay outcomes.',
+      'Run the backtest logic: replay hits, timelines, historical outcomes, and dictionary strengthening.',
+  },
+  {
+    href: '/backtesting/archive',
+    title: 'Backtest Archive',
+    description:
+      'Monitor all historical dreams, replay status, hit counts, strongest states, and research progress.',
   },
   {
     href: '/backtesting/evidence',
@@ -109,9 +115,7 @@ export default function BacktestingPortalPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Backtesting Workflow</h1>
-            <p>
-              This shell is designed around your real research process.
-            </p>
+            <p>This portal is designed around your real research process.</p>
           </div>
 
           <div
