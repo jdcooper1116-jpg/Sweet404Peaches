@@ -1,174 +1,83 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { SearchCheck, Sparkles } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
-  createDreamHit,
-  listActiveDreamWindows,
   listDreamHits,
-  listLotteryResults,
-  upsertPersonalHitMapping,
+  listPersonalHitMappings,
 } from '@/lib/firebase/firestore';
-import { matchActiveWindowsToResults, type MatchedHit } from '@/lib/lottery/hitMatcher';
-import type { ActiveDreamWindow, LotteryResult, DreamHit } from '@/lib/types';
 
-function hitKey(hit: MatchedHit) {
-  return [
-    hit.windowId,
-    hit.dreamEntryId,
-    hit.termLabel,
-    hit.trackedNumber,
-    hit.winningResult,
-    hit.state,
-    hit.drawDate,
-    hit.drawTime,
-    hit.gameType,
-    hit.hitType,
-  ].join('__');
-}
+type DreamHitRow = {
+  id: string;
+  dreamerName?: string;
+  termLabel?: string;
+  number?: string;
+  gameType?: 'cash3' | 'cash4';
+  state?: string;
+  drawDate?: string;
+  drawTime?: string;
+  hitType?: 'straight' | 'boxed';
+  rawResult?: string;
+  normalizedResult?: string;
+  daysFromDream?: number;
+  sameDay?: boolean;
+};
 
-function existingHitKey(hit: DreamHit) {
-  return [
-    hit.dreamEntryId,
-    hit.termLabel ?? '',
-    hit.trackedNumber,
-    hit.winningResult,
-    hit.state,
-    hit.drawDate,
-    hit.drawTime,
-    hit.gameType,
-    hit.hitType,
-  ].join('__');
-}
-
-function dedupeMatchedHits(items: MatchedHit[]): MatchedHit[] {
-  const seen = new Set<string>();
-  const unique: MatchedHit[] = [];
-
-  for (const item of items) {
-    const key = hitKey(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(item);
-  }
-
-  return unique;
-}
+type PersonalMappingRow = {
+  id: string;
+  termLabel?: string;
+  number?: string;
+  state?: string;
+  hitCount?: number;
+};
 
 export default function HitsPage() {
-  const { user, loading } = useAuth();
-
-  const [windows, setWindows] = useState<ActiveDreamWindow[]>([]);
-  const [results, setResults] = useState<LotteryResult[]>([]);
-  const [existingHits, setExistingHits] = useState<DreamHit[]>([]);
-  const [pageLoading, setPageLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const { user } = useAuth();
+  const [hits, setHits] = useState<DreamHitRow[]>([]);
+  const [mappings, setMappings] = useState<PersonalMappingRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
 
   useEffect(() => {
     async function load() {
       if (!user) {
-        setPageLoading(false);
+        setHits([]);
+        setMappings([]);
+        setLoading(false);
         return;
       }
 
       try {
-        setError('');
-        const [windowRows, resultRows, hitRows] = await Promise.all([
-          listActiveDreamWindows(user.uid),
-          listLotteryResults(user.uid, 500),
+        const [hitRows, mappingRows] = await Promise.all([
           listDreamHits(user.uid),
+          listPersonalHitMappings(user.uid),
         ]);
 
-        setWindows(windowRows);
-        setResults(resultRows);
-        setExistingHits(hitRows);
+        setHits(hitRows as DreamHitRow[]);
+        setMappings(mappingRows as PersonalMappingRow[]);
       } catch (err) {
         console.error(err);
-        setError('Could not load data needed for hit scanning.');
+        setError('Could not load hits.');
       } finally {
-        setPageLoading(false);
+        setLoading(false);
       }
     }
 
-    if (!loading) {
-      void load();
-    }
-  }, [user, loading]);
+    void load();
+  }, [user]);
 
-  const matches = useMemo(() => {
-    return dedupeMatchedHits(matchActiveWindowsToResults(windows, results));
-  }, [windows, results]);
+  const sortedHits = useMemo(() => {
+    return [...hits].sort((a, b) => {
+      const aKey = `${a.drawDate ?? ''} ${a.drawTime ?? ''}`;
+      const bKey = `${b.drawDate ?? ''} ${b.drawTime ?? ''}`;
+      return aKey < bKey ? 1 : -1;
+    });
+  }, [hits]);
 
-  const unsavedMatches = useMemo(() => {
-    const existingKeys = new Set(existingHits.map(existingHitKey));
-    return matches.filter(match => !existingKeys.has(hitKey(match)));
-  }, [matches, existingHits]);
-
-  async function handleSaveMatches() {
-    if (!user) {
-      setError('You must be signed in.');
-      return;
-    }
-
-    if (!unsavedMatches.length) {
-      setMessage('No new matches to save.');
-      return;
-    }
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
-    try {
-      for (const match of unsavedMatches) {
-        await createDreamHit(user.uid, {
-          dreamerId: match.dreamerId,
-          dreamerName: match.dreamerName,
-          dreamEntryId: match.dreamEntryId,
-          termLabel: match.termLabel,
-          trackedNumber: match.trackedNumber,
-          gameType: match.gameType,
-          state: match.state,
-          drawTime: match.drawTime,
-          drawDate: match.drawDate,
-          winningResult: match.winningResult,
-          hitType: match.hitType,
-          sameDay: match.sameDay,
-          daysFromDream: match.daysFromDream,
-          isPersonalizedCandidate: true,
-        });
-
-        await upsertPersonalHitMapping(user.uid, {
-          dreamerId: match.dreamerId,
-          dreamerName: match.dreamerName,
-          termLabel: match.termLabel,
-          number: match.trackedNumber,
-          gameType: match.gameType,
-          hitType: match.hitType,
-          state: match.state,
-          drawTime: match.drawTime,
-          drawDate: match.drawDate,
-          sourceDreamEntryId: match.dreamEntryId,
-          daysFromDream: match.daysFromDream,
-          sameDay: match.sameDay,
-        });
-      }
-
-      setMessage(`Saved ${unsavedMatches.length} new hit(s).`);
-
-      const refreshed = await listDreamHits(user.uid);
-      setExistingHits(refreshed);
-    } catch (err) {
-      console.error(err);
-      setError('Could not save hit matches.');
-    } finally {
-      setSaving(false);
-    }
-  }
+  const straightCount = sortedHits.filter(h => h.hitType === 'straight').length;
+  const boxedCount = sortedHits.filter(h => h.hitType === 'boxed').length;
 
   return (
     <main
@@ -184,52 +93,65 @@ export default function HitsPage() {
 
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
-          <div className="page-header">
-            <h1>Hit Scanner</h1>
-            <p>
-              Scan active dream windows against imported results and save straight
-              or boxed hits into your journal memory.
-            </p>
-          </div>
-        </section>
-
-        <section className="journal-card-flat">
           <div
             style={{
-              display: 'grid',
-              gap: '12px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: '16px',
+              alignItems: 'flex-start',
+              flexWrap: 'wrap',
             }}
           >
-            <div>
-              <div className="journal-label">Active Windows</div>
-              <div>{windows.length}</div>
+            <div className="page-header">
+              <h1>Hits Detector</h1>
+              <p>
+                This page shows raw dream-hit event rows from the detector.
+              </p>
             </div>
-            <div>
-              <div className="journal-label">Imported Results</div>
-              <div>{results.length}</div>
-            </div>
-            <div>
-              <div className="journal-label">Detected Matches</div>
-              <div>{matches.length}</div>
-            </div>
-            <div>
-              <div className="journal-label">Unsaved Matches</div>
-              <div>{unsavedMatches.length}</div>
+
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/fell-before" className="btn-secondary">
+                As They Fell Before
+              </Link>
+              <Link href="/windows" className="btn-secondary">
+                Active Windows
+              </Link>
             </div>
           </div>
         </section>
 
-        {message ? (
-          <section
-            className="journal-card-flat"
-            style={{
-              borderColor: '#cfe5c8',
-              background: '#f5fbf2',
-              color: '#315a2b',
-            }}
-          >
-            {message}
+        <section
+          className="journal-card-flat"
+          style={{
+            display: 'grid',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          <div>
+            <div className="journal-label">Dream Hit Events</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{sortedHits.length}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Straight Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{straightCount}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Boxed Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{boxedCount}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Dictionary Rows</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{mappings.length}</div>
+          </div>
+        </section>
+
+        {loading ? (
+          <section className="journal-card">
+            <p>Loading hits...</p>
           </section>
         ) : null}
 
@@ -246,132 +168,96 @@ export default function HitsPage() {
           </section>
         ) : null}
 
-        <section className="journal-card">
-          <div
+        {!loading && !sortedHits.length && mappings.length > 0 ? (
+          <section
+            className="journal-card-flat"
             style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              gap: '16px',
-              alignItems: 'center',
-              flexWrap: 'wrap',
+              borderColor: '#ead9a3',
+              background: '#fff9e9',
+              color: '#6b5b1f',
             }}
           >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                color: 'var(--deep-plum)',
-              }}
-            >
-              <SearchCheck size={18} />
-              <strong>Detected Matches</strong>
-            </div>
-
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleSaveMatches}
-              disabled={saving || !unsavedMatches.length}
-            >
-              {saving ? 'Saving Hits...' : 'Save New Hits'}
-            </button>
-          </div>
-        </section>
-
-        {pageLoading ? (
-          <section className="journal-card">
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading scanner data...</p>
+            The dictionary has matches, but no raw dream-hit event rows were found in
+            <strong> dreamHits</strong>. That means the hit engine is partially working,
+            but the event log layer still needs attention.
           </section>
-        ) : matches.length === 0 ? (
+        ) : null}
+
+        {!loading && !sortedHits.length && !mappings.length ? (
           <section className="journal-card">
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                marginBottom: '10px',
-                color: 'var(--deep-plum)',
-              }}
-            >
-              <Sparkles size={18} />
-              <strong>No matches found yet</strong>
-            </div>
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
-              Import more results or create more active dream windows first.
-            </p>
+            <p>No hit events found yet.</p>
           </section>
-        ) : (
-          <section style={{ display: 'grid', gap: '14px' }}>
-            {matches.map(match => {
-              const alreadySaved = !unsavedMatches.some(m => hitKey(m) === hitKey(match));
+        ) : null}
 
-              return (
-                <article key={hitKey(match)} className="journal-card-flat">
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: '10px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                    }}
-                  >
-                    <div>
-                      <div className="journal-label">Dreamer</div>
-                      <div>{match.dreamerName}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Term</div>
-                      <div>{match.termLabel}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Tracked Number</div>
-                      <div>{match.trackedNumber}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Winning Result</div>
-                      <div>{match.winningResult}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Type</div>
-                      <div>{match.hitType}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">State</div>
-                      <div>{match.state}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Draw</div>
-                      <div>{match.drawTime}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Date</div>
-                      <div>{match.drawDate}</div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Dream Offset</div>
-                      <div>
-                        {match.sameDay ? 'Same day' : `${match.daysFromDream} day(s) later`}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="journal-label">Status</div>
-                      <div>{alreadySaved ? 'Saved' : 'New'}</div>
+        {sortedHits.length ? (
+          <section style={{ display: 'grid', gap: '16px' }}>
+            {sortedHits.map(hit => (
+              <section key={hit.id} className="journal-card" style={{ display: 'grid', gap: '12px' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '16px',
+                    flexWrap: 'wrap',
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  <div>
+                    <h2 style={{ margin: 0 }}>
+                      {hit.number || 'Unknown Number'} • {hit.state || 'Unknown State'}
+                    </h2>
+                    <div style={{ marginTop: '6px', color: 'var(--ink-light)', fontSize: '14px' }}>
+                      {hit.drawDate || 'Unknown Date'} • {hit.drawTime || 'Unknown Draw Time'}
                     </div>
                   </div>
-                </article>
-              );
-            })}
+
+                  <div
+                    className="journal-card-flat"
+                    style={{
+                      minWidth: '180px',
+                      display: 'grid',
+                      gap: '6px',
+                    }}
+                  >
+                    <div><strong>Hit Type:</strong> {hit.hitType || 'Unknown'}</div>
+                    <div><strong>Game:</strong> {hit.gameType || 'Unknown'}</div>
+                    <div><strong>Result:</strong> {hit.normalizedResult || hit.rawResult || 'Unknown'}</div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '10px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  }}
+                >
+                  <div className="journal-card-flat">
+                    <strong>Dreamer</strong>
+                    <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
+                      {hit.dreamerName || 'Unknown'}
+                    </p>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <strong>Mapped Term</strong>
+                    <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
+                      {hit.termLabel || 'Unknown'}
+                    </p>
+                  </div>
+
+                  <div className="journal-card-flat">
+                    <strong>Days From Dream</strong>
+                    <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
+                      {typeof hit.daysFromDream === 'number' ? hit.daysFromDream : 'Unknown'}
+                      {hit.sameDay ? ' • Same Day' : ''}
+                    </p>
+                  </div>
+                </div>
+              </section>
+            ))}
           </section>
-        )}
+        ) : null}
       </section>
     </main>
   );

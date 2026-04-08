@@ -1067,3 +1067,143 @@ export async function fullResetOwnerData(ownerUid: string): Promise<Record<strin
 
   return deleted;
 }
+
+function isLegacyOwnerLabel(value: unknown): boolean {
+  const v = String(value ?? '').trim().toLowerCase();
+  return [
+    'me',
+    'owner journal',
+    'me / owner journal',
+    'sweet404peaches owner'
+  ].includes(v);
+}
+
+async function migrateOwnedDocsByOwnerUid(
+  ownerUid: string,
+  collectionName: string,
+  shouldUpdate: (docSnap: any) => boolean,
+  buildPatch: (data: any) => Record<string, unknown>
+): Promise<number> {
+  const snap = await getDocs(
+    query(collection(db, collectionName), where('ownerUid', '==', ownerUid))
+  );
+
+  if (snap.empty) return 0;
+
+  let updated = 0;
+
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    const chunk = snap.docs.slice(i, i + 400);
+
+    for (const docSnap of chunk) {
+      if (!shouldUpdate(docSnap)) continue;
+      batch.update(docSnap.ref, buildPatch(docSnap.data()));
+      updated += 1;
+    }
+
+    await batch.commit();
+  }
+
+  return updated;
+}
+
+export async function migrateOwnerDisplayName(
+  ownerUid: string,
+  targetName = 'Sweet404Peaches'
+): Promise<Record<string, number>> {
+  const report: Record<string, number> = {};
+
+  const ownerProfileRef = doc(db, COLLECTIONS.ownerProfiles, ownerUid);
+  const ownerProfileSnap = await getDoc(ownerProfileRef);
+
+  if (ownerProfileSnap.exists()) {
+    await updateDoc(ownerProfileRef, {
+      displayName: targetName,
+      updatedAt: nowTs(),
+    });
+    report[COLLECTIONS.ownerProfiles] = 1;
+  } else {
+    report[COLLECTIONS.ownerProfiles] = 0;
+  }
+
+  report[COLLECTIONS.dreamEntries] = await migrateOwnedDocsByOwnerUid(
+    ownerUid,
+    COLLECTIONS.dreamEntries,
+    (docSnap) => {
+      const data = docSnap.data();
+      return data?.dreamerId === 'owner-self' || isLegacyOwnerLabel(data?.dreamerName);
+    },
+    () => ({
+      dreamerName: targetName,
+      updatedAt: nowTs(),
+    })
+  );
+
+  report[COLLECTIONS.activeDreamWindows] = await migrateOwnedDocsByOwnerUid(
+    ownerUid,
+    COLLECTIONS.activeDreamWindows,
+    (docSnap) => {
+      const data = docSnap.data();
+      return data?.dreamerId === 'owner-self' || isLegacyOwnerLabel(data?.dreamerName);
+    },
+    () => ({
+      dreamerName: targetName,
+      updatedAt: nowTs(),
+    })
+  );
+
+  report[COLLECTIONS.dreamHits] = await migrateOwnedDocsByOwnerUid(
+    ownerUid,
+    COLLECTIONS.dreamHits,
+    (docSnap) => {
+      const data = docSnap.data();
+      return data?.dreamerId === 'owner-self' || isLegacyOwnerLabel(data?.dreamerName);
+    },
+    () => ({
+      dreamerName: targetName,
+      updatedAt: nowTs(),
+    })
+  );
+
+  report[COLLECTIONS.personalHitMappings] = await migrateOwnedDocsByOwnerUid(
+    ownerUid,
+    COLLECTIONS.personalHitMappings,
+    (docSnap) => {
+      const data = docSnap.data();
+      return data?.dreamerId === 'owner-self' || isLegacyOwnerLabel(data?.dreamerName);
+    },
+    () => ({
+      dreamerName: targetName,
+      updatedAt: nowTs(),
+    })
+  );
+
+  report[COLLECTIONS.dreamers] = await migrateOwnedDocsByOwnerUid(
+    ownerUid,
+    COLLECTIONS.dreamers,
+    (docSnap) => {
+      const data = docSnap.data();
+      return isLegacyOwnerLabel(data?.displayName);
+    },
+    () => ({
+      displayName: targetName,
+      updatedAt: nowTs(),
+    })
+  );
+
+  report[COLLECTIONS.pinnedPlays] = await migrateOwnedDocsByOwnerUid(
+    ownerUid,
+    COLLECTIONS.pinnedPlays,
+    (docSnap) => {
+      const data = docSnap.data();
+      return isLegacyOwnerLabel(data?.dreamerScope);
+    },
+    () => ({
+      dreamerScope: targetName,
+      updatedAt: nowTs(),
+    })
+  );
+
+  return report;
+}
