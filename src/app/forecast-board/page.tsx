@@ -18,6 +18,7 @@ import { buildGroupedTermDictionary, flattenDictionary } from '@/lib/intelligenc
 import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
 import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
 import { applyBacktestLearningBoost } from '@/lib/intelligence/evidencePromotion';
+import PageIntro from '@/components/ui/PageIntro';
 
 export default function ForecastBoardPage() {
   const { user } = useAuth();
@@ -119,47 +120,25 @@ export default function ForecastBoardPage() {
       }}
     >
       <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
-        <section className="journal-card">
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              gap: '16px',
-              alignItems: 'flex-start',
-              flexWrap: 'wrap',
-            }}
-          >
-            <div className="page-header">
-              <h1>Forecast Board</h1>
-              <p>
-                Unresolved-only forecast with backtest-to-live learning boosts and evidence-weighted recommendation scores.
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/backtesting/evidence" className="btn-secondary">
-                Evidence Rules
-              </Link>
-              <Link href="/chat" className="btn-secondary">
-                Intelligence Chat
-              </Link>
-              <Link href="/daily-ops" className="btn-secondary">
-                Daily Ops
-              </Link>
-            </div>
-          </div>
-        </section>
+      <section className="panel-grid" style={{ padding: '32px' }}>
+        <PageIntro
+          title="Forecast Board"
+          description="Unresolved-only forecast with backtest-to-live learning boosts and evidence-weighted recommendation scores."
+          actions={[
+            { href: '/backtesting/evidence', label: 'Evidence Rules' },
+            { href: '/chat', label: 'Intelligence Chat' },
+            { href: '/daily-ops', label: 'Daily Ops' },
+          ]}
+        />
 
         <section
-          className="journal-card-flat"
           style={{
             display: 'grid',
-            gap: '16px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: '14px',
+            gridTemplateColumns: '1.2fr repeat(4, minmax(180px, 1fr))',
           }}
         >
-          <div>
+          <div className="journal-card-flat">
             <label className="journal-label" htmlFor="stateSearch">Filter by State</label>
             <input
               id="stateSearch"
@@ -169,47 +148,27 @@ export default function ForecastBoardPage() {
               placeholder="Ex: Illinois"
             />
           </div>
-
-          <div className="journal-card-flat">
-            <div className="journal-label">Latest Dream Date</div>
-            <div style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-              {latestDream?.dreamDate ?? '—'}
-            </div>
+          <div className="stat-tile">
+            <div className="stat-label">Latest Dream</div>
+            <div className="stat-value">{latestDream?.dreamDate ?? '—'}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-label">Unresolved</div>
+            <div className="stat-value">{forecast.unresolvedWindows.length}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-label">Boosted Recs</div>
+            <div className="stat-value">{boosted.boostedRows.length}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-label">Boosted States</div>
+            <div className="stat-value">{boosted.boostedStateGroups.length}</div>
           </div>
         </section>
 
-        <section
-          className="journal-card-flat"
-          style={{
-            display: 'grid',
-            gap: '12px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          }}
-        >
-          <div>
-            <div className="journal-label">Unresolved Watches</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.unresolvedWindows.length}</div>
-          </div>
-          <div>
-            <div className="journal-label">Boosted Recommendations</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{boosted.boostedRows.length}</div>
-          </div>
-          <div>
-            <div className="journal-label">Boosted States</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{boosted.boostedStateGroups.length}</div>
-          </div>
-          <div>
-            <div className="journal-label">Resolved Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
-          </div>
-        </section>
-
-        {loading ? (
-          <section className="journal-card"><p>Loading Forecast Board...</p></section>
-        ) : null}
-
+        {loading ? <section className="journal-card"><p>Loading Forecast Board...</p></section> : null}
         {error ? (
-          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
+          <section className="journal-card-flat" style={{ borderColor: '#f2a6a6', background: 'rgba(110,20,20,0.22)', color: '#fff0f0' }}>
             {error}
           </section>
         ) : null}
@@ -217,38 +176,34 @@ export default function ForecastBoardPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Top Boosted State Recommendations</h1>
-            <p>These states are boosted by repeated backtest best-state / best-term signals and family memory.</p>
+            <p>These states are boosted by repeated backtest best-state and best-term signals plus family memory.</p>
           </div>
 
           {filteredStateGroups.length ? (
-            <div style={{ display: 'grid', gap: '16px', marginTop: '12px' }}>
+            <div className="metric-row" style={{ marginTop: '14px' }}>
               {filteredStateGroups.slice(0, 10).map((group: any) => (
-                <div key={group.state} className="journal-card-flat" style={{ display: 'grid', gap: '12px' }}>
+                <div key={group.state} className="journal-card-flat surface-accent" style={{ display: 'grid', gap: '14px' }}>
                   <div
                     style={{
                       display: 'grid',
-                      gap: '8px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                      gap: '10px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                     }}
                   >
-                    <div><strong>State:</strong> {group.state}</div>
-                    <div><strong>Boosted Score:</strong> {group.boostedScore}</div>
-                    <div><strong>Total Learning Boost:</strong> {group.totalLearningBoost}</div>
-                    <div><strong>Top Learning Tier:</strong> {group.topLearningTier}</div>
+                    <div><div className="stat-label">State</div><div className="stat-value" style={{ fontSize: '1.55rem' }}>{group.state}</div></div>
+                    <div><div className="stat-label">Boosted Score</div><div className="stat-value" style={{ fontSize: '1.55rem' }}>{group.boostedScore}</div></div>
+                    <div><div className="stat-label">Learning Boost</div><div className="stat-value" style={{ fontSize: '1.55rem' }}>{group.totalLearningBoost}</div></div>
+                    <div><div className="stat-label">Tier</div><div className="stat-value" style={{ fontSize: '1.35rem' }}>{group.topLearningTier}</div></div>
                   </div>
+
+                  <hr className="soft-divider" />
 
                   <div style={{ display: 'grid', gap: '10px' }}>
                     {group.rows.slice(0, 5).map((row: any) => (
                       <div
                         key={`${row.term}-${row.number}-${row.state}-${row.gameType}`}
-                        style={{
-                          border: '1px solid rgba(90, 52, 74, 0.12)',
-                          borderRadius: '16px',
-                          padding: '12px',
-                          background: 'rgba(255,255,255,0.5)',
-                          display: 'grid',
-                          gap: '8px',
-                        }}
+                        className="journal-card-flat"
+                        style={{ display: 'grid', gap: '10px' }}
                       >
                         <div
                           style={{
@@ -267,7 +222,7 @@ export default function ForecastBoardPage() {
                           <div><strong>Learning Tier:</strong> {row.learningTier}</div>
                         </div>
 
-                        <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1.6 }}>
                           Reasons: {Array.isArray(row.learningReasons) && row.learningReasons.length ? row.learningReasons.join('; ') : 'No extra boost'}
                         </div>
                       </div>

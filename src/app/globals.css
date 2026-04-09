@@ -453,3 +453,72 @@ hr {
   border-color: rgba(228, 192, 123, 0.14);
 }
 
+
+
+/* === Visual Refinement Utilities === */
+.stat-tile {
+  background: linear-gradient(180deg, rgba(13, 22, 48, 0.94) 0%, rgba(20, 35, 68, 0.98) 100%);
+  border: 1px solid rgba(228, 192, 123, 0.16);
+  border-radius: 20px;
+  padding: 18px 20px;
+  box-shadow: 0 10px 30px rgba(4, 8, 24, 0.34);
+  display: grid;
+  gap: 8px;
+}
+
+.stat-tile .stat-label {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.stat-tile .stat-value {
+  color: var(--text-strong);
+  font-size: clamp(1.5rem, 2vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.stat-tile .stat-subtext {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.panel-grid {
+  display: grid;
+  gap: 24px;
+}
+
+.soft-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(228, 192, 123, 0.22), transparent);
+  border: 0;
+}
+
+.surface-accent {
+  background: linear-gradient(135deg, rgba(228, 192, 123, 0.08) 0%, rgba(103, 114, 229, 0.08) 100%);
+  border: 1px solid rgba(228, 192, 123, 0.14);
+  border-radius: 18px;
+}
+
+.metric-row {
+  display: grid;
+  gap: 10px;
+}
+
+.metric-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(228, 192, 123, 0.14);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+

@@ -17,6 +17,7 @@ import {
 } from '@/lib/intelligence/termDictionary';
 import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
 import { buildEvidencePromotionModel } from '@/lib/intelligence/evidencePromotion';
+import PageIntro from '@/components/ui/PageIntro';
 
 export default function BacktestingEvidencePage() {
   const { user } = useAuth();
@@ -104,82 +105,55 @@ export default function BacktestingEvidencePage() {
       }}
     >
       <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
-        <section className="journal-card">
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              gap: '16px',
-              alignItems: 'flex-start',
-              flexWrap: 'wrap',
-            }}
-          >
-            <div className="page-header">
-              <h1>Evidence Rules</h1>
-              <p>
-                Weighted promotion engine for Universal Dictionary learning,
-                Personal Dictionary strengthening, and backtest-to-live boosts.
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/backtesting/archive" className="btn-secondary">
-                Backtest Archive
-              </Link>
-              <Link href="/forecast-board" className="btn-secondary">
-                Forecast Board
-              </Link>
-              <Link href="/chat" className="btn-secondary">
-                Intelligence Chat
-              </Link>
-            </div>
-          </div>
-        </section>
-
-        <section className="journal-card-flat">
-          <label className="journal-label" htmlFor="termSearch">Filter Candidates</label>
-          <input
-            id="termSearch"
-            className="journal-input"
-            value={termSearch}
-            onChange={(e) => setTermSearch(e.target.value)}
-            placeholder="Ex: dancing, 330, Illinois"
-          />
-        </section>
+      <section className="panel-grid" style={{ padding: '32px' }}>
+        <PageIntro
+          title="Evidence Rules"
+          description="Weighted promotion engine for Universal Dictionary learning, Personal Dictionary strengthening, and backtest-to-live boosts."
+          actions={[
+            { href: '/backtesting/archive', label: 'Backtest Archive' },
+            { href: '/forecast-board', label: 'Forecast Board' },
+            { href: '/chat', label: 'Intelligence Chat' },
+          ]}
+        />
 
         <section
-          className="journal-card-flat"
           style={{
             display: 'grid',
-            gap: '12px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: '14px',
+            gridTemplateColumns: '1.2fr repeat(4, minmax(180px, 1fr))',
           }}
         >
-          <div>
-            <div className="journal-label">Universal Ready</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.summary.universalReady}</div>
+          <div className="journal-card-flat">
+            <label className="journal-label" htmlFor="termSearch">Filter Candidates</label>
+            <input
+              id="termSearch"
+              className="journal-input"
+              value={termSearch}
+              onChange={(e) => setTermSearch(e.target.value)}
+              placeholder="Ex: dancing, 330, Illinois"
+            />
           </div>
-          <div>
-            <div className="journal-label">Personal Ready</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.summary.personalReady}</div>
+          <div className="stat-tile">
+            <div className="stat-label">Universal Ready</div>
+            <div className="stat-value">{promotionModel.summary.universalReady}</div>
           </div>
-          <div>
-            <div className="journal-label">Backtest State Signals</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.learningSignals.topBacktestStates.length}</div>
+          <div className="stat-tile">
+            <div className="stat-label">Personal Ready</div>
+            <div className="stat-value">{promotionModel.summary.personalReady}</div>
           </div>
-          <div>
-            <div className="journal-label">Backtest Term Signals</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.learningSignals.topBacktestTerms.length}</div>
+          <div className="stat-tile">
+            <div className="stat-label">Backtest States</div>
+            <div className="stat-value">{promotionModel.learningSignals.topBacktestStates.length}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-label">Backtest Terms</div>
+            <div className="stat-value">{promotionModel.learningSignals.topBacktestTerms.length}</div>
           </div>
         </section>
 
-        {loading ? (
-          <section className="journal-card"><p>Loading Evidence Rules...</p></section>
-        ) : null}
-
+        {loading ? <section className="journal-card"><p>Loading Evidence Rules...</p></section> : null}
         {error ? (
-          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
+          <section className="journal-card-flat" style={{ borderColor: '#f2a6a6', background: 'rgba(110,20,20,0.22)', color: '#fff0f0' }}>
             {error}
           </section>
         ) : null}
@@ -190,34 +164,40 @@ export default function BacktestingEvidencePage() {
             <p>How the app decides what should be strengthened.</p>
           </div>
 
-          <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+          <div className="metric-row" style={{ marginTop: '14px' }}>
             {[
               'Universal Dictionary score = total hits + state spread + straight/boxed weight + repeated backtest term support + family support.',
               'Personal Dictionary score = hit count + straight weight + boxed weight + state strength + repeated backtest state support + recency + family support.',
-              'Straight hits are weighted more heavily than boxed hits.',
-              'Repeated best-term and best-state backtest signals boost live candidates.',
-              'Family memory creates additional promotion support when related boxed families repeat.',
+              'Straight hits carry more evidentiary weight than boxed hits.',
+              'Repeated best-term and best-state backtest signals increase live promotion strength.',
+              'Family repetition adds extra support when boxed relatives keep showing up.',
             ].map((item) => (
-              <div key={item} className="journal-card-flat">{item}</div>
+              <div key={item} className="journal-card-flat surface-accent">{item}</div>
             ))}
           </div>
         </section>
 
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Universal Dictionary Candidates</h1>
-            <p>Terms most ready to be promoted strongly into universal learning memory.</p>
-          </div>
+        <section
+          style={{
+            display: 'grid',
+            gap: '24px',
+            gridTemplateColumns: '1fr 1fr',
+          }}
+        >
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Universal Dictionary Candidates</h1>
+              <p>Terms strongest for universal promotion.</p>
+            </div>
 
-          {filteredTerms.length ? (
-            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+            <div className="metric-row" style={{ marginTop: '14px' }}>
               {filteredTerms.slice(0, 15).map((row: any) => (
                 <div key={row.term} className="journal-card-flat">
                   <div
                     style={{
                       display: 'grid',
                       gap: '8px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
                     }}
                   >
                     <div><strong>Term:</strong> {row.term}</div>
@@ -226,32 +206,26 @@ export default function BacktestingEvidencePage() {
                     <div><strong>Hits:</strong> {row.totalHits}</div>
                     <div><strong>States:</strong> {row.stateCount}</div>
                     <div><strong>Numbers:</strong> {row.numberCount}</div>
-                    <div><strong>Backtest Term Boost:</strong> {row.backtestTermBoost}</div>
-                    <div><strong>Family Boost:</strong> {row.familyBoost}</div>
                   </div>
                 </div>
               ))}
             </div>
-          ) : (
-            <p>No universal promotion candidates found.</p>
-          )}
-        </section>
+          </section>
 
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Personal Dictionary Candidates</h1>
-            <p>State-specific term-number patterns most ready for strong personal promotion.</p>
-          </div>
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Personal Dictionary Candidates</h1>
+              <p>State-specific combos strongest for personal promotion.</p>
+            </div>
 
-          {filteredCombos.length ? (
-            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+            <div className="metric-row" style={{ marginTop: '14px' }}>
               {filteredCombos.slice(0, 20).map((row: any, index: number) => (
                 <div key={`${row.term}-${row.number}-${row.state}-${index}`} className="journal-card-flat">
                   <div
                     style={{
                       display: 'grid',
                       gap: '8px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
                     }}
                   >
                     <div><strong>Term:</strong> {row.term}</div>
@@ -260,17 +234,11 @@ export default function BacktestingEvidencePage() {
                     <div><strong>Tier:</strong> {row.promotionTier}</div>
                     <div><strong>Score:</strong> {row.promotionScore}</div>
                     <div><strong>Game:</strong> {row.gameType}</div>
-                    <div><strong>Backtest State Boost:</strong> {row.backtestStateBoost}</div>
-                    <div><strong>Backtest Term Boost:</strong> {row.backtestTermBoost}</div>
-                    <div><strong>Family Boost:</strong> {row.familyBoost}</div>
-                    <div><strong>Recency Boost:</strong> {row.recencyBoost}</div>
                   </div>
                 </div>
               ))}
             </div>
-          ) : (
-            <p>No personal promotion candidates found.</p>
-          )}
+          </section>
         </section>
       </section>
     </main>
