@@ -5,7 +5,11 @@ import { useEffect, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import PageIntro from '@/components/ui/PageIntro';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import { listBacktestDreams } from '@/lib/firebase/firestore';
+import {
+  bulkCreateBacktestResults,
+  listBacktestDreams,
+  listBacktestResultsForDream,
+} from '@/lib/firebase/firestore';
 
 export default function BacktestingAutoFetchPage() {
   const { user } = useAuth();
@@ -15,6 +19,7 @@ export default function BacktestingAutoFetchPage() {
   const [selectedDream, setSelectedDream] = useState<any | null>(null);
   const [attempts, setAttempts] = useState<any[]>([]);
   const [fetchedRows, setFetchedRows] = useState<any[]>([]);
+  const [existingRows, setExistingRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('');
@@ -43,12 +48,29 @@ export default function BacktestingAutoFetchPage() {
   }, [user]);
 
   useEffect(() => {
-    const dream = dreams.find((d: any) => d.id === selectedDreamId) ?? null;
-    setSelectedDream(dream);
-    setAttempts([]);
-    setFetchedRows([]);
-    setMessage('');
-    setError('');
+    async function syncSelected() {
+      const dream = dreams.find((d: any) => d.id === selectedDreamId) ?? null;
+      setSelectedDream(dream);
+      setAttempts([]);
+      setFetchedRows([]);
+      setMessage('');
+      setError('');
+
+      if (!selectedDreamId) {
+        setExistingRows([]);
+        return;
+      }
+
+      try {
+        const rows = await listBacktestResultsForDream(selectedDreamId);
+        setExistingRows(rows);
+      } catch (err) {
+        console.error(err);
+        setExistingRows([]);
+      }
+    }
+
+    void syncSelected();
   }, [selectedDreamId, dreams]);
 
   async function runAutoFetch() {
@@ -86,6 +108,26 @@ export default function BacktestingAutoFetchPage() {
     }
   }
 
+  async function saveFetchedRows() {
+    if (!user || !selectedDreamId || !fetchedRows.length) return;
+
+    setWorking(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await bulkCreateBacktestResults(user.uid, selectedDreamId, fetchedRows);
+      const rows = await listBacktestResultsForDream(selectedDreamId);
+      setExistingRows(rows);
+      setMessage(`Saved ${fetchedRows.length} fetched row(s) to this backtest dream.`);
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || 'Could not save fetched rows.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <main
       style={{
@@ -101,7 +143,7 @@ export default function BacktestingAutoFetchPage() {
       <section className="panel-grid" style={{ padding: '32px' }}>
         <PageIntro
           title="Backtest Auto-Fetch"
-          description="Automatically research a 7-day Georgia Cash 3 / Cash 4 result window using provider fallback."
+          description="Automatically research and save a 7-day Georgia Cash 3 / Cash 4 result window using provider fallback."
           actions={[
             { href: '/backtesting', label: 'Backtesting Portal' },
             { href: '/backtesting/replay', label: 'Replay Lab' },
@@ -142,12 +184,17 @@ export default function BacktestingAutoFetchPage() {
                 <strong>Dream Date:</strong> {selectedDream.dreamDate}
                 <br />
                 <strong>Dream Preview:</strong> {String(selectedDream.cleanedText || selectedDream.rawText || '').slice(0, 180)}
+                <br />
+                <strong>Saved Results:</strong> {existingRows.length}
               </div>
             ) : null}
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               <button className="btn-primary" disabled={working || !selectedDream} onClick={runAutoFetch}>
                 {working ? 'Fetching...' : 'Auto-Fetch 7-Day Results'}
+              </button>
+              <button className="btn-secondary" disabled={working || !fetchedRows.length} onClick={saveFetchedRows}>
+                Save Fetched Results
               </button>
             </div>
           </div>
@@ -181,7 +228,7 @@ export default function BacktestingAutoFetchPage() {
           <section className="journal-card">
             <div className="page-header">
               <h1>Fetched Rows Preview</h1>
-              <p>Normalized rows returned by the provider pipeline.</p>
+              <p>Normalized rows returned by the provider pipeline before replay.</p>
             </div>
 
             <div className="metric-row" style={{ marginTop: '14px' }}>
