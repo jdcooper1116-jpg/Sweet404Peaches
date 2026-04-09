@@ -19,7 +19,11 @@ import {
   type PersonalMappingRow,
 } from '@/lib/intelligence/termDictionary';
 import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
-import { buildFamilyAnalytics, boxedFamilyKey } from '@/lib/intelligence/familyLogic';
+import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
+import {
+  applyBacktestLearningBoost,
+  buildEvidencePromotionModel,
+} from '@/lib/intelligence/evidencePromotion';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -45,7 +49,7 @@ export default function ChatPage() {
     {
       role: 'assistant',
       content:
-        'Welcome to the Sweet404Peaches Intelligence Chat. I can now answer questions about families, doubles, triples, unresolved live watches, and historical state-term evidence.',
+        'Welcome to the Sweet404Peaches Intelligence Chat. I can now answer questions about evidence promotion, Universal Dictionary candidates, Personal Dictionary candidates, learning boosts, families, and live forecasts.',
     },
   ]);
 
@@ -108,87 +112,85 @@ export default function ChatPage() {
     [latestDream, activeWindows, dreamHits, mappingRows]
   );
 
+  const boosted = useMemo(
+    () =>
+      applyBacktestLearningBoost({
+        recommendationRows: forecast.recommendationRows,
+        backtestSummaries,
+        familyAnalytics,
+      }),
+    [forecast.recommendationRows, backtestSummaries, familyAnalytics]
+  );
+
+  const promotionModel = useMemo(
+    () =>
+      buildEvidencePromotionModel({
+        liveRows: flat,
+        backtestSummaries,
+        familyAnalytics,
+      }),
+    [flat, backtestSummaries, familyAnalytics]
+  );
+
   function answerQuestion(question: string) {
     const q = normalizeText(question);
 
-    if (!flat.length && !forecast.recommendationRows.length) {
-      return 'There is not enough live intelligence loaded yet for a strong answer.';
+    if (!flat.length && !boosted.boostedRows.length) {
+      return 'There is not enough live or backtest evidence loaded yet for a strong answer.';
     }
 
-    if (q.includes('hot family') || q.includes('strongest family') || q.includes('top family')) {
+    if (q.includes('universal dictionary') || q.includes('universal candidates')) {
+      const top = promotionModel.termCandidates.slice(0, 5);
+      if (!top.length) return 'I do not yet see strong Universal Dictionary candidates.';
+      return `Top Universal Dictionary candidates: ${top
+        .map((row: any) => `${row.term} (${row.promotionTier}, score ${row.promotionScore})`)
+        .join('; ')}.`;
+    }
+
+    if (q.includes('personal dictionary') || q.includes('personal candidates') || q.includes('as they fell before')) {
+      const top = promotionModel.comboCandidates.slice(0, 5);
+      if (!top.length) return 'I do not yet see strong Personal Dictionary candidates.';
+      return `Top Personal Dictionary candidates: ${top
+        .map((row: any) => `${row.term} → ${row.number} in ${row.state} (${row.promotionTier}, score ${row.promotionScore})`)
+        .join('; ')}.`;
+    }
+
+    if (q.includes('learning boost') || q.includes('what are backtests teaching') || q.includes('backtest boost')) {
+      const top = boosted.boostedRows.slice(0, 5);
+      if (!top.length) return 'I do not yet see boosted live recommendations.';
+      return `Top backtest-to-live learning boosts: ${top
+        .map((row: any) => `${row.number} in ${row.state} (${row.term}) → boost ${row.learningBoost}, boosted score ${row.boostedScore}`)
+        .join('; ')}.`;
+    }
+
+    if (q.includes('promotion rules') || q.includes('evidence rules')) {
+      return 'Promotion logic uses weighted hits, straight vs boxed weight, state strength, repeated backtest best-state and best-term support, family repetition, and recency. Universal promotion is term-based; Personal promotion is term-number-state based.';
+    }
+
+    if (q.includes('hot family') || q.includes('strongest family')) {
       const top = familyAnalytics.families[0];
       if (!top) return 'No family intelligence is available yet.';
       return `The strongest family right now is ${top.familyKey}. It is tagged as ${top.patternTag}, has ${top.totalHits} hit(s), and is strongest in ${top.topStates[0]?.state ?? 'unknown state'}.`;
     }
 
-    if (q.includes('triples')) {
-      if (!familyAnalytics.triples.length) return 'No triples are strongly represented yet.';
-      return `Top triple families right now: ${familyAnalytics.triples
-        .slice(0, 5)
-        .map((f: any) => `${f.familyKey} (${f.totalHits} hits)`)
-        .join('; ')}.`;
-    }
-
-    if (q.includes('doubles')) {
-      if (!familyAnalytics.doubles.length) return 'No doubles are strongly represented yet.';
-      return `Top double families right now: ${familyAnalytics.doubles
-        .slice(0, 5)
-        .map((f: any) => `${f.familyKey} (${f.totalHits} hits)`)
-        .join('; ')}.`;
-    }
-
-    if (q.startsWith('family ')) {
-      const key = q.replace(/^family\s+/, '').trim();
-      const match = familyAnalytics.families.find((f: any) => f.familyKey === key);
-      if (!match) return `I do not currently see a strong family record for ${key}.`;
-
-      return `Family ${match.familyKey} is tagged as ${match.patternTag}. Sample numbers: ${match.sampleNumbers.join(', ')}. Top states: ${match.topStates
-        .slice(0, 3)
-        .map((s: any) => `${s.state} (${s.hits} hits)`)
-        .join('; ')}. Top terms: ${match.topTerms
-        .slice(0, 3)
-        .map((t: any) => `${t.term} (${t.hits} hits)`)
+    if (q.includes('watch next') || q.includes('which states should i watch')) {
+      const top = boosted.boostedStateGroups.slice(0, 5);
+      if (!top.length) return 'I do not yet have enough historical state evidence to recommend next watches.';
+      return `The strongest states to watch next are ${top
+        .map((group: any) => `${group.state} (${group.topLearningTier}, boosted score ${group.boostedScore})`)
         .join('; ')}.`;
     }
 
     if (q.includes('latest dream')) {
       if (!latestDream) return 'I do not see a saved latest live dream yet.';
-      return `Your latest dream is dated ${latestDream.dreamDate || 'unknown date'}. There are ${forecast.unresolvedWindows.length} unresolved watch item(s) and ${forecast.resolvedHitsForLatestDream.length} resolved hit(s).`;
-    }
-
-    if (q.includes('watch next') || q.includes('which states should i watch')) {
-      if (!forecast.recommendationStateGroups.length) {
-        return 'I do not yet have enough historical state evidence tied to your latest dream to recommend state watches.';
-      }
-
-      return `The strongest states to watch next are ${forecast.recommendationStateGroups
-        .slice(0, 5)
-        .map((group: any) => `${group.state} [${group.confidenceTier}]`)
-        .join('; ')}.`;
-    }
-
-    if (q.includes('top unresolved') || q.includes('best unresolved')) {
-      if (!forecast.recommendationRows.length) {
-        return 'I do not see any unresolved forecast recommendations right now.';
-      }
-
-      return `The strongest unresolved watch recommendations are ${forecast.recommendationRows
-        .slice(0, 5)
-        .map((row: any) => `${row.number} in ${row.state} (${row.term}, ${row.confidenceTier})`)
-        .join('; ')}.`;
-    }
-
-    if (q.includes('family for latest dream') || q.includes('latest dream family')) {
-      if (!forecast.latestDreamNumbers.length) return 'No parsed latest-dream numbers were found.';
-      const families = Array.from(new Set(forecast.latestDreamNumbers.map((n: string) => boxedFamilyKey(n))));
-      return `Your latest dream points to these boxed families: ${families.join(', ')}.`;
+      return `Your latest dream is dated ${latestDream.dreamDate || 'unknown date'}. There are ${forecast.unresolvedWindows.length} unresolved watch item(s), ${forecast.resolvedHitsForLatestDream.length} resolved hit(s), and ${boosted.boostedRows.length} boosted recommendation(s).`;
     }
 
     if (q.includes('help')) {
-      return 'Try asking: "hot family", "family 058", "triples", "doubles", "latest dream", "which states should I watch next", or "family for latest dream".';
+      return 'Try asking: "universal dictionary", "personal dictionary", "learning boost", "promotion rules", "hot family", "which states should I watch next", or "latest dream".';
     }
 
-    return 'I can answer questions about hot families, doubles, triples, specific family keys, latest-dream family patterns, unresolved live watches, and strongest next states.';
+    return 'I can answer questions about evidence promotion, Universal Dictionary candidates, Personal Dictionary candidates, learning boosts, hot families, and strongest next states.';
   }
 
   function handleAsk(question: string) {
@@ -207,13 +209,13 @@ export default function ChatPage() {
   }
 
   const quickPrompts = [
+    'universal dictionary',
+    'personal dictionary',
+    'learning boost',
+    'promotion rules',
     'hot family',
-    'triples',
-    'doubles',
-    'family 058',
-    'latest dream',
-    'family for latest dream',
     'which states should I watch next',
+    'latest dream',
   ];
 
   return (
@@ -241,33 +243,27 @@ export default function ChatPage() {
             <div className="page-header">
               <h1>Sweet404Peaches Intelligence Chat</h1>
               <p>
-                Ask evidence-based questions about families, unresolved live watches,
-                historical memory, and state-term intelligence.
+                Ask evidence-based questions about promotion rules, Universal and Personal Dictionary candidates, family intelligence, and backtest-to-live learning boosts.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/hot-numbers" className="btn-secondary">
-                Hot Families
+              <Link href="/backtesting/evidence" className="btn-secondary">
+                Evidence Rules
               </Link>
-              <Link href="/intelligence" className="btn-secondary">
-                Intelligence Hub
+              <Link href="/forecast-board" className="btn-secondary">
+                Forecast Board
               </Link>
             </div>
           </div>
         </section>
 
         {loading ? (
-          <section className="journal-card">
-            <p>Loading intelligence chat...</p>
-          </section>
+          <section className="journal-card"><p>Loading intelligence chat...</p></section>
         ) : null}
 
         {error ? (
-          <section
-            className="journal-card-flat"
-            style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}
-          >
+          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
             {error}
           </section>
         ) : null}
@@ -275,7 +271,7 @@ export default function ChatPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Quick Prompts</h1>
-            <p>Click one to test the family-aware analyst engine.</p>
+            <p>Click one to test the evidence-aware analyst engine.</p>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '12px' }}>
@@ -295,7 +291,7 @@ export default function ChatPage() {
         <section className="journal-card" style={{ display: 'grid', gap: '16px' }}>
           <div className="page-header">
             <h1>Conversation</h1>
-            <p>The assistant answers from family intelligence and unresolved live forecast memory.</p>
+            <p>The assistant answers from evidence promotion logic, family intelligence, and boosted live forecast memory.</p>
           </div>
 
           <div style={{ display: 'grid', gap: '12px' }}>
@@ -319,16 +315,14 @@ export default function ChatPage() {
           </div>
 
           <div style={{ display: 'grid', gap: '12px' }}>
-            <label className="journal-label" htmlFor="chatPrompt">
-              Ask a Question
-            </label>
+            <label className="journal-label" htmlFor="chatPrompt">Ask a Question</label>
             <textarea
               id="chatPrompt"
               className="journal-textarea"
               rows={4}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder='Try: hot family, triples, family 058, or family for latest dream'
+              placeholder='Try: universal dictionary, personal dictionary, learning boost, or promotion rules'
             />
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>

@@ -6,13 +6,18 @@ import { useEffect, useMemo, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
+  getBacktestSummaryForDream,
   getLatestDreamEntry,
   listActiveDreamWindows,
+  listBacktestDreams,
   listDreamHits,
   listPersonalHitMappings,
 } from '@/lib/firebase/firestore';
 import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
+import { buildGroupedTermDictionary, flattenDictionary } from '@/lib/intelligence/termDictionary';
 import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
+import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
+import { applyBacktestLearningBoost } from '@/lib/intelligence/evidencePromotion';
 
 export default function ForecastBoardPage() {
   const { user } = useAuth();
@@ -20,6 +25,7 @@ export default function ForecastBoardPage() {
   const [mappingRows, setMappingRows] = useState<PersonalMappingRow[]>([]);
   const [activeWindows, setActiveWindows] = useState<any[]>([]);
   const [dreamHits, setDreamHits] = useState<any[]>([]);
+  const [backtestSummaries, setBacktestSummaries] = useState<any[]>([]);
   const [latestDream, setLatestDream] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -31,22 +37,29 @@ export default function ForecastBoardPage() {
         setMappingRows([]);
         setActiveWindows([]);
         setDreamHits([]);
+        setBacktestSummaries([]);
         setLatestDream(null);
         setLoading(false);
         return;
       }
 
       try {
-        const [mappings, windows, hits, latest] = await Promise.all([
+        const [mappings, windows, hits, dreams, latest] = await Promise.all([
           listPersonalHitMappings(user.uid),
           listActiveDreamWindows(user.uid),
           listDreamHits(user.uid),
+          listBacktestDreams(user.uid),
           getLatestDreamEntry(user.uid),
         ]);
+
+        const summaries = await Promise.all(
+          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
+        );
 
         setMappingRows(mappings as PersonalMappingRow[]);
         setActiveWindows(windows);
         setDreamHits(hits);
+        setBacktestSummaries(summaries.filter(Boolean));
         setLatestDream(latest);
       } catch (err) {
         console.error(err);
@@ -59,6 +72,13 @@ export default function ForecastBoardPage() {
     void load();
   }, [user]);
 
+  const flat = useMemo(() => {
+    const grouped = buildGroupedTermDictionary(mappingRows);
+    return flattenDictionary(grouped);
+  }, [mappingRows]);
+
+  const familyAnalytics = useMemo(() => buildFamilyAnalytics(flat), [flat]);
+
   const forecast = useMemo(
     () =>
       buildLatestDreamForecast({
@@ -70,23 +90,23 @@ export default function ForecastBoardPage() {
     [latestDream, activeWindows, dreamHits, mappingRows]
   );
 
-  const filteredRecommendations = useMemo(() => {
-    const q = stateSearch.trim().toLowerCase();
-    if (!q) return forecast.recommendationRows;
-
-    return forecast.recommendationRows.filter((row) =>
-      row.state.toLowerCase().includes(q)
-    );
-  }, [forecast.recommendationRows, stateSearch]);
+  const boosted = useMemo(
+    () =>
+      applyBacktestLearningBoost({
+        recommendationRows: forecast.recommendationRows,
+        backtestSummaries,
+        familyAnalytics,
+      }),
+    [forecast.recommendationRows, backtestSummaries, familyAnalytics]
+  );
 
   const filteredStateGroups = useMemo(() => {
     const q = stateSearch.trim().toLowerCase();
-    if (!q) return forecast.recommendationStateGroups;
-
-    return forecast.recommendationStateGroups.filter((group) =>
+    if (!q) return boosted.boostedStateGroups;
+    return boosted.boostedStateGroups.filter((group: any) =>
       group.state.toLowerCase().includes(q)
     );
-  }, [forecast.recommendationStateGroups, stateSearch]);
+  }, [boosted.boostedStateGroups, stateSearch]);
 
   return (
     <main
@@ -99,7 +119,6 @@ export default function ForecastBoardPage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -114,19 +133,19 @@ export default function ForecastBoardPage() {
             <div className="page-header">
               <h1>Forecast Board</h1>
               <p>
-                Unresolved-only predictive board. Already-hit numbers are removed, and remaining live watches are ranked by historical state strength, match quality, and recency.
+                Unresolved-only forecast with backtest-to-live learning boosts and evidence-weighted recommendation scores.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/daily-ops" className="btn-secondary">
-                Daily Ops
+              <Link href="/backtesting/evidence" className="btn-secondary">
+                Evidence Rules
               </Link>
               <Link href="/chat" className="btn-secondary">
                 Intelligence Chat
               </Link>
-              <Link href="/hits" className="btn-secondary">
-                Hits Detector
+              <Link href="/daily-ops" className="btn-secondary">
+                Daily Ops
               </Link>
             </div>
           </div>
@@ -141,9 +160,7 @@ export default function ForecastBoardPage() {
           }}
         >
           <div>
-            <label className="journal-label" htmlFor="stateSearch">
-              Filter by State
-            </label>
+            <label className="journal-label" htmlFor="stateSearch">Filter by State</label>
             <input
               id="stateSearch"
               className="journal-input"
@@ -170,131 +187,42 @@ export default function ForecastBoardPage() {
           }}
         >
           <div>
-            <div className="journal-label">Latest Dream Terms</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.latestDreamTerms.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Latest Dream Numbers</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.latestDreamNumbers.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Resolved Hit Events</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Unresolved Live Watches</div>
+            <div className="journal-label">Unresolved Watches</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.unresolvedWindows.length}</div>
           </div>
-
           <div>
-            <div className="journal-label">Ranked Recommendations</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{filteredRecommendations.length}</div>
+            <div className="journal-label">Boosted Recommendations</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{boosted.boostedRows.length}</div>
+          </div>
+          <div>
+            <div className="journal-label">Boosted States</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{boosted.boostedStateGroups.length}</div>
+          </div>
+          <div>
+            <div className="journal-label">Resolved Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
           </div>
         </section>
 
         {loading ? (
-          <section className="journal-card">
-            <p>Loading Forecast Board...</p>
-          </section>
+          <section className="journal-card"><p>Loading Forecast Board...</p></section>
         ) : null}
 
         {error ? (
-          <section
-            className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
-          >
+          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
             {error}
           </section>
         ) : null}
 
-        {latestDream ? (
-          <section className="journal-card-flat">
-            <strong>Latest Dream Snapshot</strong>
-            <p style={{ marginTop: '10px', color: 'var(--ink-light)', lineHeight: 1.7 }}>
-              Terms: {forecast.latestDreamTerms.length ? forecast.latestDreamTerms.join(', ') : 'No parsed terms'}.
-              {' '}Numbers: {forecast.latestDreamNumbers.length ? forecast.latestDreamNumbers.slice(0, 20).join(', ') : 'No parsed numbers'}.
-            </p>
-          </section>
-        ) : null}
-
         <section className="journal-card">
           <div className="page-header">
-            <h1>Resolved / Already Fell</h1>
-            <p>These items already hit and were removed from the active forecast.</p>
-          </div>
-
-          {forecast.resolvedHitsForLatestDream.length ? (
-            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
-              {forecast.resolvedHitsForLatestDream.map((hit, index) => (
-                <div key={`${hit.id ?? index}`} className="journal-card-flat">
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: '8px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                    }}
-                  >
-                    <div><strong>Term:</strong> {hit.termLabel}</div>
-                    <div><strong>Number:</strong> {hit.number}</div>
-                    <div><strong>State:</strong> {hit.state}</div>
-                    <div><strong>Game:</strong> {hit.gameType}</div>
-                    <div><strong>Hit Type:</strong> {hit.hitType}</div>
-                    <div><strong>Date:</strong> {hit.drawDate}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>No resolved hits are logged yet for the latest dream.</p>
-          )}
-        </section>
-
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Unresolved Live Watch Items</h1>
-            <p>These are the latest dream watch items that are still alive.</p>
-          </div>
-
-          {forecast.unresolvedWindows.length ? (
-            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
-              {forecast.unresolvedWindows.map((row, index) => (
-                <div key={`${row.gameType}-${row.number}-${row.termLabel}-${index}`} className="journal-card-flat">
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: '8px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                    }}
-                  >
-                    <div><strong>Term:</strong> {row.termLabel}</div>
-                    <div><strong>Number:</strong> {row.number}</div>
-                    <div><strong>Game:</strong> {row.gameType}</div>
-                    <div><strong>Window:</strong> {row.activeStart} → {row.activeEnd}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>No unresolved live watch items found for the latest dream.</p>
-          )}
-        </section>
-
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Top State Recommendations</h1>
-            <p>States are ranked by stronger live-match scoring, exact matches, repeated support, and recency.</p>
+            <h1>Top Boosted State Recommendations</h1>
+            <p>These states are boosted by repeated backtest best-state / best-term signals and family memory.</p>
           </div>
 
           {filteredStateGroups.length ? (
             <div style={{ display: 'grid', gap: '16px', marginTop: '12px' }}>
-              {filteredStateGroups.map((group) => (
+              {filteredStateGroups.slice(0, 10).map((group: any) => (
                 <div key={group.state} className="journal-card-flat" style={{ display: 'grid', gap: '12px' }}>
                   <div
                     style={{
@@ -304,16 +232,15 @@ export default function ForecastBoardPage() {
                     }}
                   >
                     <div><strong>State:</strong> {group.state}</div>
-                    <div><strong>Score:</strong> {group.score}</div>
-                    <div><strong>Exact Matches:</strong> {group.exactCount}</div>
-                    <div><strong>Unique Numbers:</strong> {group.uniqueNumbers}</div>
-                    <div><strong>Confidence:</strong> {group.confidenceTier}</div>
+                    <div><strong>Boosted Score:</strong> {group.boostedScore}</div>
+                    <div><strong>Total Learning Boost:</strong> {group.totalLearningBoost}</div>
+                    <div><strong>Top Learning Tier:</strong> {group.topLearningTier}</div>
                   </div>
 
                   <div style={{ display: 'grid', gap: '10px' }}>
-                    {group.rows.slice(0, 5).map((row) => (
+                    {group.rows.slice(0, 5).map((row: any) => (
                       <div
-                        key={`${row.term}-${row.number}-${row.state}-${row.gameType}-${row.drawTime}`}
+                        key={`${row.term}-${row.number}-${row.state}-${row.gameType}`}
                         style={{
                           border: '1px solid rgba(90, 52, 74, 0.12)',
                           borderRadius: '16px',
@@ -327,23 +254,21 @@ export default function ForecastBoardPage() {
                           style={{
                             display: 'grid',
                             gap: '8px',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
                           }}
                         >
                           <div><strong>Number:</strong> {row.number}</div>
-                          <div><strong>Trigger Term:</strong> {row.term}</div>
+                          <div><strong>Term:</strong> {row.term}</div>
                           <div><strong>Game:</strong> {row.gameType}</div>
-                          <div><strong>Draw:</strong> {row.drawTime}</div>
-                          <div><strong>Match Type:</strong> {row.matchType}</div>
-                          <div><strong>Hit Bias:</strong> {row.latestHitType}</div>
-                          <div><strong>State Strength:</strong> {row.stateStrengthScore}</div>
-                          <div><strong>Forecast Score:</strong> {row.forecastScore}</div>
+                          <div><strong>Base Score:</strong> {row.forecastScore}</div>
+                          <div><strong>Learning Boost:</strong> {row.learningBoost}</div>
+                          <div><strong>Boosted Score:</strong> {row.boostedScore}</div>
                           <div><strong>Confidence:</strong> {row.confidenceTier}</div>
-                          <div><strong>Last Hit:</strong> {row.lastHitDate || '—'}</div>
+                          <div><strong>Learning Tier:</strong> {row.learningTier}</div>
                         </div>
 
                         <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
-                          Reasons: {Array.isArray(row.reasons) ? row.reasons.join('; ') : '—'}
+                          Reasons: {Array.isArray(row.learningReasons) && row.learningReasons.length ? row.learningReasons.join('; ') : 'No extra boost'}
                         </div>
                       </div>
                     ))}
@@ -352,7 +277,7 @@ export default function ForecastBoardPage() {
               ))}
             </div>
           ) : (
-            <p>No historical state recommendations are available yet for the latest unresolved dream items.</p>
+            <p>No boosted state recommendations are available yet.</p>
           )}
         </section>
       </section>

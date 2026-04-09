@@ -1,9 +1,98 @@
+// @ts-nocheck
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
+import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  getBacktestSummaryForDream,
+  listBacktestDreams,
+  listPersonalHitMappings,
+} from '@/lib/firebase/firestore';
+import {
+  buildGroupedTermDictionary,
+  flattenDictionary,
+  type PersonalMappingRow,
+} from '@/lib/intelligence/termDictionary';
+import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
+import { buildEvidencePromotionModel } from '@/lib/intelligence/evidencePromotion';
 
 export default function BacktestingEvidencePage() {
+  const { user } = useAuth();
+
+  const [mappingRows, setMappingRows] = useState<PersonalMappingRow[]>([]);
+  const [backtestSummaries, setBacktestSummaries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [termSearch, setTermSearch] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      if (!user) {
+        setMappingRows([]);
+        setBacktestSummaries([]);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const [liveMappings, dreams] = await Promise.all([
+          listPersonalHitMappings(user.uid),
+          listBacktestDreams(user.uid),
+        ]);
+
+        const summaries = await Promise.all(
+          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
+        );
+
+        setMappingRows(liveMappings as PersonalMappingRow[]);
+        setBacktestSummaries(summaries.filter(Boolean));
+      } catch (err) {
+        console.error(err);
+        setError('Could not load Evidence Rules.');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void load();
+  }, [user]);
+
+  const flat = useMemo(() => {
+    const grouped = buildGroupedTermDictionary(mappingRows);
+    return flattenDictionary(grouped);
+  }, [mappingRows]);
+
+  const familyAnalytics = useMemo(() => buildFamilyAnalytics(flat), [flat]);
+  const promotionModel = useMemo(
+    () =>
+      buildEvidencePromotionModel({
+        liveRows: flat,
+        backtestSummaries,
+        familyAnalytics,
+      }),
+    [flat, backtestSummaries, familyAnalytics]
+  );
+
+  const filteredTerms = useMemo(() => {
+    const q = termSearch.trim().toLowerCase();
+    if (!q) return promotionModel.termCandidates;
+    return promotionModel.termCandidates.filter((row: any) =>
+      row.term.toLowerCase().includes(q)
+    );
+  }, [promotionModel.termCandidates, termSearch]);
+
+  const filteredCombos = useMemo(() => {
+    const q = termSearch.trim().toLowerCase();
+    if (!q) return promotionModel.comboCandidates;
+    return promotionModel.comboCandidates.filter((row: any) =>
+      row.term.toLowerCase().includes(q) ||
+      row.number.toLowerCase().includes(q) ||
+      row.state.toLowerCase().includes(q)
+    );
+  }, [promotionModel.comboCandidates, termSearch]);
+
   return (
     <main
       style={{
@@ -15,7 +104,6 @@ export default function BacktestingEvidencePage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -30,113 +118,159 @@ export default function BacktestingEvidencePage() {
             <div className="page-header">
               <h1>Evidence Rules</h1>
               <p>
-                These rules define how historical backtesting should strengthen the dictionaries
-                and improve the prediction model without confusing research with live prediction.
+                Weighted promotion engine for Universal Dictionary learning,
+                Personal Dictionary strengthening, and backtest-to-live boosts.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/backtesting" className="btn-secondary">
-                Backtesting Portal
+              <Link href="/backtesting/archive" className="btn-secondary">
+                Backtest Archive
               </Link>
-              <Link href="/fell-before" className="btn-secondary">
-                As They Fell Before
+              <Link href="/forecast-board" className="btn-secondary">
+                Forecast Board
               </Link>
-            </div>
-          </div>
-        </section>
-
-        <section
-          style={{
-            display: 'grid',
-            gap: '16px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          }}
-        >
-          <section className="journal-card">
-            <h2 style={{ marginTop: 0 }}>Universal Dream Dictionary</h2>
-            <p style={{ color: 'var(--ink-light)', lineHeight: 1.7 }}>
-              Every parsed historical dream should strengthen the Universal Dream Dictionary.
-              This means term-to-number relationships can accumulate evidence even before a hit
-              is confirmed.
-            </p>
-
-            <div className="journal-card-flat">
-              <strong>Evidence Sources</strong>
-              <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                Parsed terms, parsed numbers, dream date, and research source metadata.
-              </p>
-            </div>
-          </section>
-
-          <section className="journal-card">
-            <h2 style={{ marginTop: 0 }}>Personal As They Fell Before Dictionary</h2>
-            <p style={{ color: 'var(--ink-light)', lineHeight: 1.7 }}>
-              Confirmed historical hits should strengthen the Personal Dictionary. This is the
-              state-specific memory layer that tells you where numbers actually fell for a term.
-            </p>
-
-            <div className="journal-card-flat">
-              <strong>Evidence Sources</strong>
-              <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                Straight hits, boxed hits, state, draw, hit timing, and repeated state outcomes.
-              </p>
-            </div>
-          </section>
-        </section>
-
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Recommended Weighting Model</h1>
-            <p>
-              This is the evidence model we can wire into the backtesting engine next.
-            </p>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gap: '12px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-              marginTop: '12px',
-            }}
-          >
-            <div className="journal-card-flat">
-              <strong>Parsed Dream Evidence</strong>
-              <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                Light-weight evidence for the Universal Dream Dictionary.
-              </p>
-            </div>
-
-            <div className="journal-card-flat">
-              <strong>Boxed Hit Evidence</strong>
-              <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                Medium-weight evidence for both dictionary systems.
-              </p>
-            </div>
-
-            <div className="journal-card-flat">
-              <strong>Straight Hit Evidence</strong>
-              <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                Strongest evidence for both dictionary systems and state confidence.
-              </p>
-            </div>
-
-            <div className="journal-card-flat">
-              <strong>Repeated State Hits</strong>
-              <p style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                Highest value for state-specific playlists and future forecasting.
-              </p>
+              <Link href="/chat" className="btn-secondary">
+                Intelligence Chat
+              </Link>
             </div>
           </div>
         </section>
 
         <section className="journal-card-flat">
-          <strong>Shell Note</strong>
-          <p style={{ marginTop: '10px', color: 'var(--ink-light)', lineHeight: 1.7 }}>
-            In the next build, these rules will become actual scoring and promotion logic used by
-            the replay engine, the State Playlist, and the Forecast Board.
-          </p>
+          <label className="journal-label" htmlFor="termSearch">Filter Candidates</label>
+          <input
+            id="termSearch"
+            className="journal-input"
+            value={termSearch}
+            onChange={(e) => setTermSearch(e.target.value)}
+            placeholder="Ex: dancing, 330, Illinois"
+          />
+        </section>
+
+        <section
+          className="journal-card-flat"
+          style={{
+            display: 'grid',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          <div>
+            <div className="journal-label">Universal Ready</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.summary.universalReady}</div>
+          </div>
+          <div>
+            <div className="journal-label">Personal Ready</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.summary.personalReady}</div>
+          </div>
+          <div>
+            <div className="journal-label">Backtest State Signals</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.learningSignals.topBacktestStates.length}</div>
+          </div>
+          <div>
+            <div className="journal-label">Backtest Term Signals</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.learningSignals.topBacktestTerms.length}</div>
+          </div>
+        </section>
+
+        {loading ? (
+          <section className="journal-card"><p>Loading Evidence Rules...</p></section>
+        ) : null}
+
+        {error ? (
+          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
+            {error}
+          </section>
+        ) : null}
+
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Promotion Logic</h1>
+            <p>How the app decides what should be strengthened.</p>
+          </div>
+
+          <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+            {[
+              'Universal Dictionary score = total hits + state spread + straight/boxed weight + repeated backtest term support + family support.',
+              'Personal Dictionary score = hit count + straight weight + boxed weight + state strength + repeated backtest state support + recency + family support.',
+              'Straight hits are weighted more heavily than boxed hits.',
+              'Repeated best-term and best-state backtest signals boost live candidates.',
+              'Family memory creates additional promotion support when related boxed families repeat.',
+            ].map((item) => (
+              <div key={item} className="journal-card-flat">{item}</div>
+            ))}
+          </div>
+        </section>
+
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Universal Dictionary Candidates</h1>
+            <p>Terms most ready to be promoted strongly into universal learning memory.</p>
+          </div>
+
+          {filteredTerms.length ? (
+            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+              {filteredTerms.slice(0, 15).map((row: any) => (
+                <div key={row.term} className="journal-card-flat">
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '8px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    }}
+                  >
+                    <div><strong>Term:</strong> {row.term}</div>
+                    <div><strong>Tier:</strong> {row.promotionTier}</div>
+                    <div><strong>Score:</strong> {row.promotionScore}</div>
+                    <div><strong>Hits:</strong> {row.totalHits}</div>
+                    <div><strong>States:</strong> {row.stateCount}</div>
+                    <div><strong>Numbers:</strong> {row.numberCount}</div>
+                    <div><strong>Backtest Term Boost:</strong> {row.backtestTermBoost}</div>
+                    <div><strong>Family Boost:</strong> {row.familyBoost}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p>No universal promotion candidates found.</p>
+          )}
+        </section>
+
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Personal Dictionary Candidates</h1>
+            <p>State-specific term-number patterns most ready for strong personal promotion.</p>
+          </div>
+
+          {filteredCombos.length ? (
+            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+              {filteredCombos.slice(0, 20).map((row: any, index: number) => (
+                <div key={`${row.term}-${row.number}-${row.state}-${index}`} className="journal-card-flat">
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '8px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    }}
+                  >
+                    <div><strong>Term:</strong> {row.term}</div>
+                    <div><strong>Number:</strong> {row.number}</div>
+                    <div><strong>State:</strong> {row.state}</div>
+                    <div><strong>Tier:</strong> {row.promotionTier}</div>
+                    <div><strong>Score:</strong> {row.promotionScore}</div>
+                    <div><strong>Game:</strong> {row.gameType}</div>
+                    <div><strong>Backtest State Boost:</strong> {row.backtestStateBoost}</div>
+                    <div><strong>Backtest Term Boost:</strong> {row.backtestTermBoost}</div>
+                    <div><strong>Family Boost:</strong> {row.familyBoost}</div>
+                    <div><strong>Recency Boost:</strong> {row.recencyBoost}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p>No personal promotion candidates found.</p>
+          )}
         </section>
       </section>
     </main>
