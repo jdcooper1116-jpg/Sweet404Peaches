@@ -6,13 +6,18 @@ import { useEffect, useMemo, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
+  getBacktestSummaryForDream,
   getLatestDreamEntry,
   listActiveDreamWindows,
+  listBacktestDreams,
   listDreamHits,
   listPersonalHitMappings,
 } from '@/lib/firebase/firestore';
-import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
+import { buildGroupedTermDictionary, flattenDictionary, type PersonalMappingRow } from '@/lib/intelligence/termDictionary';
 import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
+import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
+import { applyBacktestLearningBoost, buildEvidencePromotionModel } from '@/lib/intelligence/evidencePromotion';
+import { buildDailyOpsAlerts, diagnoseLatestDream } from '@/lib/intelligence/analystEngine';
 
 export default function DailyOpsPage() {
   const { user } = useAuth();
@@ -20,6 +25,7 @@ export default function DailyOpsPage() {
   const [mappingRows, setMappingRows] = useState<PersonalMappingRow[]>([]);
   const [activeWindows, setActiveWindows] = useState<any[]>([]);
   const [dreamHits, setDreamHits] = useState<any[]>([]);
+  const [backtestSummaries, setBacktestSummaries] = useState<any[]>([]);
   const [latestDream, setLatestDream] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -30,22 +36,29 @@ export default function DailyOpsPage() {
         setMappingRows([]);
         setActiveWindows([]);
         setDreamHits([]);
+        setBacktestSummaries([]);
         setLatestDream(null);
         setLoading(false);
         return;
       }
 
       try {
-        const [mappings, windows, hits, latest] = await Promise.all([
+        const [mappings, windows, hits, dreams, latest] = await Promise.all([
           listPersonalHitMappings(user.uid),
           listActiveDreamWindows(user.uid),
           listDreamHits(user.uid),
+          listBacktestDreams(user.uid),
           getLatestDreamEntry(user.uid),
         ]);
+
+        const summaries = await Promise.all(
+          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
+        );
 
         setMappingRows(mappings as PersonalMappingRow[]);
         setActiveWindows(windows);
         setDreamHits(hits);
+        setBacktestSummaries(summaries.filter(Boolean));
         setLatestDream(latest);
       } catch (err) {
         console.error(err);
@@ -58,6 +71,13 @@ export default function DailyOpsPage() {
     void load();
   }, [user]);
 
+  const flat = useMemo(() => {
+    const grouped = buildGroupedTermDictionary(mappingRows);
+    return flattenDictionary(grouped);
+  }, [mappingRows]);
+
+  const familyAnalytics = useMemo(() => buildFamilyAnalytics(flat), [flat]);
+
   const forecast = useMemo(
     () =>
       buildLatestDreamForecast({
@@ -69,40 +89,47 @@ export default function DailyOpsPage() {
     [latestDream, activeWindows, dreamHits, mappingRows]
   );
 
-  const alerts = useMemo(() => {
-    const items: string[] = [];
+  const boosted = useMemo(
+    () =>
+      applyBacktestLearningBoost({
+        recommendationRows: forecast.recommendationRows,
+        backtestSummaries,
+        familyAnalytics,
+      }),
+    [forecast.recommendationRows, backtestSummaries, familyAnalytics]
+  );
 
-    if (!latestDream) {
-      items.push('No latest dream is saved yet.');
-      return items;
-    }
+  const promotionModel = useMemo(
+    () =>
+      buildEvidencePromotionModel({
+        liveRows: flat,
+        backtestSummaries,
+        familyAnalytics,
+      }),
+    [flat, backtestSummaries, familyAnalytics]
+  );
 
-    if (!forecast.unresolvedWindows.length) {
-      items.push('No unresolved watch items remain from the latest dream.');
-    } else {
-      items.push(`${forecast.unresolvedWindows.length} unresolved watch item(s) remain live from the latest dream.`);
-    }
+  const alerts = useMemo(
+    () =>
+      buildDailyOpsAlerts({
+        latestDream,
+        forecast,
+        boosted,
+        promotionModel,
+      }),
+    [latestDream, forecast, boosted, promotionModel]
+  );
 
-    if (forecast.resolvedHitsForLatestDream.length) {
-      items.push(`${forecast.resolvedHitsForLatestDream.length} hit event(s) have already been resolved and removed from the active forecast.`);
-    } else {
-      items.push('No resolved hit events have been logged yet for the latest dream.');
-    }
-
-    if (forecast.recommendationStateGroups[0]) {
-      items.push(
-        `${forecast.recommendationStateGroups[0].state} is the strongest state to monitor next with ${forecast.recommendationStateGroups[0].confidenceTier} confidence.`
-      );
-    }
-
-    if (forecast.recommendationRows[0]) {
-      items.push(
-        `${forecast.recommendationRows[0].number} in ${forecast.recommendationRows[0].state} is the top unresolved watch right now.`
-      );
-    }
-
-    return items;
-  }, [latestDream, forecast]);
+  const diagnosis = useMemo(
+    () =>
+      diagnoseLatestDream({
+        latestDream,
+        forecast,
+        boosted,
+        dreamHits,
+      }),
+    [latestDream, forecast, boosted, dreamHits]
+  );
 
   return (
     <main
@@ -115,7 +142,6 @@ export default function DailyOpsPage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -130,20 +156,15 @@ export default function DailyOpsPage() {
             <div className="page-header">
               <h1>Daily Ops</h1>
               <p>
-                Your command-center briefing for unresolved live watches, resolved hits, next-state recommendations, and confidence levels.
+                Command-center briefing for unresolved live watches, boosted state recommendations,
+                evidence promotions, and latest-dream diagnostics.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/forecast-board" className="btn-secondary">
-                Forecast Board
-              </Link>
-              <Link href="/chat" className="btn-secondary">
-                Intelligence Chat
-              </Link>
-              <Link href="/hits" className="btn-secondary">
-                Hits Detector
-              </Link>
+              <Link href="/forecast-board" className="btn-secondary">Forecast Board</Link>
+              <Link href="/backtesting/evidence" className="btn-secondary">Evidence Rules</Link>
+              <Link href="/chat" className="btn-secondary">Intelligence Chat</Link>
             </div>
           </div>
         </section>
@@ -156,56 +177,16 @@ export default function DailyOpsPage() {
             gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
           }}
         >
-          <div>
-            <div className="journal-label">Latest Dream Date</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{latestDream?.dreamDate ?? '—'}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Latest Dream Terms</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.latestDreamTerms.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Unresolved Live Watches</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.unresolvedWindows.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Resolved Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Top Next State</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>
-              {forecast.recommendationStateGroups[0]?.state ?? '—'}
-            </div>
-          </div>
-
-          <div>
-            <div className="journal-label">Top State Confidence</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>
-              {forecast.recommendationStateGroups[0]?.confidenceTier ?? '—'}
-            </div>
-          </div>
+          <div><div className="journal-label">Latest Dream Date</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{latestDream?.dreamDate ?? '—'}</div></div>
+          <div><div className="journal-label">Unresolved Live Watches</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.unresolvedWindows.length}</div></div>
+          <div><div className="journal-label">Boosted States</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{boosted.boostedStateGroups.length}</div></div>
+          <div><div className="journal-label">Universal Ready</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.summary.universalReady}</div></div>
+          <div><div className="journal-label">Personal Ready</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{promotionModel.summary.personalReady}</div></div>
         </section>
 
-        {loading ? (
-          <section className="journal-card">
-            <p>Loading Daily Ops...</p>
-          </section>
-        ) : null}
-
+        {loading ? <section className="journal-card"><p>Loading Daily Ops...</p></section> : null}
         {error ? (
-          <section
-            className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
-          >
+          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
             {error}
           </section>
         ) : null}
@@ -213,49 +194,73 @@ export default function DailyOpsPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Operational Alerts</h1>
-            <p>Highest-priority signals from your current live dream cycle.</p>
+            <p>Highest-priority system signals right now.</p>
           </div>
-
           <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
             {alerts.map((alert) => (
-              <div key={alert} className="journal-card-flat">
-                {alert}
-              </div>
+              <div key={alert} className="journal-card-flat">{alert}</div>
             ))}
           </div>
         </section>
 
         <section className="journal-card">
           <div className="page-header">
-            <h1>Top Unresolved Watches</h1>
-            <p>Best current unresolved recommendations from the latest dream.</p>
+            <h1>Latest Dream Diagnosis</h1>
+            <p>What the system thinks is happening with the current live dream cycle.</p>
           </div>
 
-          {forecast.recommendationRows.length ? (
-            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
-              {forecast.recommendationRows.slice(0, 8).map((row) => (
-                <div key={`${row.term}-${row.number}-${row.state}-${row.gameType}-${row.drawTime}`} className="journal-card-flat">
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: '8px',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                    }}
-                  >
-                    <div><strong>Number:</strong> {row.number}</div>
-                    <div><strong>State:</strong> {row.state}</div>
-                    <div><strong>Term:</strong> {row.term}</div>
-                    <div><strong>Game:</strong> {row.gameType}</div>
-                    <div><strong>Forecast Score:</strong> {row.forecastScore}</div>
-                    <div><strong>Confidence:</strong> {row.confidenceTier}</div>
-                    <div><strong>Match Type:</strong> {row.matchType}</div>
-                  </div>
+          <div className="journal-card-flat" style={{ marginTop: '12px' }}>
+            <strong>Status: {diagnosis.status}</strong>
+            <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
+              {diagnosis.findings.map((item: string) => (
+                <div key={item}>{item}</div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section
+          style={{
+            display: 'grid',
+            gap: '24px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          }}
+        >
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Boosted State</h1>
+              <p>Backtest-informed next-state recommendation.</p>
+            </div>
+
+            {boosted.boostedStateGroups[0] ? (
+              <div className="journal-card-flat" style={{ marginTop: '12px' }}>
+                <strong>{boosted.boostedStateGroups[0].state}</strong>
+                <div style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
+                  Boosted Score: {boosted.boostedStateGroups[0].boostedScore} • Learning Tier: {boosted.boostedStateGroups[0].topLearningTier}
+                </div>
+              </div>
+            ) : <p>No boosted state recommendations yet.</p>}
+          </section>
+
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Promotion Signals</h1>
+              <p>Best current learning candidates.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '8px', marginTop: '12px' }}>
+              {promotionModel.termCandidates.slice(0, 3).map((row: any) => (
+                <div key={row.term} className="journal-card-flat">
+                  {row.term} — {row.promotionTier} ({row.promotionScore})
+                </div>
+              ))}
+              {promotionModel.comboCandidates.slice(0, 3).map((row: any, index: number) => (
+                <div key={`${row.term}-${row.number}-${row.state}-${index}`} className="journal-card-flat">
+                  {row.term} → {row.number} in {row.state} — {row.promotionTier} ({row.promotionScore})
                 </div>
               ))}
             </div>
-          ) : (
-            <p>No unresolved watch recommendations are available yet.</p>
-          )}
+          </section>
         </section>
       </section>
     </main>

@@ -20,10 +20,8 @@ import {
 } from '@/lib/intelligence/termDictionary';
 import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
 import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
-import {
-  applyBacktestLearningBoost,
-  buildEvidencePromotionModel,
-} from '@/lib/intelligence/evidencePromotion';
+import { applyBacktestLearningBoost, buildEvidencePromotionModel } from '@/lib/intelligence/evidencePromotion';
+import { buildPerformanceInsights, compareEntities, diagnoseLatestDream } from '@/lib/intelligence/analystEngine';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -49,7 +47,7 @@ export default function ChatPage() {
     {
       role: 'assistant',
       content:
-        'Welcome to the Sweet404Peaches Intelligence Chat. I can now answer questions about evidence promotion, Universal Dictionary candidates, Personal Dictionary candidates, learning boosts, families, and live forecasts.',
+        'Welcome to the Sweet404Peaches Intelligence Chat. I can now compare states, compare terms, diagnose the latest dream, and explain evidence promotion and learning boosts.',
     },
   ]);
 
@@ -132,11 +130,66 @@ export default function ChatPage() {
     [flat, backtestSummaries, familyAnalytics]
   );
 
+  const insights = useMemo(
+    () =>
+      buildPerformanceInsights({
+        dreamHits,
+        personalRows: mappingRows,
+        backtestSummaries,
+      }),
+    [dreamHits, mappingRows, backtestSummaries]
+  );
+
+  const diagnosis = useMemo(
+    () =>
+      diagnoseLatestDream({
+        latestDream,
+        forecast,
+        boosted,
+        dreamHits,
+      }),
+    [latestDream, forecast, boosted, dreamHits]
+  );
+
   function answerQuestion(question: string) {
     const q = normalizeText(question);
 
     if (!flat.length && !boosted.boostedRows.length) {
       return 'There is not enough live or backtest evidence loaded yet for a strong answer.';
+    }
+
+    if (q.startsWith('compare state ')) {
+      const body = question.replace(/^compare state\s+/i, '');
+      const parts = body.split(' vs ').map((s) => s.trim()).filter(Boolean);
+      if (parts.length !== 2) return 'Use compare state like this: compare state Illinois vs Georgia';
+      const cmp = compareEntities({
+        personalRows: mappingRows,
+        entityType: 'state',
+        a: parts[0],
+        b: parts[1],
+      });
+      return `${cmp.left.label}: ${cmp.left.hits} hits, ${cmp.left.straight} straight, ${cmp.left.boxed} boxed, ${cmp.left.uniqueNumbers} numbers. ${cmp.right.label}: ${cmp.right.hits} hits, ${cmp.right.straight} straight, ${cmp.right.boxed} boxed, ${cmp.right.uniqueNumbers} numbers.`;
+    }
+
+    if (q.startsWith('compare term ')) {
+      const body = question.replace(/^compare term\s+/i, '');
+      const parts = body.split(' vs ').map((s) => s.trim()).filter(Boolean);
+      if (parts.length !== 2) return 'Use compare term like this: compare term dancing vs man';
+      const cmp = compareEntities({
+        personalRows: mappingRows,
+        entityType: 'term',
+        a: parts[0],
+        b: parts[1],
+      });
+      return `${cmp.left.label}: ${cmp.left.hits} hits, ${cmp.left.straight} straight, ${cmp.left.boxed} boxed, ${cmp.left.uniqueStates} states. ${cmp.right.label}: ${cmp.right.hits} hits, ${cmp.right.straight} straight, ${cmp.right.boxed} boxed, ${cmp.right.uniqueStates} states.`;
+    }
+
+    if (q.includes('diagnose latest dream') || q.includes('why is my latest dream')) {
+      return `Latest dream diagnosis: ${diagnosis.status}. ${diagnosis.findings.join(' ')}`;
+    }
+
+    if (q.includes('performance summary')) {
+      return `Performance summary: average days to hit ${insights.avgDaysToHit}; fastest hit day ${insights.fastestHitDay ?? '—'}; slowest hit day ${insights.slowestHitDay ?? '—'}; top state ${insights.topState?.state ?? '—'}; top term ${insights.topTerm?.term ?? '—'}; top game ${insights.topGame?.gameType ?? '—'}.`;
     }
 
     if (q.includes('universal dictionary') || q.includes('universal candidates')) {
@@ -155,16 +208,12 @@ export default function ChatPage() {
         .join('; ')}.`;
     }
 
-    if (q.includes('learning boost') || q.includes('what are backtests teaching') || q.includes('backtest boost')) {
+    if (q.includes('learning boost') || q.includes('backtest boost')) {
       const top = boosted.boostedRows.slice(0, 5);
       if (!top.length) return 'I do not yet see boosted live recommendations.';
       return `Top backtest-to-live learning boosts: ${top
         .map((row: any) => `${row.number} in ${row.state} (${row.term}) → boost ${row.learningBoost}, boosted score ${row.boostedScore}`)
         .join('; ')}.`;
-    }
-
-    if (q.includes('promotion rules') || q.includes('evidence rules')) {
-      return 'Promotion logic uses weighted hits, straight vs boxed weight, state strength, repeated backtest best-state and best-term support, family repetition, and recency. Universal promotion is term-based; Personal promotion is term-number-state based.';
     }
 
     if (q.includes('hot family') || q.includes('strongest family')) {
@@ -187,10 +236,10 @@ export default function ChatPage() {
     }
 
     if (q.includes('help')) {
-      return 'Try asking: "universal dictionary", "personal dictionary", "learning boost", "promotion rules", "hot family", "which states should I watch next", or "latest dream".';
+      return 'Try asking: compare state Illinois vs Georgia, compare term dancing vs man, diagnose latest dream, performance summary, universal dictionary, personal dictionary, learning boost, or which states should I watch next.';
     }
 
-    return 'I can answer questions about evidence promotion, Universal Dictionary candidates, Personal Dictionary candidates, learning boosts, hot families, and strongest next states.';
+    return 'I can answer questions about compare mode, diagnostic mode, performance summary, evidence promotion, learning boosts, hot families, and strongest next states.';
   }
 
   function handleAsk(question: string) {
@@ -209,13 +258,13 @@ export default function ChatPage() {
   }
 
   const quickPrompts = [
+    'compare state Illinois vs Georgia',
+    'compare term dancing vs man',
+    'diagnose latest dream',
+    'performance summary',
     'universal dictionary',
     'personal dictionary',
-    'learning boost',
-    'promotion rules',
-    'hot family',
     'which states should I watch next',
-    'latest dream',
   ];
 
   return (
@@ -243,25 +292,18 @@ export default function ChatPage() {
             <div className="page-header">
               <h1>Sweet404Peaches Intelligence Chat</h1>
               <p>
-                Ask evidence-based questions about promotion rules, Universal and Personal Dictionary candidates, family intelligence, and backtest-to-live learning boosts.
+                Ask evidence-based questions about compare mode, diagnostic mode, performance, promotion rules, and strongest next-state recommendations.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/backtesting/evidence" className="btn-secondary">
-                Evidence Rules
-              </Link>
-              <Link href="/forecast-board" className="btn-secondary">
-                Forecast Board
-              </Link>
+              <Link href="/backtesting/evidence" className="btn-secondary">Evidence Rules</Link>
+              <Link href="/performance" className="btn-secondary">Performance</Link>
             </div>
           </div>
         </section>
 
-        {loading ? (
-          <section className="journal-card"><p>Loading intelligence chat...</p></section>
-        ) : null}
-
+        {loading ? <section className="journal-card"><p>Loading intelligence chat...</p></section> : null}
         {error ? (
           <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
             {error}
@@ -271,7 +313,7 @@ export default function ChatPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Quick Prompts</h1>
-            <p>Click one to test the evidence-aware analyst engine.</p>
+            <p>Click one to test compare mode and diagnostic mode.</p>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '12px' }}>
@@ -291,7 +333,7 @@ export default function ChatPage() {
         <section className="journal-card" style={{ display: 'grid', gap: '16px' }}>
           <div className="page-header">
             <h1>Conversation</h1>
-            <p>The assistant answers from evidence promotion logic, family intelligence, and boosted live forecast memory.</p>
+            <p>The assistant answers from evidence promotion, performance metrics, compare mode, and boosted live forecast memory.</p>
           </div>
 
           <div style={{ display: 'grid', gap: '12px' }}>
@@ -322,7 +364,7 @@ export default function ChatPage() {
               rows={4}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder='Try: universal dictionary, personal dictionary, learning boost, or promotion rules'
+              placeholder='Try: compare state Illinois vs Georgia, diagnose latest dream, or performance summary'
             />
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>

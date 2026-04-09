@@ -13,8 +13,9 @@ import {
   listPersonalHitMappings,
 } from '@/lib/firebase/firestore';
 import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
+import { buildPerformanceInsights } from '@/lib/intelligence/analystEngine';
 
-function getDreamEntryId(row: any): string {
+function getDreamEntryId(row: any) {
   return String(row?.dreamEntryId ?? row?.sourceDreamEntryId ?? row?.id ?? '');
 }
 
@@ -69,11 +70,11 @@ export default function PerformancePage() {
   const liveMetrics = useMemo(() => {
     const trackedDreamIds = new Set(activeWindows.map(getDreamEntryId).filter(Boolean));
     const hitDreamIds = new Set(
-      dreamHits.map((hit) => String(hit?.sourceDreamEntryId ?? '')).filter(Boolean)
+      dreamHits.map((hit: any) => String(hit?.sourceDreamEntryId ?? '')).filter(Boolean)
     );
 
-    const straight = dreamHits.filter((hit) => hit.hitType === 'straight').length;
-    const boxed = dreamHits.filter((hit) => hit.hitType === 'boxed').length;
+    const straight = dreamHits.filter((hit: any) => hit.hitType === 'straight').length;
+    const boxed = dreamHits.filter((hit: any) => hit.hitType === 'boxed').length;
 
     const trackedDreamCount = trackedDreamIds.size;
     const hitDreamCount = hitDreamIds.size;
@@ -92,44 +93,15 @@ export default function PerformancePage() {
     };
   }, [activeWindows, dreamHits, mappingRows]);
 
-  const backtestMetrics = useMemo(() => {
-    return backtestSummaries.reduce(
-      (acc, row: any) => {
-        acc.completed += 1;
-        acc.totalHits += Number(row.totalHits ?? 0);
-        acc.straight += Number(row.straightHits ?? 0);
-        acc.boxed += Number(row.boxedHits ?? 0);
-        return acc;
-      },
-      { completed: 0, totalHits: 0, straight: 0, boxed: 0 }
-    );
-  }, [backtestSummaries]);
-
-  const topStates = useMemo(() => {
-    const map = new Map<string, { hits: number; straight: number; boxed: number }>();
-
-    for (const row of mappingRows) {
-      const state = String(row.state ?? 'Unknown');
-      if (!map.has(state)) {
-        map.set(state, { hits: 0, straight: 0, boxed: 0 });
-      }
-
-      const current = map.get(state)!;
-      current.hits += Number(row.hitCount ?? 1);
-      current.straight += Number(row.straightCount ?? 0);
-      current.boxed += Number(row.boxedCount ?? 0);
-    }
-
-    return Array.from(map.entries())
-      .map(([state, value]) => ({
-        state,
-        hits: value.hits,
-        straight: value.straight,
-        boxed: value.boxed,
-      }))
-      .sort((a, b) => b.hits - a.hits)
-      .slice(0, 10);
-  }, [mappingRows]);
+  const insights = useMemo(
+    () =>
+      buildPerformanceInsights({
+        dreamHits,
+        personalRows: mappingRows,
+        backtestSummaries,
+      }),
+    [dreamHits, mappingRows, backtestSummaries]
+  );
 
   return (
     <main
@@ -142,7 +114,6 @@ export default function PerformancePage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -157,36 +128,20 @@ export default function PerformancePage() {
             <div className="page-header">
               <h1>Performance</h1>
               <p>
-                A truth page for live-mode hit performance and historical backtest performance.
+                Truth dashboard for live hit performance, backtest performance, timing, and strongest state/term/game signals.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/daily-ops" className="btn-secondary">
-                Daily Ops
-              </Link>
-              <Link href="/backtesting/archive" className="btn-secondary">
-                Backtest Archive
-              </Link>
+              <Link href="/daily-ops" className="btn-secondary">Daily Ops</Link>
+              <Link href="/backtesting/evidence" className="btn-secondary">Evidence Rules</Link>
             </div>
           </div>
         </section>
 
-        {loading ? (
-          <section className="journal-card">
-            <p>Loading Performance...</p>
-          </section>
-        ) : null}
-
+        {loading ? <section className="journal-card"><p>Loading Performance...</p></section> : null}
         {error ? (
-          <section
-            className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
-          >
+          <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
             {error}
           </section>
         ) : null}
@@ -194,7 +149,7 @@ export default function PerformancePage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Live-Mode Metrics</h1>
-            <p>What the active dream engine is producing right now.</p>
+            <p>How the active dream engine is performing.</p>
           </div>
 
           <div
@@ -205,47 +160,59 @@ export default function PerformancePage() {
               marginTop: '12px',
             }}
           >
-            <div className="journal-card-flat">
-              <div className="journal-label">Tracked Live Dreams</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.trackedDreamCount}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Dreams With Hits</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.hitDreamCount}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Hit Rate</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.hitRate}%</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Hit Events</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.totalHitEvents}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Straight Hits</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.straight}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Boxed Hits</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.boxed}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Dictionary Rows</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.dictionaryRows}</div>
-            </div>
+            <div className="journal-card-flat"><div className="journal-label">Tracked Live Dreams</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.trackedDreamCount}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Dreams With Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.hitDreamCount}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Hit Rate</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.hitRate}%</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Hit Events</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.totalHitEvents}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Straight Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.straight}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Boxed Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{liveMetrics.boxed}</div></div>
           </div>
+        </section>
+
+        <section
+          style={{
+            display: 'grid',
+            gap: '24px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          }}
+        >
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Timing Metrics</h1>
+              <p>How fast hits tend to arrive.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              <div className="journal-card-flat">Average Days to Hit: {insights.avgDaysToHit}</div>
+              <div className="journal-card-flat">Fastest Hit Day: {insights.fastestHitDay ?? '—'}</div>
+              <div className="journal-card-flat">Slowest Hit Day: {insights.slowestHitDay ?? '—'}</div>
+            </div>
+          </section>
+
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Signals</h1>
+              <p>Strongest current signals across live and research memory.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              <div className="journal-card-flat">
+                Top State: {insights.topState ? `${insights.topState.state} (${insights.topState.hits} hits)` : '—'}
+              </div>
+              <div className="journal-card-flat">
+                Top Term: {insights.topTerm ? `${insights.topTerm.term} (${insights.topTerm.hits} hits)` : '—'}
+              </div>
+              <div className="journal-card-flat">
+                Top Game: {insights.topGame ? `${insights.topGame.gameType} (${insights.topGame.hits} hits)` : '—'}
+              </div>
+            </div>
+          </section>
         </section>
 
         <section className="journal-card">
           <div className="page-header">
             <h1>Backtest Metrics</h1>
-            <p>How your historical research lane is performing overall.</p>
+            <p>How the research lane is performing overall.</p>
           </div>
 
           <div
@@ -256,48 +223,11 @@ export default function PerformancePage() {
               marginTop: '12px',
             }}
           >
-            <div className="journal-card-flat">
-              <div className="journal-label">Completed Backtests</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{backtestMetrics.completed}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Backtest Hits</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{backtestMetrics.totalHits}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Backtest Straight Hits</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{backtestMetrics.straight}</div>
-            </div>
-
-            <div className="journal-card-flat">
-              <div className="journal-label">Backtest Boxed Hits</div>
-              <div style={{ fontSize: '28px', fontWeight: 700 }}>{backtestMetrics.boxed}</div>
-            </div>
+            <div className="journal-card-flat"><div className="journal-label">Completed Backtests</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{insights.backtestTotals.completed}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Backtest Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{insights.backtestTotals.totalHits}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Backtest Straight Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{insights.backtestTotals.straight}</div></div>
+            <div className="journal-card-flat"><div className="journal-label">Backtest Boxed Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{insights.backtestTotals.boxed}</div></div>
           </div>
-        </section>
-
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Top Performing States</h1>
-            <p>States with the heaviest accumulated hit footprint in your personal dictionary.</p>
-          </div>
-
-          {topStates.length ? (
-            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
-              {topStates.map((row, index) => (
-                <div key={row.state} className="journal-card-flat">
-                  <strong>#{index + 1} {row.state}</strong>
-                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                    Hits: {row.hits} • Straight: {row.straight} • Boxed: {row.boxed}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>No state performance data yet.</p>
-          )}
         </section>
       </section>
     </main>
