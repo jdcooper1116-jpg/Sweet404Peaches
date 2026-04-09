@@ -9,6 +9,7 @@ import {
   bulkCreateBacktestResults,
   listBacktestDreams,
   listBacktestResultsForDream,
+  runAutoReplayForBacktestDream,
 } from '@/lib/firebase/firestore';
 
 export default function BacktestingAutoFetchPage() {
@@ -117,9 +118,10 @@ export default function BacktestingAutoFetchPage() {
 
     try {
       await bulkCreateBacktestResults(user.uid, selectedDreamId, fetchedRows);
+      await runAutoReplayForBacktestDream(user.uid, selectedDreamId);
       const rows = await listBacktestResultsForDream(selectedDreamId);
       setExistingRows(rows);
-      setMessage(`Saved ${fetchedRows.length} fetched row(s) to this backtest dream.`);
+      setMessage(`Saved ${fetchedRows.length} fetched row(s) and ran replay automatically.`);
     } catch (err: any) {
       console.error(err);
       setError(err?.message || 'Could not save fetched rows.');
@@ -194,7 +196,7 @@ export default function BacktestingAutoFetchPage() {
                 {working ? 'Fetching...' : 'Auto-Fetch 7-Day Results'}
               </button>
               <button className="btn-secondary" disabled={working || !fetchedRows.length} onClick={saveFetchedRows}>
-                Save Fetched Results
+                Save Fetched Results + Run Replay
               </button>
             </div>
           </div>

@@ -1836,3 +1836,11 @@ export async function listSafeBacktestSummariesForDreams(
 
 
 
+
+
+export async function runAutoReplayForBacktestDream(
+  ownerUid: string,
+  backtestDreamId: string
+): Promise<any> {
+  return await runBacktestReplayForDream(ownerUid, backtestDreamId);
+}
