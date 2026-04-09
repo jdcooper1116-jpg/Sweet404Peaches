@@ -65,7 +65,7 @@ export default function DailyOpsPage() {
         setLatestDream(latest);
       } catch (err) {
         console.error(err);
-        setError('Could not load Daily Ops.');
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }

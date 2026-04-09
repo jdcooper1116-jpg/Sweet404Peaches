@@ -66,7 +66,7 @@ export default function ForecastBoardPage() {
         setLatestDream(latest);
       } catch (err) {
         console.error(err);
-        setError('Could not load Forecast Board.');
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }

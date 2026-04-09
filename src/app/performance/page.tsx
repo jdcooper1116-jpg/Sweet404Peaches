@@ -60,7 +60,7 @@ export default function PerformancePage() {
         setBacktestSummaries(summaries.filter(Boolean));
       } catch (err) {
         console.error(err);
-        setError('Could not load Performance.');
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }

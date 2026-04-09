@@ -53,7 +53,7 @@ export default function BacktestingEvidencePage() {
         setBacktestSummaries(summaries.filter(Boolean));
       } catch (err) {
         console.error(err);
-        setError('Could not load Evidence Rules.');
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }

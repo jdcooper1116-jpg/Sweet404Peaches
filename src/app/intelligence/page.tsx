@@ -50,7 +50,7 @@ export default function IntelligenceHubPage() {
         setBacktestSummaries(summaries.filter(Boolean));
       } catch (err) {
         console.error(err);
-        setError('Could not load Intelligence Hub.');
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }
