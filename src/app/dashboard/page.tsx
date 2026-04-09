@@ -102,7 +102,7 @@ export default function DashboardPage() {
         display: 'grid',
         gridTemplateColumns: '280px 1fr',
         background:
-          'radial-gradient(circle at top, rgba(232,197,71,0.10), transparent 30%), linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%)',
+          'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
       }}
     >
       <Sidebar />
@@ -131,22 +131,22 @@ export default function DashboardPage() {
               marginTop: '12px',
             }}
           >
-            <a href="/daily-ops" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+            <a href="/daily-ops" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
               <strong>Daily Ops</strong>
               <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Operational alerts, diagnosis, and top priorities.</div>
             </a>
 
-            <a href="/forecast-board" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+            <a href="/forecast-board" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
               <strong>Forecast Board</strong>
               <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Boosted live watch recommendations by state.</div>
             </a>
 
-            <a href="/backtesting/evidence" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+            <a href="/backtesting/evidence" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
               <strong>Evidence Rules</strong>
               <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Universal and personal promotion scoring.</div>
             </a>
 
-            <a href="/integrity" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+            <a href="/integrity" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
               <strong>Integrity Console</strong>
               <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Audits, safe resets, and data health checks.</div>
             </a>
@@ -189,7 +189,7 @@ export default function DashboardPage() {
                   gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
                 }}
               >
-                <Link href="/forecast-board" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+                <Link href="/forecast-board" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
                     <Target size={18} />
                     <strong>Forecast Board</strong>
@@ -197,7 +197,7 @@ export default function DashboardPage() {
                   <div style={{ color: 'var(--ink-light)' }}>Review strongest plays, boxed plays, straight plays, and watch-only families.</div>
                 </Link>
 
-                <Link href="/intelligence" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+                <Link href="/intelligence" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
                     <Brain size={18} />
                     <strong>Intelligence Hub</strong>
@@ -205,7 +205,7 @@ export default function DashboardPage() {
                   <div style={{ color: 'var(--ink-light)' }}>See auto-pin suggestions, strongest terms, reliability, and duplicate alerts.</div>
                 </Link>
 
-                <Link href="/daily-ops" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+                <Link href="/daily-ops" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
                     <CalendarRange size={18} />
                     <strong>Daily Ops</strong>
@@ -213,7 +213,7 @@ export default function DashboardPage() {
                   <div style={{ color: 'var(--ink-light)' }}>Run daily results review, apply win suggestions, and export the play slip.</div>
                 </Link>
 
-                <Link href="/performance" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+                <Link href="/performance" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit', minHeight: '120px', display: 'grid', alignContent: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
                     <Trophy size={18} />
                     <strong>Performance</strong>
