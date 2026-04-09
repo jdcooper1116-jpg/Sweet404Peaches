@@ -1816,3 +1816,20 @@ export async function hardResetOperationalData(ownerUid: string): Promise<any> {
     preserved: ['personalHitMappings', 'termNumberMappings'],
   };
 }
+
+
+export async function listSafeBacktestSummariesForDreams(
+  ownerUid: string,
+  dreams: any[]
+): Promise<any[]> {
+  const settled = await Promise.allSettled(
+    (dreams ?? []).map((dream: any) =>
+      getBacktestSummaryForDream(ownerUid, dream.id)
+    )
+  );
+
+  return settled
+    .filter((item): item is PromiseFulfilledResult<any> => item.status === 'fulfilled')
+    .map((item) => item.value)
+    .filter(Boolean);
+}

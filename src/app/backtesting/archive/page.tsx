@@ -6,6 +6,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   getBacktestSummaryForDream,
+  listSafeBacktestSummariesForDreams,
   listBacktestDreams,
   listBacktestHitsForDream,
   listBacktestResultsForDream,

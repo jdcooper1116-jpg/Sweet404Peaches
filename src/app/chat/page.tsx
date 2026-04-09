@@ -7,6 +7,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   getBacktestSummaryForDream,
+  listSafeBacktestSummariesForDreams,
   getLatestDreamEntry,
   listActiveDreamWindows,
   listBacktestDreams,
@@ -72,8 +73,9 @@ export default function ChatPage() {
           getLatestDreamEntry(user.uid),
         ]);
 
-        const summaries = await Promise.all(
-          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
+        const summaries = await listSafeBacktestSummariesForDreams(
+          user.uid,
+          dreams
         );
 
         setMappingRows(mappings as PersonalMappingRow[]);

@@ -7,6 +7,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   getBacktestSummaryForDream,
+  listSafeBacktestSummariesForDreams,
   listActiveDreamWindows,
   listBacktestDreams,
   listDreamHits,
@@ -48,8 +49,9 @@ export default function PerformancePage() {
           listBacktestDreams(user.uid),
         ]);
 
-        const summaries = await Promise.all(
-          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
+        const summaries = await listSafeBacktestSummariesForDreams(
+          user.uid,
+          dreams
         );
 
         setActiveWindows(windows);

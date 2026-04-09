@@ -7,6 +7,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   getBacktestSummaryForDream,
+  listSafeBacktestSummariesForDreams,
   listBacktestDreams,
   listPersonalHitMappings,
 } from '@/lib/firebase/firestore';
@@ -43,8 +44,9 @@ export default function BacktestingEvidencePage() {
           listBacktestDreams(user.uid),
         ]);
 
-        const summaries = await Promise.all(
-          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
+        const summaries = await listSafeBacktestSummariesForDreams(
+          user.uid,
+          dreams
         );
 
         setMappingRows(liveMappings as PersonalMappingRow[]);
