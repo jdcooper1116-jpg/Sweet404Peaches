@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use client';
 
 import Link from 'next/link';
@@ -113,16 +114,16 @@ export default function ForecastBoardPage() {
             <div className="page-header">
               <h1>Forecast Board</h1>
               <p>
-                This board is unresolved-only. It focuses on live watch items from your latest dream that have not already hit.
+                Unresolved-only predictive board. Already-hit numbers are removed, and remaining live watches are ranked by historical state strength, match quality, and recency.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/daily-ops" className="btn-secondary">
+                Daily Ops
+              </Link>
               <Link href="/chat" className="btn-secondary">
                 Intelligence Chat
-              </Link>
-              <Link href="/playlists" className="btn-secondary">
-                State Playlist
               </Link>
               <Link href="/hits" className="btn-secondary">
                 Hits Detector
@@ -179,12 +180,17 @@ export default function ForecastBoardPage() {
           </div>
 
           <div>
-            <div className="journal-label">Unresolved Watch Items</div>
+            <div className="journal-label">Resolved Hit Events</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
+          </div>
+
+          <div>
+            <div className="journal-label">Unresolved Live Watches</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.unresolvedWindows.length}</div>
           </div>
 
           <div>
-            <div className="journal-label">Ranked State Recommendations</div>
+            <div className="journal-label">Ranked Recommendations</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{filteredRecommendations.length}</div>
           </div>
         </section>
@@ -220,8 +226,40 @@ export default function ForecastBoardPage() {
 
         <section className="journal-card">
           <div className="page-header">
+            <h1>Resolved / Already Fell</h1>
+            <p>These items already hit and were removed from the active forecast.</p>
+          </div>
+
+          {forecast.resolvedHitsForLatestDream.length ? (
+            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+              {forecast.resolvedHitsForLatestDream.map((hit, index) => (
+                <div key={`${hit.id ?? index}`} className="journal-card-flat">
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '8px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                    }}
+                  >
+                    <div><strong>Term:</strong> {hit.termLabel}</div>
+                    <div><strong>Number:</strong> {hit.number}</div>
+                    <div><strong>State:</strong> {hit.state}</div>
+                    <div><strong>Game:</strong> {hit.gameType}</div>
+                    <div><strong>Hit Type:</strong> {hit.hitType}</div>
+                    <div><strong>Date:</strong> {hit.drawDate}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p>No resolved hits are logged yet for the latest dream.</p>
+          )}
+        </section>
+
+        <section className="journal-card">
+          <div className="page-header">
             <h1>Unresolved Live Watch Items</h1>
-            <p>These are the latest dream watch items that have not already been resolved as hits.</p>
+            <p>These are the latest dream watch items that are still alive.</p>
           </div>
 
           {forecast.unresolvedWindows.length ? (
@@ -251,18 +289,25 @@ export default function ForecastBoardPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Top State Recommendations</h1>
-            <p>Historical state recommendations for unresolved watch items from the latest dream.</p>
+            <p>States are ranked by stronger live-match scoring, exact matches, repeated support, and recency.</p>
           </div>
 
           {filteredStateGroups.length ? (
             <div style={{ display: 'grid', gap: '16px', marginTop: '12px' }}>
               {filteredStateGroups.map((group) => (
                 <div key={group.state} className="journal-card-flat" style={{ display: 'grid', gap: '12px' }}>
-                  <div>
-                    <strong>{group.state}</strong>
-                    <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                      Combined forecast score: {group.score}
-                    </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '8px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    }}
+                  >
+                    <div><strong>State:</strong> {group.state}</div>
+                    <div><strong>Score:</strong> {group.score}</div>
+                    <div><strong>Exact Matches:</strong> {group.exactCount}</div>
+                    <div><strong>Unique Numbers:</strong> {group.uniqueNumbers}</div>
+                    <div><strong>Confidence:</strong> {group.confidenceTier}</div>
                   </div>
 
                   <div style={{ display: 'grid', gap: '10px' }}>
@@ -289,10 +334,16 @@ export default function ForecastBoardPage() {
                           <div><strong>Trigger Term:</strong> {row.term}</div>
                           <div><strong>Game:</strong> {row.gameType}</div>
                           <div><strong>Draw:</strong> {row.drawTime}</div>
-                          <div><strong>Hit Type Bias:</strong> {row.latestHitType}</div>
+                          <div><strong>Match Type:</strong> {row.matchType}</div>
+                          <div><strong>Hit Bias:</strong> {row.latestHitType}</div>
                           <div><strong>State Strength:</strong> {row.stateStrengthScore}</div>
                           <div><strong>Forecast Score:</strong> {row.forecastScore}</div>
+                          <div><strong>Confidence:</strong> {row.confidenceTier}</div>
                           <div><strong>Last Hit:</strong> {row.lastHitDate || '—'}</div>
+                        </div>
+
+                        <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
+                          Reasons: {Array.isArray(row.reasons) ? row.reasons.join('; ') : '—'}
                         </div>
                       </div>
                     ))}

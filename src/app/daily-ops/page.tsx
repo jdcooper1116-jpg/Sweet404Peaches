@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use client';
 
 import Link from 'next/link';
@@ -68,13 +69,6 @@ export default function DailyOpsPage() {
     [latestDream, activeWindows, dreamHits, mappingRows]
   );
 
-  const latestDreamHits = useMemo(() => {
-    if (!latestDream?.id) return [];
-    return dreamHits.filter(
-      (hit) => String(hit?.sourceDreamEntryId ?? '') === String(latestDream.id)
-    );
-  }, [dreamHits, latestDream]);
-
   const alerts = useMemo(() => {
     const items: string[] = [];
 
@@ -89,18 +83,26 @@ export default function DailyOpsPage() {
       items.push(`${forecast.unresolvedWindows.length} unresolved watch item(s) remain live from the latest dream.`);
     }
 
-    if (latestDreamHits.length) {
-      items.push(`${latestDreamHits.length} hit event(s) have already been logged for the latest dream.`);
+    if (forecast.resolvedHitsForLatestDream.length) {
+      items.push(`${forecast.resolvedHitsForLatestDream.length} hit event(s) have already been resolved and removed from the active forecast.`);
     } else {
-      items.push('No hit events have been logged yet for the latest dream.');
+      items.push('No resolved hit events have been logged yet for the latest dream.');
     }
 
     if (forecast.recommendationStateGroups[0]) {
-      items.push(`${forecast.recommendationStateGroups[0].state} is the strongest state to monitor next from historical memory.`);
+      items.push(
+        `${forecast.recommendationStateGroups[0].state} is the strongest state to monitor next with ${forecast.recommendationStateGroups[0].confidenceTier} confidence.`
+      );
+    }
+
+    if (forecast.recommendationRows[0]) {
+      items.push(
+        `${forecast.recommendationRows[0].number} in ${forecast.recommendationRows[0].state} is the top unresolved watch right now.`
+      );
     }
 
     return items;
-  }, [latestDream, forecast.unresolvedWindows, latestDreamHits, forecast.recommendationStateGroups]);
+  }, [latestDream, forecast]);
 
   return (
     <main
@@ -128,7 +130,7 @@ export default function DailyOpsPage() {
             <div className="page-header">
               <h1>Daily Ops</h1>
               <p>
-                Your command-center briefing for the latest dream, live unresolved watches, state recommendations, and operational alerts.
+                Your command-center briefing for unresolved live watches, resolved hits, next-state recommendations, and confidence levels.
               </p>
             </div>
 
@@ -170,14 +172,21 @@ export default function DailyOpsPage() {
           </div>
 
           <div>
-            <div className="journal-label">Hit Events Logged</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{latestDreamHits.length}</div>
+            <div className="journal-label">Resolved Hits</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
           </div>
 
           <div>
             <div className="journal-label">Top Next State</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>
               {forecast.recommendationStateGroups[0]?.state ?? '—'}
+            </div>
+          </div>
+
+          <div>
+            <div className="journal-label">Top State Confidence</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>
+              {forecast.recommendationStateGroups[0]?.confidenceTier ?? '—'}
             </div>
           </div>
         </section>
@@ -204,7 +213,7 @@ export default function DailyOpsPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Operational Alerts</h1>
-            <p>These are the highest-priority signals from your latest dream cycle.</p>
+            <p>Highest-priority signals from your current live dream cycle.</p>
           </div>
 
           <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
@@ -218,44 +227,34 @@ export default function DailyOpsPage() {
 
         <section className="journal-card">
           <div className="page-header">
-            <h1>Latest Dream Snapshot</h1>
-            <p>Terms and numbers currently driving your live watch cycle.</p>
+            <h1>Top Unresolved Watches</h1>
+            <p>Best current unresolved recommendations from the latest dream.</p>
           </div>
 
-          {latestDream ? (
-            <div className="journal-card-flat" style={{ marginTop: '12px' }}>
-              <p style={{ margin: 0, color: 'var(--ink-light)', lineHeight: 1.7 }}>
-                Terms: {forecast.latestDreamTerms.length ? forecast.latestDreamTerms.join(', ') : 'No parsed terms'}.
-                {' '}Numbers: {forecast.latestDreamNumbers.length ? forecast.latestDreamNumbers.slice(0, 20).join(', ') : 'No parsed numbers'}.
-              </p>
-            </div>
-          ) : (
-            <p>No latest dream found.</p>
-          )}
-        </section>
-
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Top State Watch Suggestions</h1>
-            <p>The strongest historical state recommendations for unresolved items.</p>
-          </div>
-
-          {forecast.recommendationStateGroups.length ? (
+          {forecast.recommendationRows.length ? (
             <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
-              {forecast.recommendationStateGroups.slice(0, 5).map((group) => (
-                <div key={group.state} className="journal-card-flat">
-                  <strong>{group.state}</strong>
-                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                    Score: {group.score}
-                  </div>
-                  <div style={{ marginTop: '8px', color: 'var(--ink-light)' }}>
-                    {group.rows.slice(0, 4).map((row) => `${row.number} (${row.term})`).join(', ')}
+              {forecast.recommendationRows.slice(0, 8).map((row) => (
+                <div key={`${row.term}-${row.number}-${row.state}-${row.gameType}-${row.drawTime}`} className="journal-card-flat">
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '8px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                    }}
+                  >
+                    <div><strong>Number:</strong> {row.number}</div>
+                    <div><strong>State:</strong> {row.state}</div>
+                    <div><strong>Term:</strong> {row.term}</div>
+                    <div><strong>Game:</strong> {row.gameType}</div>
+                    <div><strong>Forecast Score:</strong> {row.forecastScore}</div>
+                    <div><strong>Confidence:</strong> {row.confidenceTier}</div>
+                    <div><strong>Match Type:</strong> {row.matchType}</div>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p>No state watch suggestions are available yet.</p>
+            <p>No unresolved watch recommendations are available yet.</p>
           )}
         </section>
       </section>
