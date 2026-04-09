@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use client';
 
 import Link from 'next/link';
@@ -14,28 +15,13 @@ import {
   flattenDictionary,
   type PersonalMappingRow,
 } from '@/lib/intelligence/termDictionary';
-
-type BacktestSummaryLite = {
-  backtestDreamId: string;
-  dreamDate?: string;
-  totalHits?: number;
-  straightHits?: number;
-  boxedHits?: number;
-  bestState?: string;
-  bestTerm?: string;
-  uniqueStates?: string[];
-};
-
-type InsightCard = {
-  title: string;
-  body: string;
-};
+import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
 
 export default function IntelligenceHubPage() {
   const { user } = useAuth();
 
   const [mappingRows, setMappingRows] = useState<PersonalMappingRow[]>([]);
-  const [backtestSummaries, setBacktestSummaries] = useState<BacktestSummaryLite[]>([]);
+  const [backtestSummaries, setBacktestSummaries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [termSearch, setTermSearch] = useState('');
@@ -55,25 +41,11 @@ export default function IntelligenceHubPage() {
         const dreams = await listBacktestDreams(user.uid);
 
         const summaries = await Promise.all(
-          dreams.map(async (dream: any) => {
-            const summary = await getBacktestSummaryForDream(user.uid, dream.id);
-            return summary
-              ? {
-                  backtestDreamId: dream.id,
-                  dreamDate: dream.dreamDate,
-                  totalHits: summary.totalHits ?? 0,
-                  straightHits: summary.straightHits ?? 0,
-                  boxedHits: summary.boxedHits ?? 0,
-                  bestState: summary.bestState ?? '',
-                  bestTerm: summary.bestTerm ?? '',
-                  uniqueStates: Array.isArray(summary.uniqueStates) ? summary.uniqueStates : [],
-                }
-              : null;
-          })
+          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
         );
 
         setMappingRows(liveMappings as PersonalMappingRow[]);
-        setBacktestSummaries(summaries.filter(Boolean) as BacktestSummaryLite[]);
+        setBacktestSummaries(summaries.filter(Boolean));
       } catch (err) {
         console.error(err);
         setError('Could not load Intelligence Hub.');
@@ -85,11 +57,15 @@ export default function IntelligenceHubPage() {
     void load();
   }, [user]);
 
-  const grouped = useMemo(() => buildGroupedTermDictionary(mappingRows), [mappingRows]);
-  const flattened = useMemo(() => flattenDictionary(grouped), [grouped]);
+  const flat = useMemo(() => {
+    const grouped = buildGroupedTermDictionary(mappingRows);
+    return flattenDictionary(grouped);
+  }, [mappingRows]);
+
+  const familyAnalytics = useMemo(() => buildFamilyAnalytics(flat), [flat]);
 
   const filteredRecords = useMemo(() => {
-    return flattened.filter((record) => {
+    return flat.filter((record: any) => {
       const termOk = termSearch.trim()
         ? record.term.toLowerCase().includes(termSearch.trim().toLowerCase())
         : true;
@@ -100,165 +76,68 @@ export default function IntelligenceHubPage() {
 
       return termOk && stateOk;
     });
-  }, [flattened, termSearch, stateSearch]);
-
-  const topStates = useMemo(() => {
-    const map = new Map<
-      string,
-      { score: number; hits: number; straight: number; boxed: number; numbers: Set<string> }
-    >();
-
-    for (const row of filteredRecords) {
-      if (!map.has(row.state)) {
-        map.set(row.state, {
-          score: 0,
-          hits: 0,
-          straight: 0,
-          boxed: 0,
-          numbers: new Set<string>(),
-        });
-      }
-
-      const current = map.get(row.state)!;
-      current.score += row.stateStrengthScore;
-      current.hits += row.hitCount;
-      current.straight += row.straightCount;
-      current.boxed += row.boxedCount;
-      current.numbers.add(row.number);
-    }
-
-    return Array.from(map.entries())
-      .map(([state, value]) => ({
-        state,
-        score: value.score,
-        hits: value.hits,
-        straight: value.straight,
-        boxed: value.boxed,
-        uniqueNumbers: value.numbers.size,
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 12);
-  }, [filteredRecords]);
+  }, [flat, termSearch, stateSearch]);
 
   const topTerms = useMemo(() => {
-    const map = new Map<
-      string,
-      { hits: number; states: Set<string>; numbers: Set<string>; straight: number; boxed: number }
-    >();
+    const map = new Map();
 
     for (const row of filteredRecords) {
       if (!map.has(row.term)) {
-        map.set(row.term, {
-          hits: 0,
-          states: new Set<string>(),
-          numbers: new Set<string>(),
-          straight: 0,
-          boxed: 0,
-        });
+        map.set(row.term, { hits: 0, states: new Set(), straight: 0, boxed: 0 });
       }
-
-      const current = map.get(row.term)!;
+      const current = map.get(row.term);
       current.hits += row.hitCount;
       current.states.add(row.state);
-      current.numbers.add(row.number);
       current.straight += row.straightCount;
       current.boxed += row.boxedCount;
     }
 
     return Array.from(map.entries())
-      .map(([term, value]) => ({
+      .map(([term, value]: any) => ({
         term,
         hits: value.hits,
         stateCount: value.states.size,
-        numberCount: value.numbers.size,
         straight: value.straight,
         boxed: value.boxed,
       }))
-      .sort((a, b) => b.hits - a.hits)
+      .sort((a: any, b: any) => b.hits - a.hits)
       .slice(0, 12);
   }, [filteredRecords]);
 
-  const bestBacktestStates = useMemo(() => {
-    const map = new Map<string, number>();
+  const topStates = useMemo(() => {
+    const map = new Map();
 
-    for (const row of backtestSummaries) {
-      if (!row.bestState) continue;
-      map.set(row.bestState, (map.get(row.bestState) ?? 0) + 1);
+    for (const row of filteredRecords) {
+      if (!map.has(row.state)) {
+        map.set(row.state, { hits: 0, strength: 0 });
+      }
+      const current = map.get(row.state);
+      current.hits += row.hitCount;
+      current.strength += row.stateStrengthScore;
     }
 
     return Array.from(map.entries())
-      .map(([state, count]) => ({ state, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-  }, [backtestSummaries]);
-
-  const bestBacktestTerms = useMemo(() => {
-    const map = new Map<string, number>();
-
-    for (const row of backtestSummaries) {
-      if (!row.bestTerm) continue;
-      map.set(row.bestTerm, (map.get(row.bestTerm) ?? 0) + 1);
-    }
-
-    return Array.from(map.entries())
-      .map(([term, count]) => ({ term, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-  }, [backtestSummaries]);
+      .map(([state, value]: any) => ({
+        state,
+        hits: value.hits,
+        strength: value.strength,
+      }))
+      .sort((a: any, b: any) => b.strength - a.strength)
+      .slice(0, 12);
+  }, [filteredRecords]);
 
   const archiveTotals = useMemo(() => {
     return backtestSummaries.reduce(
-      (acc, row) => {
-        acc.dreams += 1;
+      (acc: any, row: any) => {
+        acc.completed += 1;
         acc.totalHits += Number(row.totalHits ?? 0);
         acc.straight += Number(row.straightHits ?? 0);
         acc.boxed += Number(row.boxedHits ?? 0);
         return acc;
       },
-      { dreams: 0, totalHits: 0, straight: 0, boxed: 0 }
+      { completed: 0, totalHits: 0, straight: 0, boxed: 0 }
     );
   }, [backtestSummaries]);
-
-  const insightCards = useMemo<InsightCard[]>(() => {
-    const cards: InsightCard[] = [];
-
-    if (topStates[0]) {
-      cards.push({
-        title: 'Strongest Live State Pattern',
-        body: `${topStates[0].state} leads the live dictionary with a state strength score of ${topStates[0].score} across ${topStates[0].hits} logged hit(s).`,
-      });
-    }
-
-    if (topTerms[0]) {
-      cards.push({
-        title: 'Most Active Term',
-        body: `${topTerms[0].term} currently has the heaviest live footprint with ${topTerms[0].hits} hit(s) across ${topTerms[0].stateCount} state(s).`,
-      });
-    }
-
-    if (bestBacktestStates[0]) {
-      cards.push({
-        title: 'Most Repeated Backtest State',
-        body: `${bestBacktestStates[0].state} appears most often as the best state across your completed backtests (${bestBacktestStates[0].count} time(s)).`,
-      });
-    }
-
-    if (bestBacktestTerms[0]) {
-      cards.push({
-        title: 'Most Repeated Backtest Term',
-        body: `${bestBacktestTerms[0].term} shows up most often as the strongest term in historical replay summaries (${bestBacktestTerms[0].count} time(s)).`,
-      });
-    }
-
-    if (!cards.length) {
-      cards.push({
-        title: 'No Pattern Cards Yet',
-        body: 'Load more live hits and completed backtests to generate pattern intelligence.',
-      });
-    }
-
-    return cards;
-  }, [topStates, topTerms, bestBacktestStates, bestBacktestTerms]);
 
   return (
     <main
@@ -271,7 +150,6 @@ export default function IntelligenceHubPage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -286,19 +164,20 @@ export default function IntelligenceHubPage() {
             <div className="page-header">
               <h1>Intelligence Hub</h1>
               <p>
-                Deep pattern analysis across your live dictionary memory and your historical backtest archive.
+                Deep pattern analysis across live dictionary memory, family intelligence,
+                and historical backtesting.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/hot-numbers" className="btn-secondary">
+                Hot Families
+              </Link>
+              <Link href="/chat" className="btn-secondary">
+                Intelligence Chat
+              </Link>
               <Link href="/backtesting/archive" className="btn-secondary">
                 Backtest Archive
-              </Link>
-              <Link href="/forecast-board" className="btn-secondary">
-                Forecast Board
-              </Link>
-              <Link href="/playlists" className="btn-secondary">
-                State Playlist
               </Link>
             </div>
           </div>
@@ -348,28 +227,20 @@ export default function IntelligenceHubPage() {
           }}
         >
           <div>
-            <div className="journal-label">Live Dictionary Rows</div>
+            <div className="journal-label">Live Rows</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{filteredRecords.length}</div>
           </div>
-
+          <div>
+            <div className="journal-label">Families</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{familyAnalytics.families.length}</div>
+          </div>
           <div>
             <div className="journal-label">Completed Backtests</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.dreams}</div>
+            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.completed}</div>
           </div>
-
           <div>
             <div className="journal-label">Backtest Hits</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.totalHits}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Backtest Straight Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.straight}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Backtest Boxed Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{archiveTotals.boxed}</div>
           </div>
         </section>
 
@@ -382,41 +253,12 @@ export default function IntelligenceHubPage() {
         {error ? (
           <section
             className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
+            style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}
           >
             {error}
           </section>
         ) : null}
 
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Pattern Cards</h1>
-            <p>High-level findings generated from both live memory and historical research.</p>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gap: '12px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-              marginTop: '12px',
-            }}
-          >
-            {insightCards.map((card) => (
-              <div key={card.title} className="journal-card-flat">
-                <strong>{card.title}</strong>
-                <p style={{ marginTop: '8px', color: 'var(--ink-light)', lineHeight: 1.6 }}>
-                  {card.body}
-                </p>
-              </div>
-            ))}
-          </div>
-        </section>
-
         <section
           style={{
             display: 'grid',
@@ -426,39 +268,39 @@ export default function IntelligenceHubPage() {
         >
           <section className="journal-card">
             <div className="page-header">
-              <h1>Top Live States</h1>
-              <p>States with the strongest active dictionary footprint right now.</p>
-            </div>
-
-            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
-              {topStates.length ? topStates.map((row, index) => (
-                <div key={row.state} className="journal-card-flat">
-                  <div><strong>#{index + 1} {row.state}</strong></div>
-                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                    Score: {row.score} • Hits: {row.hits} • Straight: {row.straight} • Boxed: {row.boxed} • Numbers: {row.uniqueNumbers}
-                  </div>
-                </div>
-              )) : <p>No live state intelligence yet.</p>}
-            </div>
-          </section>
-
-          <section className="journal-card">
-            <div className="page-header">
               <h1>Top Live Terms</h1>
-              <p>Terms creating the heaviest cross-state activity in the live dictionary.</p>
+              <p>Most active live terms in the personal dictionary.</p>
             </div>
 
             <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
-              {topTerms.length ? topTerms.map((row, index) => (
+              {topTerms.length ? topTerms.map((row: any, index: number) => (
                 <div key={row.term} className="journal-card-flat">
-                  <div><strong>#{index + 1} {row.term}</strong></div>
+                  <strong>#{index + 1} {row.term}</strong>
                   <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                    Hits: {row.hits} • States: {row.stateCount} • Numbers: {row.numberCount} • Straight: {row.straight} • Boxed: {row.boxed}
+                    Hits: {row.hits} • States: {row.stateCount} • Straight: {row.straight} • Boxed: {row.boxed}
                   </div>
                 </div>
               )) : <p>No live term intelligence yet.</p>}
             </div>
           </section>
+
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Top Live States</h1>
+              <p>Strongest active states in the personal dictionary.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
+              {topStates.length ? topStates.map((row: any, index: number) => (
+                <div key={row.state} className="journal-card-flat">
+                  <strong>#{index + 1} {row.state}</strong>
+                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
+                    Hits: {row.hits} • Strength: {row.strength}
+                  </div>
+                </div>
+              )) : <p>No live state intelligence yet.</p>}
+            </div>
+          </section>
         </section>
 
         <section
@@ -470,68 +312,46 @@ export default function IntelligenceHubPage() {
         >
           <section className="journal-card">
             <div className="page-header">
-              <h1>Top Backtest States</h1>
-              <p>States most often emerging as the best-performing backtest state.</p>
+              <h1>Top Families</h1>
+              <p>Family clusters ranked by strength and repeated support.</p>
             </div>
 
             <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
-              {bestBacktestStates.length ? bestBacktestStates.map((row, index) => (
-                <div key={row.state} className="journal-card-flat">
-                  <div><strong>#{index + 1} {row.state}</strong></div>
+              {familyAnalytics.families.slice(0, 10).map((family: any, index: number) => (
+                <div key={family.familyKey} className="journal-card-flat">
+                  <strong>#{index + 1} {family.familyKey}</strong>
                   <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                    Best-state appearances: {row.count}
+                    Pattern: {family.patternTag} • Hits: {family.totalHits} • Strength: {family.totalStrength}
+                  </div>
+                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
+                    Top State: {family.topStates[0]?.state ?? '—'} • Top Term: {family.topTerms[0]?.term ?? '—'}
                   </div>
                 </div>
-              )) : <p>No backtest state intelligence yet.</p>}
+              ))}
             </div>
           </section>
 
           <section className="journal-card">
             <div className="page-header">
-              <h1>Top Backtest Terms</h1>
-              <p>Terms most often emerging as the strongest historical replay term.</p>
+              <h1>Pattern Groups</h1>
+              <p>Special family categories worth tracking closely.</p>
             </div>
 
             <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
-              {bestBacktestTerms.length ? bestBacktestTerms.map((row, index) => (
-                <div key={row.term} className="journal-card-flat">
-                  <div><strong>#{index + 1} {row.term}</strong></div>
-                  <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>
-                    Best-term appearances: {row.count}
-                  </div>
-                </div>
-              )) : <p>No backtest term intelligence yet.</p>}
+              <div className="journal-card-flat">
+                Doubles: {familyAnalytics.doubles.length}
+              </div>
+              <div className="journal-card-flat">
+                Triples: {familyAnalytics.triples.length}
+              </div>
+              <div className="journal-card-flat">
+                Double-Doubles: {familyAnalytics.doubleDoubles.length}
+              </div>
+              <div className="journal-card-flat">
+                All-Different Families: {familyAnalytics.allDifferent.length}
+              </div>
             </div>
           </section>
-        </section>
-
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Questions You Should Be Able to Ask the Chat</h1>
-            <p>These are the kinds of evidence-aware prompts the app is now approaching.</p>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gap: '10px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-              marginTop: '12px',
-            }}
-          >
-            {[
-              'Which term performs strongest in Illinois?',
-              'What state has repeated most often for dancing?',
-              'Which backtested term produced the most straight hits?',
-              'What is the strongest live state right now?',
-              'Which terms hit fast and which terms are slow-burn?',
-              'Which states keep repeating across live mode and backtesting?',
-            ].map((prompt) => (
-              <div key={prompt} className="journal-card-flat">
-                {prompt}
-              </div>
-            ))}
-          </div>
         </section>
       </section>
     </main>

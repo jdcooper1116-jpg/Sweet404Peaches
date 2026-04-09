@@ -13,19 +13,13 @@ import {
   listDreamHits,
   listPersonalHitMappings,
 } from '@/lib/firebase/firestore';
-import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
+import {
+  buildGroupedTermDictionary,
+  flattenDictionary,
+  type PersonalMappingRow,
+} from '@/lib/intelligence/termDictionary';
 import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
-
-type BacktestSummaryLite = {
-  backtestDreamId: string;
-  dreamDate?: string;
-  totalHits?: number;
-  straightHits?: number;
-  boxedHits?: number;
-  bestState?: string;
-  bestTerm?: string;
-  uniqueStates?: string[];
-};
+import { buildFamilyAnalytics, boxedFamilyKey } from '@/lib/intelligence/familyLogic';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -42,7 +36,7 @@ export default function ChatPage() {
   const [mappingRows, setMappingRows] = useState<PersonalMappingRow[]>([]);
   const [activeWindows, setActiveWindows] = useState<any[]>([]);
   const [dreamHits, setDreamHits] = useState<any[]>([]);
-  const [backtestSummaries, setBacktestSummaries] = useState<BacktestSummaryLite[]>([]);
+  const [backtestSummaries, setBacktestSummaries] = useState<any[]>([]);
   const [latestDream, setLatestDream] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -51,7 +45,7 @@ export default function ChatPage() {
     {
       role: 'assistant',
       content:
-        'Welcome to the Sweet404Peaches Intelligence Chat. I can now use your latest dream, unresolved live watches, confidence tiers, and historical backtests to answer evidence-based questions.',
+        'Welcome to the Sweet404Peaches Intelligence Chat. I can now answer questions about families, doubles, triples, unresolved live watches, and historical state-term evidence.',
     },
   ]);
 
@@ -77,27 +71,13 @@ export default function ChatPage() {
         ]);
 
         const summaries = await Promise.all(
-          dreams.map(async (dream: any) => {
-            const summary = await getBacktestSummaryForDream(user.uid, dream.id);
-            return summary
-              ? {
-                  backtestDreamId: dream.id,
-                  dreamDate: dream.dreamDate,
-                  totalHits: summary.totalHits ?? 0,
-                  straightHits: summary.straightHits ?? 0,
-                  boxedHits: summary.boxedHits ?? 0,
-                  bestState: summary.bestState ?? '',
-                  bestTerm: summary.bestTerm ?? '',
-                  uniqueStates: Array.isArray(summary.uniqueStates) ? summary.uniqueStates : [],
-                }
-              : null;
-          })
+          dreams.map((dream: any) => getBacktestSummaryForDream(user.uid, dream.id))
         );
 
         setMappingRows(mappings as PersonalMappingRow[]);
         setActiveWindows(windows);
         setDreamHits(hits);
-        setBacktestSummaries(summaries.filter(Boolean) as BacktestSummaryLite[]);
+        setBacktestSummaries(summaries.filter(Boolean));
         setLatestDream(latest);
       } catch (err) {
         console.error(err);
@@ -110,7 +90,14 @@ export default function ChatPage() {
     void load();
   }, [user]);
 
-  const forecast: any = useMemo(
+  const flat = useMemo(() => {
+    const grouped = buildGroupedTermDictionary(mappingRows);
+    return flattenDictionary(grouped);
+  }, [mappingRows]);
+
+  const familyAnalytics = useMemo(() => buildFamilyAnalytics(flat), [flat]);
+
+  const forecast = useMemo(
     () =>
       buildLatestDreamForecast({
         latestDream,
@@ -121,184 +108,87 @@ export default function ChatPage() {
     [latestDream, activeWindows, dreamHits, mappingRows]
   );
 
-  const backtestBestStates = useMemo(() => {
-    const map = new Map<string, number>();
-
-    for (const row of backtestSummaries) {
-      if (!row.bestState) continue;
-      map.set(row.bestState, (map.get(row.bestState) ?? 0) + 1);
-    }
-
-    return Array.from(map.entries())
-      .map(([state, count]) => ({ state, count }))
-      .sort((a, b) => b.count - a.count);
-  }, [backtestSummaries]);
-
   function answerQuestion(question: string) {
     const q = normalizeText(question);
 
-    if (!forecast.latestDreamId && !backtestSummaries.length) {
-      return 'There is not enough live or backtest evidence loaded yet for a strong answer.';
+    if (!flat.length && !forecast.recommendationRows.length) {
+      return 'There is not enough live intelligence loaded yet for a strong answer.';
     }
 
-    if (q.includes('latest dream') || q.includes('today’s dream') || q.includes("today's dream")) {
-      if (!latestDream) {
-        return 'I do not see a saved latest live dream yet.';
-      }
-
-      const termsSummary = forecast.latestDreamTerms.length
-        ? forecast.latestDreamTerms.join(', ')
-        : 'No parsed terms found';
-
-      const numbersSummary = forecast.latestDreamNumbers.length
-        ? forecast.latestDreamNumbers.slice(0, 12).join(', ')
-        : 'No parsed numbers found';
-
-      return `Your latest dream is dated ${latestDream.dreamDate || 'unknown date'}. Parsed terms: ${termsSummary}. Parsed numbers: ${numbersSummary}. There are ${forecast.unresolvedWindows.length} unresolved live watch item(s) and ${forecast.resolvedHitsForLatestDream.length} resolved hit(s) already logged.`;
+    if (q.includes('hot family') || q.includes('strongest family') || q.includes('top family')) {
+      const top = familyAnalytics.families[0];
+      if (!top) return 'No family intelligence is available yet.';
+      return `The strongest family right now is ${top.familyKey}. It is tagged as ${top.patternTag}, has ${top.totalHits} hit(s), and is strongest in ${top.topStates[0]?.state ?? 'unknown state'}.`;
     }
 
-    if (
-      q.includes('watch next') ||
-      q.includes('which states should i watch') ||
-      q.includes('where should i watch')
-    ) {
+    if (q.includes('triples')) {
+      if (!familyAnalytics.triples.length) return 'No triples are strongly represented yet.';
+      return `Top triple families right now: ${familyAnalytics.triples
+        .slice(0, 5)
+        .map((f: any) => `${f.familyKey} (${f.totalHits} hits)`)
+        .join('; ')}.`;
+    }
+
+    if (q.includes('doubles')) {
+      if (!familyAnalytics.doubles.length) return 'No doubles are strongly represented yet.';
+      return `Top double families right now: ${familyAnalytics.doubles
+        .slice(0, 5)
+        .map((f: any) => `${f.familyKey} (${f.totalHits} hits)`)
+        .join('; ')}.`;
+    }
+
+    if (q.startsWith('family ')) {
+      const key = q.replace(/^family\s+/, '').trim();
+      const match = familyAnalytics.families.find((f: any) => f.familyKey === key);
+      if (!match) return `I do not currently see a strong family record for ${key}.`;
+
+      return `Family ${match.familyKey} is tagged as ${match.patternTag}. Sample numbers: ${match.sampleNumbers.join(', ')}. Top states: ${match.topStates
+        .slice(0, 3)
+        .map((s: any) => `${s.state} (${s.hits} hits)`)
+        .join('; ')}. Top terms: ${match.topTerms
+        .slice(0, 3)
+        .map((t: any) => `${t.term} (${t.hits} hits)`)
+        .join('; ')}.`;
+    }
+
+    if (q.includes('latest dream')) {
+      if (!latestDream) return 'I do not see a saved latest live dream yet.';
+      return `Your latest dream is dated ${latestDream.dreamDate || 'unknown date'}. There are ${forecast.unresolvedWindows.length} unresolved watch item(s) and ${forecast.resolvedHitsForLatestDream.length} resolved hit(s).`;
+    }
+
+    if (q.includes('watch next') || q.includes('which states should i watch')) {
       if (!forecast.recommendationStateGroups.length) {
-        return 'I do not yet have enough historical term-state evidence tied to your latest dream to recommend state watches.';
+        return 'I do not yet have enough historical state evidence tied to your latest dream to recommend state watches.';
       }
 
-      const top = forecast.recommendationStateGroups.slice(0, 5).map((group: any) => {
-        const picks = group.rows
-          .slice(0, 3)
-          .map((row: any) => `${row.number} (${row.term}, ${row.confidenceTier})`)
-          .join(', ');
-        return `${group.state} [${group.confidenceTier}]: ${picks}`;
-      });
-
-      return `Based on your latest dream and historical memory, the strongest states to watch next are ${top.join('; ')}.`;
+      return `The strongest states to watch next are ${forecast.recommendationStateGroups
+        .slice(0, 5)
+        .map((group: any) => `${group.state} [${group.confidenceTier}]`)
+        .join('; ')}.`;
     }
 
-    if (q.includes('top unresolved') || q.includes('best unresolved') || q.includes('top watch')) {
+    if (q.includes('top unresolved') || q.includes('best unresolved')) {
       if (!forecast.recommendationRows.length) {
         return 'I do not see any unresolved forecast recommendations right now.';
       }
 
-      const top = forecast.recommendationRows.slice(0, 5).map((row: any) => {
-        return `${row.number} in ${row.state} (${row.term}, ${row.confidenceTier}, score ${row.forecastScore})`;
-      });
-
-      return `The strongest unresolved watch recommendations right now are: ${top.join('; ')}.`;
-    }
-
-    if (q.includes('confidence') || q.includes('confidence tiers')) {
-      if (!forecast.recommendationRows.length) {
-        return 'There are no active unresolved recommendations to score yet.';
-      }
-
-      const counts = forecast.recommendationRows.reduce((acc: Record<string, number>, row: any) => {
-        acc[row.confidenceTier] = (acc[row.confidenceTier] ?? 0) + 1;
-        return acc;
-      }, {});
-
-      return `Current unresolved forecast confidence tiers: ${Object.entries(counts)
-        .map(([tier, count]) => `${tier}: ${count}`)
+      return `The strongest unresolved watch recommendations are ${forecast.recommendationRows
+        .slice(0, 5)
+        .map((row: any) => `${row.number} in ${row.state} (${row.term}, ${row.confidenceTier})`)
         .join('; ')}.`;
     }
 
-    if (
-      q.includes('resemble historically') ||
-      q.includes('what does this dream resemble') ||
-      q.includes('historical resemblance')
-    ) {
-      if (!forecast.latestDreamTerms.length) {
-        return 'Your latest dream does not yet have parsed terms I can compare historically.';
-      }
-
-      const overlaps = backtestSummaries
-        .filter((row: any) => row.bestTerm && forecast.latestDreamTerms.map(normalizeText).includes(normalizeText(row.bestTerm)))
-        .slice(0, 5);
-
-      if (!overlaps.length) {
-        return `Your latest dream terms (${forecast.latestDreamTerms.join(', ')}) do not yet strongly overlap with your strongest completed backtest terms.`;
-      }
-
-      return `Your latest dream most strongly resembles historical backtests involving: ${overlaps
-        .map((row: any) => `${row.bestTerm} → ${row.bestState || 'unknown state'}`)
-        .join('; ')}.`;
-    }
-
-    if (
-      q.includes('best backtest state') ||
-      q.includes('repeated backtest state') ||
-      q.includes('historical best state')
-    ) {
-      const top = backtestBestStates[0];
-      if (!top) return 'No completed backtest summaries are available yet.';
-      return `${top.state} is the most repeated best-performing backtest state, appearing ${top.count} time(s) as the strongest historical replay state.`;
-    }
-
-    if (q.startsWith('term ') || q.includes(' about term ') || q.includes(' for term ')) {
-      const candidate = q
-        .replace('about term', '')
-        .replace('for term', '')
-        .replace(/^term\s+/, '')
-        .trim();
-
-      const matches = forecast.recommendationRows.filter(
-        (row) => normalizeText(row.term) === candidate
-      );
-
-      if (!matches.length) {
-        return `I do not currently see unresolved latest-dream forecast evidence for the term "${candidate}".`;
-      }
-
-      const topMatches = [...matches]
-        .sort((a, b) => b.forecastScore - a.forecastScore)
-        .slice(0, 5);
-
-      const summary = topMatches
-        .map(
-          (row) =>
-            `${row.number} in ${row.state} (${row.gameType}, ${row.matchType}, ${row.confidenceTier}, score ${row.forecastScore})`
-        )
-        .join('; ');
-
-      return `For the term "${candidate}", the strongest unresolved latest-dream recommendations are: ${summary}.`;
-    }
-
-    if (q.startsWith('state ') || q.includes(' about state ') || q.includes(' for state ')) {
-      const candidate = q
-        .replace('about state', '')
-        .replace('for state', '')
-        .replace(/^state\s+/, '')
-        .trim();
-
-      const matches = forecast.recommendationRows.filter(
-        (row) => normalizeText(row.state) === candidate
-      );
-
-      if (!matches.length) {
-        return `I do not currently see unresolved latest-dream forecast evidence for the state "${candidate}".`;
-      }
-
-      const topMatches = [...matches]
-        .sort((a, b) => b.forecastScore - a.forecastScore)
-        .slice(0, 5);
-
-      const summary = topMatches
-        .map(
-          (row) =>
-            `${row.term} → ${row.number} (${row.matchType}, ${row.confidenceTier}, score ${row.forecastScore})`
-        )
-        .join('; ');
-
-      return `For the state "${candidate}", the strongest unresolved latest-dream recommendations are: ${summary}.`;
+    if (q.includes('family for latest dream') || q.includes('latest dream family')) {
+      if (!forecast.latestDreamNumbers.length) return 'No parsed latest-dream numbers were found.';
+      const families = Array.from(new Set(forecast.latestDreamNumbers.map((n: string) => boxedFamilyKey(n))));
+      return `Your latest dream points to these boxed families: ${families.join(', ')}.`;
     }
 
     if (q.includes('help')) {
-      return 'Try asking: "latest dream", "which states should I watch next", "top unresolved watches", "confidence tiers", "what does this dream resemble historically", "term dancing", or "state illinois".';
+      return 'Try asking: "hot family", "family 058", "triples", "doubles", "latest dream", "which states should I watch next", or "family for latest dream".';
     }
 
-    return 'I can answer questions about your latest dream, unresolved live watches, strongest next states, confidence tiers, historical resemblance, and specific term/state forecast lookups.';
+    return 'I can answer questions about hot families, doubles, triples, specific family keys, latest-dream family patterns, unresolved live watches, and strongest next states.';
   }
 
   function handleAsk(question: string) {
@@ -317,13 +207,13 @@ export default function ChatPage() {
   }
 
   const quickPrompts = [
+    'hot family',
+    'triples',
+    'doubles',
+    'family 058',
     'latest dream',
+    'family for latest dream',
     'which states should I watch next',
-    'top unresolved watches',
-    'confidence tiers',
-    'what does this dream resemble historically',
-    'term dancing',
-    'state illinois',
   ];
 
   return (
@@ -337,7 +227,6 @@ export default function ChatPage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -352,48 +241,18 @@ export default function ChatPage() {
             <div className="page-header">
               <h1>Sweet404Peaches Intelligence Chat</h1>
               <p>
-                Ask evidence-based questions about your latest dream, unresolved live watches, confidence tiers, historical backtests, and state-term intelligence.
+                Ask evidence-based questions about families, unresolved live watches,
+                historical memory, and state-term intelligence.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              <Link href="/hot-numbers" className="btn-secondary">
+                Hot Families
+              </Link>
               <Link href="/intelligence" className="btn-secondary">
                 Intelligence Hub
               </Link>
-              <Link href="/forecast-board" className="btn-secondary">
-                Forecast Board
-              </Link>
-            </div>
-          </div>
-        </section>
-
-        <section
-          className="journal-card-flat"
-          style={{
-            display: 'grid',
-            gap: '12px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          }}
-        >
-          <div>
-            <div className="journal-label">Latest Dream Date</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{latestDream?.dreamDate ?? '—'}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Unresolved Watches</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.unresolvedWindows.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Resolved Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{forecast.resolvedHitsForLatestDream.length}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Top Suggested State</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>
-              {forecast.recommendationStateGroups[0]?.state ?? '—'}
             </div>
           </div>
         </section>
@@ -407,11 +266,7 @@ export default function ChatPage() {
         {error ? (
           <section
             className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
+            style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}
           >
             {error}
           </section>
@@ -420,7 +275,7 @@ export default function ChatPage() {
         <section className="journal-card">
           <div className="page-header">
             <h1>Quick Prompts</h1>
-            <p>Click one to test the analyst engine.</p>
+            <p>Click one to test the family-aware analyst engine.</p>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '12px' }}>
@@ -440,7 +295,7 @@ export default function ChatPage() {
         <section className="journal-card" style={{ display: 'grid', gap: '16px' }}>
           <div className="page-header">
             <h1>Conversation</h1>
-            <p>The assistant answers from your unresolved live forecast and historical intelligence.</p>
+            <p>The assistant answers from family intelligence and unresolved live forecast memory.</p>
           </div>
 
           <div style={{ display: 'grid', gap: '12px' }}>
@@ -473,7 +328,7 @@ export default function ChatPage() {
               rows={4}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder='Try: top unresolved watches, confidence tiers, or which states should I watch next'
+              placeholder='Try: hot family, triples, family 058, or family for latest dream'
             />
 
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>

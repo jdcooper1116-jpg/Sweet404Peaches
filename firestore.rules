@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsNewDoc() {
+      return signedIn() &&
+        request.resource.data.ownerUid == request.auth.uid;
+    }
+
+    function ownsDoc() {
+      return signedIn() &&
+        resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /ownerProfiles/{userId} {
+      allow create, read, update, delete: if signedIn() && userId == request.auth.uid;
+    }
+
+    match /dreamEntries/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /dreamers/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /activeDreamWindows/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /dreamHits/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /personalHitMappings/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /termNumberMappings/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /lotteryResults/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /pinnedPlays/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /backtestDreams/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /backtestWindows/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /backtestResults/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /backtestHits/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+
+    match /backtestSummaries/{docId} {
+      allow create: if ownsNewDoc();
+      allow read, update: if ownsDoc();
+      allow delete: if signedIn();
+    }
+  }
+}
