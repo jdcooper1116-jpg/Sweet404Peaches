@@ -608,7 +608,6 @@ export function makeBoxedKey(value: string) {
   return sortedDigits(value);
 }
 
-
 export async function listTermNumberMappings(ownerUid: string): Promise<any[]> {
   const q = query(
     collection(db, COLLECTIONS.termNumberMappings),
@@ -645,7 +644,6 @@ export async function createTermNumberMapping(ownerUid: string, input: {
   const ref = await addDoc(collection(db, COLLECTIONS.termNumberMappings), payload);
   return ref.id;
 }
-
 
 export async function listPinnedPlays(ownerUid: string): Promise<any[]> {
   const q = query(
@@ -708,7 +706,6 @@ export async function updatePinnedPlay(
     updatedAt: Timestamp.now(),
   });
 }
-
 
 export async function deleteDreamEntryCascade(dreamEntryId: string) {
   const batch = writeBatch(db);
@@ -775,7 +772,6 @@ export async function deleteDreamerCascade(dreamerId: string) {
 
   await batch.commit();
 }
-
 
 export async function deleteLotteryResultById(resultId: string) {
   await deleteDoc(doc(db, COLLECTIONS.lotteryResults, resultId));
@@ -854,7 +850,6 @@ export async function bulkDeleteTestDataByDate(date: string) {
 
   await batch.commit();
 }
-
 
 export async function deletePersonalHitMappingById(mappingId: string) {
   await deleteDoc(doc(db, COLLECTIONS.personalHitMappings, mappingId));
@@ -944,7 +939,6 @@ export async function rescanLotteryResultsForDateRange(
   await scanImportedLotteryRowsForHits(ownerUid, preparedRows);
   return preparedRows.length;
 }
-
 
 async function deleteOwnedDocsInCollection(
   ownerUid: string,
@@ -1724,4 +1718,101 @@ export async function getLatestDreamEntry(ownerUid: string): Promise<any | null>
   });
 
   return rows[0];
+}
+
+
+
+
+export async function listAllBacktestHits(ownerUid: string): Promise<any[]> {
+  const q = query(
+    collection(db, 'backtestHits'),
+    where('ownerUid', '==', ownerUid),
+    limit(5000)
+  );
+
+  const snap = await getDocs(q);
+  return snap.docs.map(d => mapDoc<any>(d.id, d.data()));
+}
+
+
+async function countOwnedDocs(
+  ownerUid: string,
+  collectionName: string
+): Promise<number> {
+  const q = query(
+    collection(db, collectionName),
+    where('ownerUid', '==', ownerUid),
+    limit(5000)
+  );
+
+  const snap = await getDocs(q);
+  return snap.size;
+}
+
+export async function getOwnerIntegritySnapshot(ownerUid: string): Promise<any> {
+  const collections = [
+    'dreamEntries',
+    'dreamers',
+    'activeDreamWindows',
+    'dreamHits',
+    'lotteryResults',
+    'pinnedPlays',
+    'backtestDreams',
+    'backtestWindows',
+    'backtestResults',
+    'backtestHits',
+    'backtestSummaries',
+    'personalHitMappings',
+    'termNumberMappings',
+  ];
+
+  const counts = await Promise.all(
+    collections.map(async (name) => [name, await countOwnedDocs(ownerUid, name)])
+  );
+
+  return Object.fromEntries(counts);
+}
+
+export async function safeResetLiveOpsData(ownerUid: string): Promise<any> {
+  const targets = [
+    'dreamEntries',
+    'dreamers',
+    'activeDreamWindows',
+    'dreamHits',
+    'lotteryResults',
+    'pinnedPlays',
+  ];
+
+  const results = await Promise.all(
+    targets.map(async (name) => [name, await deleteOwnedDocsInCollection(ownerUid, name)])
+  );
+
+  return Object.fromEntries(results);
+}
+
+export async function safeResetResearchData(ownerUid: string): Promise<any> {
+  const targets = [
+    'backtestDreams',
+    'backtestWindows',
+    'backtestResults',
+    'backtestHits',
+    'backtestSummaries',
+  ];
+
+  const results = await Promise.all(
+    targets.map(async (name) => [name, await deleteOwnedDocsInCollection(ownerUid, name)])
+  );
+
+  return Object.fromEntries(results);
+}
+
+export async function hardResetOperationalData(ownerUid: string): Promise<any> {
+  const live = await safeResetLiveOpsData(ownerUid);
+  const research = await safeResetResearchData(ownerUid);
+
+  return {
+    ...live,
+    ...research,
+    preserved: ['personalHitMappings', 'termNumberMappings'],
+  };
 }
