@@ -117,6 +117,42 @@ export default function DashboardPage() {
           </div>
         </section>
 
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>System Navigation Hub</h1>
+            <p>Fast access to the newest intelligence, research, and integrity tools.</p>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gap: '12px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              marginTop: '12px',
+            }}
+          >
+            <a href="/daily-ops" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+              <strong>Daily Ops</strong>
+              <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Operational alerts, diagnosis, and top priorities.</div>
+            </a>
+
+            <a href="/forecast-board" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+              <strong>Forecast Board</strong>
+              <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Boosted live watch recommendations by state.</div>
+            </a>
+
+            <a href="/backtesting/evidence" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+              <strong>Evidence Rules</strong>
+              <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Universal and personal promotion scoring.</div>
+            </a>
+
+            <a href="/integrity" className="journal-card-flat" style={{ textDecoration: 'none', color: 'inherit' }}>
+              <strong>Integrity Console</strong>
+              <div style={{ marginTop: '6px', color: 'var(--ink-light)' }}>Audits, safe resets, and data health checks.</div>
+            </a>
+          </div>
+        </section>
+
         {pageLoading ? (
           <section className="journal-card">
             <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading control center...</p>

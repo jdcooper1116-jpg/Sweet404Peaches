@@ -7,12 +7,9 @@ import {
   BarChart3,
   BookMarked,
   BookOpen,
-  BookText,
-  BookType,
-  BookmarkCheck,
   Brain,
   CalendarRange,
-  Download,
+  Database,
   Flame,
   LayoutDashboard,
   MapPinned,
@@ -20,84 +17,80 @@ import {
   MoonStar,
   ReceiptText,
   SearchCheck,
+  ShieldCheck,
   Sparkles,
   Trophy,
   Trash2,
   Users,
 } from 'lucide-react';
-import GlobalChatDock from '@/components/chat/GlobalChatDock';
 
-const navItems = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: any;
+};
+
+const primaryNav: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dreams', label: 'Dream Journal', icon: BookText },
-  { href: '/dreams/new', label: 'New Dream', icon: BookOpen },
-  { href: '/dreamers', label: 'Dreamers', icon: Users },
-  { href: '/cleanup', label: 'Cleanup', icon: Trash2 },
-  { href: '/dictionary', label: 'Universal Dictionary', icon: BookType },
-  { href: '/windows', label: 'Active Windows', icon: CalendarRange },
-  { href: '/results', label: 'Results Log', icon: ReceiptText },
-  { href: '/results/import', label: 'Results Import', icon: Download },
-  { href: '/hits', label: 'Hit Scanner', icon: SearchCheck },
-  { href: '/fell-before', label: 'As They Fell Before', icon: BookMarked },
-  { href: '/hot-numbers', label: 'Hot Families', icon: Flame },
-  { href: '/playlists', label: 'State Playlists', icon: MapPinned },
-  { href: '/universal-scope', label: 'Universal Scope', icon: Sparkles },
-  { href: '/forecast-board', label: 'Forecast Board', icon: BarChart3 },
-  {
-    href: '/backtesting',
-    label: 'Backtesting Portal',
-    icon: Brain,
-  },
-  { href: '/pinned-plays', label: 'Pinned Plays', icon: BookmarkCheck },
+  { href: '/dreams/new', label: 'New Dream Entry', icon: MoonStar },
+  { href: '/results/import', label: 'Results Import', icon: ReceiptText },
+  { href: '/hits', label: 'Hits Detector', icon: SearchCheck },
+  { href: '/fell-before', label: 'As They Fell Before', icon: BookOpen },
+  { href: '/forecast-board', label: 'Forecast Board', icon: MapPinned },
   { href: '/daily-ops', label: 'Daily Ops', icon: Activity },
-  { href: '/performance', label: 'Performance', icon: Trophy },
-  { href: '/intelligence', label: 'Intelligence Hub', icon: Brain },
-  { href: '/chat', label: 'Chat', icon: MessageCircleHeart },
+  { href: '/chat', label: 'Intelligence Chat', icon: MessageCircleHeart },
 ];
 
-export default function Sidebar() {
-  const pathname = usePathname();
+const intelligenceNav: NavItem[] = [
+  { href: '/intelligence', label: 'Intelligence Hub', icon: Brain },
+  { href: '/hot-numbers', label: 'Hot Families', icon: Flame },
+  { href: '/performance', label: 'Performance', icon: BarChart3 },
+  { href: '/playlists', label: 'State Playlists', icon: Sparkles },
+  { href: '/universal-scope', label: 'Universal Dictionary', icon: BookMarked },
+];
 
+const researchNav: NavItem[] = [
+  { href: '/backtesting', label: 'Backtesting Portal', icon: CalendarRange },
+  { href: '/backtesting/intake', label: 'Historical Dream Intake', icon: MoonStar },
+  { href: '/backtesting/results', label: 'Historical Results Intake', icon: ReceiptText },
+  { href: '/backtesting/replay', label: 'Replay Lab', icon: Activity },
+  { href: '/backtesting/archive', label: 'Backtest Archive', icon: Trophy },
+  { href: '/backtesting/evidence', label: 'Evidence Rules', icon: Database },
+];
+
+const adminNav: NavItem[] = [
+  { href: '/integrity', label: 'Integrity Console', icon: ShieldCheck },
+  { href: '/cleanup', label: 'Cleanup Tools', icon: Trash2 },
+];
+
+function NavSection({
+  title,
+  items,
+  pathname,
+}: {
+  title: string;
+  items: NavItem[];
+  pathname: string;
+}) {
   return (
-    <aside
-      style={{
-        width: '280px',
-        minHeight: '100vh',
-        padding: '24px 18px',
-        borderRight: '1px solid var(--border-muted)',
-        background:
-          'linear-gradient(180deg, rgba(250,247,242,0.98) 0%, rgba(242,237,228,0.95) 100%)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '18px',
-      }}
-    >
-      <div className="journal-card-flat">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-          <MoonStar size={22} color="var(--deep-plum)" />
-          <div>
-            <div style={{ fontSize: '24px', fontStyle: 'italic', color: 'var(--deep-plum)', lineHeight: 1 }}>
-              Sweet404Peaches
-            </div>
-            <div style={{ fontSize: '12px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--ink-light)', marginTop: '6px' }}>
-              Where Dreams Leave Numbers
-            </div>
-          </div>
-        </div>
-
-        <p style={{ margin: 0, fontSize: '14px', color: 'var(--ink-light)', lineHeight: 1.5 }}>
-          Your private dream journal for symbols, numbers, synchronicity, and future tracking.
-        </p>
+    <section style={{ display: 'grid', gap: '8px' }}>
+      <div
+        style={{
+          fontSize: '12px',
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: 'var(--ink-light)',
+          padding: '0 10px',
+        }}
+      >
+        {title}
       </div>
 
-      <nav className="journal-card-flat" style={{ display: 'grid', gap: '10px' }}>
-        <div style={{ fontSize: '12px', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '4px' }}>
-          Journal Navigation
-        </div>
-
-        {navItems.map(item => {
+      <div style={{ display: 'grid', gap: '6px' }}>
+        {items.map((item) => {
           const Icon = item.icon;
-          const active = pathname === item.href;
+          const active =
+            pathname === item.href || pathname.startsWith(item.href + '/');
 
           return (
             <Link
@@ -107,11 +100,15 @@ export default function Sidebar() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '10px',
-                borderRadius: '12px',
-                padding: '12px 14px',
-                border: active ? '1px solid rgba(201,168,76,0.55)' : '1px solid transparent',
-                background: active ? 'rgba(201,168,76,0.14)' : 'rgba(255,255,255,0.55)',
-                color: active ? 'var(--deep-plum)' : 'var(--ink)',
+                padding: '10px 12px',
+                borderRadius: '14px',
+                textDecoration: 'none',
+                color: active ? 'var(--ink)' : 'var(--ink-light)',
+                background: active ? 'rgba(201, 168, 76, 0.14)' : 'transparent',
+                border: active
+                  ? '1px solid rgba(201, 168, 76, 0.22)'
+                  : '1px solid transparent',
+                transition: 'all 0.18s ease',
                 fontWeight: active ? 700 : 500,
               }}
             >
@@ -120,19 +117,69 @@ export default function Sidebar() {
             </Link>
           );
         })}
-      </nav>
-
-      <GlobalChatDock />
-
-      <div className="journal-card-flat" style={{ marginTop: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', color: 'var(--deep-plum)' }}>
-          <Sparkles size={16} />
-          <strong>Current Build Phase</strong>
-        </div>
-        <p style={{ margin: 0, fontSize: '14px', color: 'var(--ink-light)', lineHeight: 1.5 }}>
-          Final intelligence is ready. The main remaining work is polish, external automation, and deeper learning from long-term outcomes.
-        </p>
       </div>
+    </section>
+  );
+}
+
+export default function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside
+      style={{
+        borderRight: '1px solid rgba(90, 52, 74, 0.08)',
+        background:
+          'linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(255,250,240,0.88) 100%)',
+        padding: '24px 16px',
+        display: 'grid',
+        gap: '24px',
+        alignContent: 'start',
+        position: 'sticky',
+        top: 0,
+        height: '100vh',
+        overflowY: 'auto',
+      }}
+    >
+      <div
+        style={{
+          padding: '8px 10px 0 10px',
+          display: 'grid',
+          gap: '6px',
+        }}
+      >
+        <div
+          style={{
+            fontSize: '22px',
+            fontWeight: 800,
+            color: 'var(--ink)',
+            lineHeight: 1.1,
+          }}
+        >
+          Sweet404Peaches
+        </div>
+        <div style={{ color: 'var(--ink-light)', fontSize: '13px', lineHeight: 1.5 }}>
+          Dream intelligence, hit tracking, research replay, and forecast learning.
+        </div>
+      </div>
+
+      <NavSection title="Primary" items={primaryNav} pathname={pathname} />
+      <NavSection title="Intelligence" items={intelligenceNav} pathname={pathname} />
+      <NavSection title="Research" items={researchNav} pathname={pathname} />
+      <NavSection title="Admin" items={adminNav} pathname={pathname} />
+
+      <section
+        className="journal-card-flat"
+        style={{ marginTop: 'auto', display: 'grid', gap: '10px' }}
+      >
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <Users size={16} />
+          <strong>Sweet404Peaches</strong>
+        </div>
+        <div style={{ color: 'var(--ink-light)', fontSize: '13px', lineHeight: 1.5 }}>
+          Personal dream intelligence control center.
+        </div>
+      </section>
     </aside>
   );
 }
