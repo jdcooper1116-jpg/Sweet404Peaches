@@ -19,6 +19,12 @@ const cards = [
       'Load the state results tied to the selected dream window so the replay engine can evaluate them.',
   },
   {
+    href: '/backtesting/auto-fetch',
+    title: 'Backtest Auto-Fetch',
+    description:
+      'Automatically research and preview the 7-day Georgia result window using provider fallback.',
+  },
+  {
     href: '/backtesting/replay',
     title: 'Replay Lab',
     description:
