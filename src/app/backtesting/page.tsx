@@ -41,11 +41,28 @@ export default function BacktestingPortalPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BacktestResponse | null>(null);
 
-  async function runTestBacktest() {
+  const [stateCode, setStateCode] = useState("GA");
+  const [gameType, setGameType] = useState("pick3");
+  const [anchorDate, setAnchorDate] = useState("2024-01-25");
+  const [lookaheadDays, setLookaheadDays] = useState("7");
+  const [candidatesText, setCandidatesText] = useState("297,716,999");
+  const [label, setLabel] = useState("test dream window");
+
+  async function runBacktest() {
     try {
       setLoading(true);
       setError(null);
       setResult(null);
+
+      const candidates = candidatesText
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+      if (!stateCode.trim()) throw new Error("State is required.");
+      if (!gameType.trim()) throw new Error("Game type is required.");
+      if (!anchorDate.trim()) throw new Error("Anchor date is required.");
+      if (!candidates.length) throw new Error("Enter at least one candidate number.");
 
       const response = await fetch("/api/backtest", {
         method: "POST",
@@ -53,12 +70,12 @@ export default function BacktestingPortalPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          state: "GA",
-          game_type: "pick3",
-          anchor_date: "2024-01-25",
-          lookahead_days: 7,
-          candidates: ["297", "716", "999"],
-          label: "test dream window",
+          state: stateCode.trim().toUpperCase(),
+          game_type: gameType.trim().toLowerCase(),
+          anchor_date: anchorDate,
+          lookahead_days: Number(lookaheadDays),
+          candidates,
+          label: label.trim(),
         }),
       });
 
@@ -75,6 +92,21 @@ export default function BacktestingPortalPage() {
       setLoading(false);
     }
   }
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: "10px",
+    border: "1px solid rgba(255,255,255,0.16)",
+    background: "rgba(255,255,255,0.06)",
+    color: "white",
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: "grid",
+    gap: "6px",
+    fontSize: "14px",
+  };
 
   return (
     <main
@@ -118,13 +150,7 @@ export default function BacktestingPortalPage() {
               }}
             >
               <h2 style={{ margin: 0 }}>{card.title}</h2>
-              <p
-                style={{
-                  margin: 0,
-                  color: "var(--ink-light)",
-                  lineHeight: 1.6,
-                }}
-              >
+              <p style={{ margin: 0, color: "var(--ink-light)", lineHeight: 1.6 }}>
                 {card.description}
               </p>
             </Link>
@@ -133,23 +159,90 @@ export default function BacktestingPortalPage() {
 
         <section
           className="journal-card"
-          style={{
-            padding: "20px",
-            display: "grid",
-            gap: "16px",
-          }}
+          style={{ padding: "20px", display: "grid", gap: "16px" }}
         >
           <div>
-            <h2 style={{ margin: "0 0 8px 0" }}>Lottery Engine Bridge Test</h2>
+            <h2 style={{ margin: "0 0 8px 0" }}>Lottery Engine Backtest</h2>
             <p style={{ margin: 0, color: "var(--ink-light)", lineHeight: 1.6 }}>
-              This sends a real request from Sweet404Peaches to the lottery-engine
-              backtest API through <code>/api/backtest</code>.
+              Enter backtest values below and send them through <code>/api/backtest</code>.
             </p>
           </div>
 
+          <div
+            style={{
+              display: "grid",
+              gap: "14px",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            }}
+          >
+            <label style={labelStyle}>
+              <span>State</span>
+              <input
+                value={stateCode}
+                onChange={(e) => setStateCode(e.target.value)}
+                style={inputStyle}
+                placeholder="GA"
+              />
+            </label>
+
+            <label style={labelStyle}>
+              <span>Game Type</span>
+              <select
+                value={gameType}
+                onChange={(e) => setGameType(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="pick3">pick3</option>
+                <option value="pick4">pick4</option>
+              </select>
+            </label>
+
+            <label style={labelStyle}>
+              <span>Anchor Date</span>
+              <input
+                type="date"
+                value={anchorDate}
+                onChange={(e) => setAnchorDate(e.target.value)}
+                style={inputStyle}
+              />
+            </label>
+
+            <label style={labelStyle}>
+              <span>Lookahead Days</span>
+              <input
+                type="number"
+                min="1"
+                max="30"
+                value={lookaheadDays}
+                onChange={(e) => setLookaheadDays(e.target.value)}
+                style={inputStyle}
+              />
+            </label>
+          </div>
+
+          <label style={labelStyle}>
+            <span>Candidates (comma-separated)</span>
+            <input
+              value={candidatesText}
+              onChange={(e) => setCandidatesText(e.target.value)}
+              style={inputStyle}
+              placeholder="297,716,999"
+            />
+          </label>
+
+          <label style={labelStyle}>
+            <span>Label</span>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              style={inputStyle}
+              placeholder="test dream window"
+            />
+          </label>
+
           <div>
             <button
-              onClick={runTestBacktest}
+              onClick={runBacktest}
               disabled={loading}
               style={{
                 padding: "12px 18px",
@@ -160,7 +253,7 @@ export default function BacktestingPortalPage() {
                 cursor: loading ? "not-allowed" : "pointer",
               }}
             >
-              {loading ? "Running Backtest..." : "Run Test Backtest"}
+              {loading ? "Running Backtest..." : "Run Backtest"}
             </button>
           </div>
 
