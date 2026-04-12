@@ -1,9 +1,10 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import Link from "next/link";
-import Sidebar from "@/components/layout/Sidebar";
-import PageIntro from "@/components/ui/PageIntro";
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import Sidebar from '@/components/layout/Sidebar';
+import PageIntro from '@/components/ui/PageIntro';
 
 type BacktestHit = {
   candidate: string;
@@ -21,53 +22,60 @@ type BacktestResponse = {
   hit_draw_times: string[];
   summary: string;
   hits: BacktestHit[];
+  all_draws?: any[];
+  coverage_gaps?: any[];
 };
 
-const cards = [
-  {
-    href: "/forecast-board",
-    title: "Forecast Board",
-    description: "Review active forecast signals and recommendation snapshots.",
-  },
-  {
-    href: "/chat",
-    title: "Intelligence Chat",
-    description: "Explore live reasoning, evidence, and forecasting notes.",
-  },
-];
+function BacktestingPageInner() {
+  const searchParams = useSearchParams();
 
-export default function BacktestingPortalPage() {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [stateCode, setStateCode] = useState('GA');
+  const [gameType, setGameType] = useState('pick3');
+  const [anchorDate, setAnchorDate] = useState('2024-01-25');
+  const [lookaheadDays, setLookaheadDays] = useState('7');
+  const [candidatesText, setCandidatesText] = useState('297,716,999');
+  const [label, setLabel] = useState('test dream window');
+
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState('');
   const [result, setResult] = useState<BacktestResponse | null>(null);
 
-  const [stateCode, setStateCode] = useState("GA");
-  const [gameType, setGameType] = useState("pick3");
-  const [anchorDate, setAnchorDate] = useState("2024-01-25");
-  const [lookaheadDays, setLookaheadDays] = useState("7");
-  const [candidatesText, setCandidatesText] = useState("297,716,999");
-  const [label, setLabel] = useState("test dream window");
+  useEffect(() => {
+    const state = searchParams.get('state');
+    const game = searchParams.get('game');
+    const anchor = searchParams.get('anchor');
+    const lookahead = searchParams.get('lookahead');
+    const candidates = searchParams.get('candidates');
+    const textLabel = searchParams.get('label');
+
+    if (state) setStateCode(state.toUpperCase());
+    if (game) setGameType(game.toLowerCase());
+    if (anchor) setAnchorDate(anchor);
+    if (lookahead) setLookaheadDays(lookahead);
+    if (candidates) setCandidatesText(candidates);
+    if (textLabel) setLabel(textLabel);
+  }, [searchParams]);
 
   async function runBacktest() {
-    try {
-      setLoading(true);
-      setError(null);
-      setResult(null);
+    setWorking(true);
+    setError('');
+    setResult(null);
 
+    try {
       const candidates = candidatesText
-        .split(",")
-        .map((value) => value.trim())
+        .split(',')
+        .map((x) => x.trim())
         .filter(Boolean);
 
-      if (!stateCode.trim()) throw new Error("State is required.");
-      if (!gameType.trim()) throw new Error("Game type is required.");
-      if (!anchorDate.trim()) throw new Error("Anchor date is required.");
-      if (!candidates.length) throw new Error("Enter at least one candidate number.");
+      if (!stateCode.trim()) throw new Error('State is required.');
+      if (!gameType.trim()) throw new Error('Game type is required.');
+      if (!anchorDate.trim()) throw new Error('Anchor date is required.');
+      if (!candidates.length) throw new Error('Enter at least one candidate number.');
 
-      const response = await fetch("/api/backtest", {
-        method: "POST",
+      const res = await fetch('/api/backtest', {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           state: stateCode.trim().toUpperCase(),
@@ -79,119 +87,71 @@ export default function BacktestingPortalPage() {
         }),
       });
 
-      const data = await response.json();
+      const payload = await res.json();
 
-      if (!response.ok) {
-        throw new Error(data?.error || "Backtest request failed.");
+      if (!res.ok) {
+        throw new Error(payload?.details?.detail || payload?.error || 'Backtest failed.');
       }
 
-      setResult(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error.");
+      setResult(payload);
+    } catch (err: any) {
+      setError(err?.message || 'Backtest failed.');
     } finally {
-      setLoading(false);
+      setWorking(false);
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: "10px",
-    border: "1px solid rgba(255,255,255,0.16)",
-    background: "rgba(255,255,255,0.06)",
-    color: "white",
-  };
-
   const labelStyle: React.CSSProperties = {
-    display: "grid",
-    gap: "6px",
-    fontSize: "14px",
+    display: 'grid',
+    gap: '8px',
+    color: 'var(--ink-light)',
+    fontWeight: 600,
   };
 
   return (
     <main
       style={{
-        minHeight: "100vh",
-        display: "grid",
-        gridTemplateColumns: "280px 1fr",
+        minHeight: '100vh',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
         background:
-          "radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)",
+          'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
       }}
     >
       <Sidebar />
 
-      <section style={{ padding: "32px", display: "grid", gap: "24px" }}>
+      <section className="panel-grid" style={{ padding: '32px' }}>
         <PageIntro
-          title="Backtesting Portal"
-          description="Historical replay, evidence tracking, and research workflows that teach the live system what to strengthen."
+          title="Backtesting"
+          description="Run a live dream backtest against the lottery engine."
           actions={[
-            { href: "/forecast-board", label: "Forecast Board" },
-            { href: "/chat", label: "Intelligence Chat" },
+            { href: '/forecast-board', label: 'Forecast Board' },
+            { href: '/chat', label: 'Intelligence Chat' },
           ]}
         />
 
-        <section
-          style={{
-            display: "grid",
-            gap: "16px",
-            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          }}
-        >
-          {cards.map((card) => (
-            <Link
-              key={card.href}
-              href={card.href}
-              className="journal-card"
-              style={{
-                textDecoration: "none",
-                color: "inherit",
-                display: "grid",
-                gap: "10px",
-              }}
-            >
-              <h2 style={{ margin: 0 }}>{card.title}</h2>
-              <p style={{ margin: 0, color: "var(--ink-light)", lineHeight: 1.6 }}>
-                {card.description}
-              </p>
-            </Link>
-          ))}
-        </section>
-
-        <section
-          className="journal-card"
-          style={{ padding: "20px", display: "grid", gap: "16px" }}
-        >
-          <div>
-            <h2 style={{ margin: "0 0 8px 0" }}>Lottery Engine Backtest</h2>
-            <p style={{ margin: 0, color: "var(--ink-light)", lineHeight: 1.6 }}>
-              Enter backtest values below and send them through <code>/api/backtest</code>.
-            </p>
+        <section className="journal-card">
+          <div className="page-header">
+            <h1>Run Backtest</h1>
+            <p>Use manual inputs or launch here from a saved dream.</p>
           </div>
 
           <div
             style={{
-              display: "grid",
-              gap: "14px",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              marginTop: '16px',
+              display: 'grid',
+              gap: '16px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
             }}
           >
             <label style={labelStyle}>
               <span>State</span>
-              <input
-                value={stateCode}
-                onChange={(e) => setStateCode(e.target.value)}
-                style={inputStyle}
-                placeholder="GA"
-              />
+              <input className="journal-input" value={stateCode} onChange={(e) => setStateCode(e.target.value)} />
             </label>
 
             <label style={labelStyle}>
               <span>Game Type</span>
-              <select
-                value={gameType}
-                onChange={(e) => setGameType(e.target.value)}
-                style={inputStyle}
-              >
+              <select className="journal-select" value={gameType} onChange={(e) => setGameType(e.target.value)}>
                 <option value="pick3">pick3</option>
                 <option value="pick4">pick4</option>
               </select>
@@ -199,121 +159,98 @@ export default function BacktestingPortalPage() {
 
             <label style={labelStyle}>
               <span>Anchor Date</span>
-              <input
-                type="date"
-                value={anchorDate}
-                onChange={(e) => setAnchorDate(e.target.value)}
-                style={inputStyle}
-              />
+              <input className="journal-input" type="date" value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} />
             </label>
 
             <label style={labelStyle}>
               <span>Lookahead Days</span>
-              <input
-                type="number"
-                min="1"
-                max="30"
-                value={lookaheadDays}
-                onChange={(e) => setLookaheadDays(e.target.value)}
-                style={inputStyle}
-              />
+              <input className="journal-input" value={lookaheadDays} onChange={(e) => setLookaheadDays(e.target.value)} />
+            </label>
+
+            <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
+              <span>Candidates</span>
+              <input className="journal-input" value={candidatesText} onChange={(e) => setCandidatesText(e.target.value)} />
+            </label>
+
+            <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
+              <span>Label</span>
+              <input className="journal-input" value={label} onChange={(e) => setLabel(e.target.value)} />
             </label>
           </div>
 
-          <label style={labelStyle}>
-            <span>Candidates (comma-separated)</span>
-            <input
-              value={candidatesText}
-              onChange={(e) => setCandidatesText(e.target.value)}
-              style={inputStyle}
-              placeholder="297,716,999"
-            />
-          </label>
-
-          <label style={labelStyle}>
-            <span>Label</span>
-            <input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              style={inputStyle}
-              placeholder="test dream window"
-            />
-          </label>
-
-          <div>
-            <button
-              onClick={runBacktest}
-              disabled={loading}
-              style={{
-                padding: "12px 18px",
-                borderRadius: "12px",
-                border: "1px solid rgba(255,255,255,0.18)",
-                background: loading ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.14)",
-                color: "white",
-                cursor: loading ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading ? "Running Backtest..." : "Run Backtest"}
+          <div style={{ display: 'flex', gap: '12px', marginTop: '20px', flexWrap: 'wrap' }}>
+            <button className="btn-primary" onClick={runBacktest} disabled={working}>
+              {working ? 'Running...' : 'Run Backtest'}
             </button>
+            <Link href="/dreams" className="btn-secondary">
+              Dream Journal
+            </Link>
           </div>
+        </section>
 
-          {error && (
+        {error ? (
+          <section
+            className="journal-card-flat"
+            style={{ borderColor: '#f2a6a6', background: 'rgba(110,20,20,0.22)', color: '#fff0f0' }}
+          >
+            {error}
+          </section>
+        ) : null}
+
+        {result ? (
+          <section className="journal-card">
+            <div className="page-header">
+              <h1>Backtest Result</h1>
+              <p>{result.summary}</p>
+            </div>
+
             <div
               style={{
-                padding: "12px",
-                borderRadius: "12px",
-                background: "rgba(255, 90, 90, 0.12)",
-                border: "1px solid rgba(255, 90, 90, 0.35)",
+                marginTop: '16px',
+                display: 'grid',
+                gap: '12px',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
               }}
             >
-              <strong>Error:</strong> {error}
-            </div>
-          )}
-
-          {result && (
-            <div style={{ display: "grid", gap: "14px" }}>
-              <div>
-                <h3 style={{ margin: "0 0 8px 0" }}>Summary</h3>
-                <p style={{ margin: 0, lineHeight: 1.6 }}>{result.summary}</p>
+              <div className="journal-card-flat">
+                <div className="journal-label">Hit Count</div>
+                <div>{result.hit_count}</div>
               </div>
 
-              <div style={{ display: "grid", gap: "6px" }}>
-                <div><strong>Hit count:</strong> {result.hit_count}</div>
-                <div><strong>Hit dates:</strong> {result.hit_dates.join(", ") || "None"}</div>
-                <div><strong>Hit draw times:</strong> {result.hit_draw_times.join(", ") || "None"}</div>
+              <div className="journal-card-flat">
+                <div className="journal-label">Hit Dates</div>
+                <div>{result.hit_dates?.length ? result.hit_dates.join(', ') : 'None'}</div>
               </div>
 
-              <div>
-                <h3 style={{ margin: "0 0 8px 0" }}>Hits</h3>
-                {result.hits.length === 0 ? (
-                  <p style={{ margin: 0 }}>No hits found.</p>
-                ) : (
-                  <div style={{ display: "grid", gap: "10px" }}>
-                    {result.hits.map((hit, index) => (
-                      <div
-                        key={`${hit.candidate}-${hit.draw_date}-${hit.draw_time}-${index}`}
-                        style={{
-                          padding: "12px",
-                          borderRadius: "12px",
-                          background: "rgba(255,255,255,0.06)",
-                          border: "1px solid rgba(255,255,255,0.1)",
-                        }}
-                      >
-                        <div><strong>Candidate:</strong> {hit.candidate}</div>
-                        <div><strong>Date:</strong> {hit.draw_date}</div>
-                        <div><strong>Draw time:</strong> {hit.draw_time}</div>
-                        <div><strong>Winning number:</strong> {hit.winning_number}</div>
-                        <div><strong>Match type:</strong> {hit.match_type}</div>
-                        <div><strong>Source:</strong> {hit.source_name || "Unknown"}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div className="journal-card-flat">
+                <div className="journal-label">Hit Draw Times</div>
+                <div>{result.hit_draw_times?.length ? result.hit_draw_times.join(', ') : 'None'}</div>
               </div>
             </div>
-          )}
-        </section>
+
+            <div style={{ marginTop: '20px', display: 'grid', gap: '12px' }}>
+              {result.hits?.length ? (
+                result.hits.map((hit, idx) => (
+                  <article key={`${hit.candidate}-${hit.draw_date}-${idx}`} className="journal-card-flat">
+                    <strong>{hit.candidate}</strong> hit on {hit.draw_date} ({hit.draw_time}) with{' '}
+                    {hit.winning_number} — {hit.match_type}
+                  </article>
+                ))
+              ) : (
+                <div className="journal-card-flat">No hit cards returned.</div>
+              )}
+            </div>
+          </section>
+        ) : null}
       </section>
     </main>
+  );
+}
+
+export default function BacktestingPage() {
+  return (
+    <Suspense fallback={<main style={{ minHeight: '100vh', background: '#1A1A2E' }} />}>
+      <BacktestingPageInner />
+    </Suspense>
   );
 }
