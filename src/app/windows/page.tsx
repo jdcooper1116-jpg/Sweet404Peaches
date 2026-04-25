@@ -1,5 +1,4 @@
 'use client';
-
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
@@ -19,6 +18,7 @@ type DreamWindowGroup = {
   cash4Numbers: string[];
   termMap: Record<string, { cash3: string[]; cash4: string[] }>;
   totalWatchItems: number;
+  newHitsSinceLastCheck: number;
 };
 
 function uniqueSorted(values: string[]) {
@@ -34,8 +34,8 @@ function buildGroupedWindows(rows: ActiveDreamWindow[]): DreamWindowGroup[] {
 
   for (const row of rows) {
     const dreamEntryId =
-      (row as ActiveDreamWindow & { dreamEntryId?: string; sourceDreamEntryId?: string }).dreamEntryId ||
-      (row as ActiveDreamWindow & { dreamEntryId?: string; sourceDreamEntryId?: string }).sourceDreamEntryId ||
+      (row as any).dreamEntryId ||
+      (row as any).sourceDreamEntryId ||
       row.id;
 
     const existing = map.get(dreamEntryId);
@@ -58,11 +58,15 @@ function buildGroupedWindows(rows: ActiveDreamWindow[]): DreamWindowGroup[] {
           },
         },
         totalWatchItems: 1,
+        newHitsSinceLastCheck: (row as any).newHitsSinceLastCheck ?? 0,
       });
       continue;
     }
 
     existing.isActive = existing.isActive || !!row.isActive;
+    existing.newHitsSinceLastCheck =
+      (existing.newHitsSinceLastCheck ?? 0) +
+      ((row as any).newHitsSinceLastCheck ?? 0);
     existing.statesTracked = uniqueSorted([
       ...existing.statesTracked,
       ...(Array.isArray(row.statesTracked) ? row.statesTracked : []),
@@ -77,7 +81,6 @@ function buildGroupedWindows(rows: ActiveDreamWindow[]): DreamWindowGroup[] {
     if (!existing.termMap[row.termLabel]) {
       existing.termMap[row.termLabel] = { cash3: [], cash4: [] };
     }
-
     if (row.gameType === 'cash3') {
       existing.termMap[row.termLabel].cash3.push(row.number);
     } else {
@@ -124,7 +127,6 @@ export default function ActiveWindowsPage() {
         setLoading(false);
         return;
       }
-
       try {
         const data = await listActiveDreamWindows(user.uid);
         setRows(data);
@@ -135,13 +137,11 @@ export default function ActiveWindowsPage() {
         setLoading(false);
       }
     }
-
     void load();
   }, [user]);
 
   const grouped = useMemo(() => buildGroupedWindows(rows), [rows]);
   const today = todayIso();
-
   const activeGroups = grouped.filter(g => g.activeEnd >= today);
   const expiredGroups = grouped.filter(g => g.activeEnd < today);
 
@@ -156,7 +156,6 @@ export default function ActiveWindowsPage() {
       }}
     >
       <Sidebar />
-
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div
@@ -171,21 +170,14 @@ export default function ActiveWindowsPage() {
             <div className="page-header">
               <h1>Dream Active Windows</h1>
               <p>
-                Each card below is one dream’s 7-day active window. The numbers inside each
+                Each card below is one dream's 7-day active window. The numbers inside each
                 card are the watch items being tested against uploaded results across states.
               </p>
             </div>
-
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/dreams/new" className="btn-secondary">
-                New Dream
-              </Link>
-              <Link href="/hits" className="btn-secondary">
-                Hits Detector
-              </Link>
-              <Link href="/fell-before" className="btn-secondary">
-                As They Fell Before
-              </Link>
+              <Link href="/dreams/new" className="btn-secondary">New Dream</Link>
+              <Link href="/hits" className="btn-secondary">Hits Detector</Link>
+              <Link href="/fell-before" className="btn-secondary">As They Fell Before</Link>
             </div>
           </div>
         </section>
@@ -202,17 +194,14 @@ export default function ActiveWindowsPage() {
             <div className="journal-label">Dream Windows</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{grouped.length}</div>
           </div>
-
           <div>
             <div className="journal-label">Currently Active</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{activeGroups.length}</div>
           </div>
-
           <div>
             <div className="journal-label">Expired</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>{expiredGroups.length}</div>
           </div>
-
           <div>
             <div className="journal-label">Total Watch Items</div>
             <div style={{ fontSize: '28px', fontWeight: 700 }}>
@@ -222,19 +211,13 @@ export default function ActiveWindowsPage() {
         </section>
 
         {loading ? (
-          <section className="journal-card">
-            <p>Loading dream windows...</p>
-          </section>
+          <section className="journal-card"><p>Loading dream windows...</p></section>
         ) : null}
 
         {error ? (
           <section
             className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
+            style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}
           >
             {error}
           </section>
@@ -242,7 +225,7 @@ export default function ActiveWindowsPage() {
 
         {!loading && !grouped.length ? (
           <section className="journal-card">
-            <p>No dream windows found yet.</p>
+            <p>No dream windows found yet. <Link href="/dreams/new">Create your first dream entry →</Link></p>
           </section>
         ) : null}
 
@@ -252,7 +235,6 @@ export default function ActiveWindowsPage() {
               <h1>Currently Active</h1>
               <p>These dreams are still inside their 7-day watch period.</p>
             </div>
-
             {activeGroups.map(group => (
               <section key={group.dreamEntryId} className="journal-card" style={{ display: 'grid', gap: '18px' }}>
                 <div
@@ -266,6 +248,26 @@ export default function ActiveWindowsPage() {
                 >
                   <div style={{ display: 'grid', gap: '6px' }}>
                     <h2 style={{ margin: 0 }}>{group.dreamerName || 'Unknown Dreamer'}</h2>
+
+                    {group.newHitsSinceLastCheck > 0 && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          padding: '3px 10px',
+                          borderRadius: '20px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          background: 'rgba(251,191,36,0.15)',
+                          border: '1px solid rgba(251,191,36,0.4)',
+                          color: '#fbbf24',
+                          width: 'fit-content',
+                        }}
+                      >
+                        {group.newHitsSinceLastCheck} new hit{group.newHitsSinceLastCheck !== 1 ? 's' : ''} since last refresh
+                      </span>
+                    )}
+
                     <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
                       Dream Window: {group.activeStart} → {group.activeEnd}
                     </div>
@@ -273,14 +275,9 @@ export default function ActiveWindowsPage() {
                       Dream Entry ID: {group.dreamEntryId}
                     </div>
                   </div>
-
                   <div
                     className="journal-card-flat"
-                    style={{
-                      minWidth: '220px',
-                      display: 'grid',
-                      gap: '8px',
-                    }}
+                    style={{ minWidth: '220px', display: 'grid', gap: '8px' }}
                   >
                     <div><strong>Status:</strong> Active</div>
                     <div><strong>Cash 3:</strong> {group.cash3Numbers.length}</div>
@@ -303,7 +300,6 @@ export default function ActiveWindowsPage() {
                       {group.cash3Numbers.length ? group.cash3Numbers.join(', ') : 'None'}
                     </p>
                   </div>
-
                   <div className="journal-card-flat">
                     <strong>Cash 4 Watch Numbers</strong>
                     <p style={{ marginTop: '10px', color: 'var(--ink-light)' }}>
@@ -314,13 +310,12 @@ export default function ActiveWindowsPage() {
 
                 <div className="journal-card-flat">
                   <strong>Mapped Terms in This Dream</strong>
-
                   <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
                     {Object.entries(group.termMap).map(([term, payload]) => (
                       <div
                         key={term}
                         style={{
-                          border: '1px solid rgba(90, 52, 74, 0.12)',
+                          border: '1px solid rgba(90,52,74,0.12)',
                           borderRadius: '16px',
                           padding: '12px',
                           background: 'rgba(255,255,255,0.45)',
@@ -355,7 +350,6 @@ export default function ActiveWindowsPage() {
               <h1>Expired Windows</h1>
               <p>These dreams are no longer inside the active 7-day watch period.</p>
             </div>
-
             {expiredGroups.map(group => (
               <section key={group.dreamEntryId} className="journal-card-flat" style={{ opacity: 0.82 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>

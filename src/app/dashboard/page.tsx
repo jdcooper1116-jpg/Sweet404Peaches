@@ -1,5 +1,6 @@
 'use client';
 
+import EngineStatusBadge from '@/components/ui/EngineStatusBadge';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -27,7 +28,52 @@ import {
   buildDuplicateSignals,
   buildTermStrengthStats,
 } from '@/lib/intelligence/scoring';
+function RefreshNowButton({ ownerUid }: { ownerUid: string }) {
+  const [running, setRunning] = useState(false);
+  const [result,  setResult]  = useState<string | null>(null);
 
+  async function run() {
+    if (!ownerUid) return;
+    setRunning(true);
+    setResult(null);
+    try {
+      const res  = await fetch('/api/dreams/refresh', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ownerUid }),
+      });
+      const data = await res.json();
+      setResult(
+        data.totalNewHits > 0
+          ? `${data.totalNewHits} new hit${data.totalNewHits !== 1 ? 's' : ''} found`
+          : `${data.windowsChecked} window${data.windowsChecked !== 1 ? 's' : ''} checked — no new hits`
+      );
+    } catch {
+      setResult('Refresh failed');
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+      <button
+        onClick={run}
+        disabled={running || !ownerUid}
+        style={{
+          padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+          background: running ? 'rgba(255,255,255,0.05)' : 'rgba(108,120,255,0.18)',
+          border: '1px solid rgba(108,120,255,0.35)',
+          color: running ? 'rgba(234,234,242,0.45)' : '#b0b8ff',
+          cursor: running ? 'default' : 'pointer',
+        }}
+      >
+        {running ? 'Refreshing…' : 'Refresh Now'}
+      </button>
+      {result && <span style={{ fontSize: 12, color: 'rgba(234,234,242,0.6)' }}>{result}</span>}
+    </div>
+  );
+}
 export default function DashboardPage() {
   const { user, loading } = useAuth();
 
@@ -116,7 +162,10 @@ export default function DashboardPage() {
             </p>
           </div>
         </section>
-
+      <section className="journal-card-flat" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <EngineStatusBadge />
+          <RefreshNowButton ownerUid={user?.uid ?? ''} />
+        </section>
         <section className="journal-card">
           <div className="page-header">
             <h1>System Navigation Hub</h1>
