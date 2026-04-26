@@ -71,7 +71,7 @@ function BacktestingPageInner() {
   // Existing form state — unchanged
   const [stateCode, setStateCode]       = useState('GA');
   const [gameType, setGameType]         = useState('pick3');
-  const [anchorDate, setAnchorDate]     = useState('2024-01-25');
+  const [anchorDate, setAnchorDate]     = useState(new Date().toISOString().slice(0, 10));
   const [lookaheadDays, setLookaheadDays] = useState('7');
   const [candidatesText, setCandidatesText] = useState('297,716,999');
   const [label, setLabel]               = useState('test dream window');
