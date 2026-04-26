@@ -51,6 +51,12 @@ export async function POST(req: NextRequest) {
     const db    = getAdminDb();    // AdminFirestore — no cast needed
     const today = format(new Date(), 'yyyy-MM-dd');
     const result = await refreshAllActiveWindows(db, ownerUid, today);
+    // Auto-promote hits to personalHitMappings after every refresh
+    if (result.totalNewHits > 0) {
+      try {
+        await fetch(`${req.nextUrl.origin}/api/admin/promote-hits`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerUid }) });
+      } catch { /* promotion failure is non-fatal */ }
+    }
     return NextResponse.json(result, { status: 200 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

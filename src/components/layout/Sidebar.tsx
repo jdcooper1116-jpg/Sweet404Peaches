@@ -33,6 +33,7 @@ type NavItem = {
 const primaryNav: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dreams/new', label: 'New Dream Entry', icon: MoonStar },
+  { href: '/windows', label: 'Active Windows', icon: CalendarRange },
   { href: '/results', label: 'Results Log', icon: ReceiptText },
   { href: '/results/import', label: 'Results Import', icon: ReceiptText },
   { href: '/hits', label: 'Hits Detector', icon: SearchCheck },

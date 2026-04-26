@@ -1,25 +1,23 @@
 /**
  * Sweet404Peaches — Active Dream Refresh
  *
- * Calls the lottery engine in single-state mode for each state tracked
- * by a window. The engine does not accept scope:"all-states" directly —
- * the fan-out must be done here, the same way the /api/backtest bridge
- * does it for the backtesting UI.
+ * BATCHED approach: instead of calling the engine once per window per state
+ * (50 windows × 37 states = 1,850 calls), we group all active candidates
+ * by game type, then call the engine once per state per game type
+ * (37 + 36 = 73 calls total).
  *
- * Leading zeros in candidate numbers are preserved throughout.
- * Hits are deduplicated — running twice produces no duplicate documents.
+ * Each engine call sends ALL active candidates for that game/state at once.
+ * Hits are matched back to their originating windows by candidate number.
  */
 
 import type { firestore } from 'firebase-admin';
-import { Timestamp }      from 'firebase-admin/firestore';
-import { runBacktest }    from './client';
+import { Timestamp } from 'firebase-admin/firestore';
+import { runBacktest } from './client';
 import type { EngineHit } from './types';
 
 type AdminFirestore = firestore.Firestore;
 type AdminTimestamp = ReturnType<typeof Timestamp.now>;
 
-// ─── States that have pick3/pick4 daily games ────────────────────────────────
-// Used when a window has statesTracked: [...US_STATES] (all states)
 const PICK3_STATES = [
   'AZ','CA','CO','CT','DE','DC','FL','GA','IL','IN','IA','KS','KY','LA',
   'ME','MD','MA','MI','MN','MO','NH','NJ','NM','NY','NC','OH','OK','OR',
@@ -27,11 +25,7 @@ const PICK3_STATES = [
 ];
 const PICK4_STATES = PICK3_STATES.filter(s => s !== 'AZ' && s !== 'MN');
 
-function getStatesForGame(gameType: 'pick3' | 'pick4'): string[] {
-  return gameType === 'pick3' ? PICK3_STATES : PICK4_STATES;
-}
-
-// ─── Firestore document shapes ────────────────────────────────────────────────
+// ─── Firestore shapes ─────────────────────────────────────────────────────────
 
 interface ActiveDreamWindowDoc {
   id: string;
@@ -73,8 +67,6 @@ interface DreamHitDoc {
   detectedAt: AdminTimestamp;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 function hitKey(candidate: string, state: string, draw_date: string, draw_time: string, match_type: string): string {
   return [candidate, state, draw_date, draw_time, match_type].join('::');
 }
@@ -82,136 +74,18 @@ function hitKey(candidate: string, state: string, draw_date: string, draw_time: 
 function calcLookahead(activeStart: string, activeEnd: string): number {
   const today = new Date().toISOString().slice(0, 10);
   const end   = today < activeEnd ? today : activeEnd;
-  return Math.max(
-    1,
-    Math.ceil((new Date(end).getTime() - new Date(activeStart).getTime()) / 86_400_000) + 1
-  );
-}
-
-// ─── Single window refresh ────────────────────────────────────────────────────
-
-interface RefreshWindowResult {
-  windowId: string;
-  newHits: number;
-  totalHits: number;
-  error: string | null;
-}
-
-async function refreshOneWindow(
-  db: AdminFirestore,
-  window: ActiveDreamWindowDoc,
-  ownerUid: string
-): Promise<RefreshWindowResult> {
-  const lookahead_days = calcLookahead(window.activeStart, window.activeEnd);
-
-  // Determine which states to check
-  // If statesTracked has many entries (full US_STATES), use our curated list
-  // If statesTracked has 1-3 entries, use exactly those
-  const isAllStates = window.statesTracked.length > 5;
-  const statesToCheck: string[] = isAllStates
-    ? getStatesForGame(window.gameType)
-    : window.statesTracked.length > 0
-    ? window.statesTracked
-    : ['GA'];
-
-  // Collect hits across all states — call engine once per state (single-state mode)
-  const rawHits: Array<EngineHit & { state: string }> = [];
-  const stateErrors: string[] = [];
-
-  for (const state of statesToCheck) {
-    try {
-      const response = await runBacktest({
-        state,                          // single-state — engine requires this
-        game_type:      window.gameType,
-        anchor_date:    window.activeStart,
-        lookahead_days,
-        candidates:     [window.number],
-        label:          window.termLabel,
-      });
-
-      // Single-state response has .hits array
-      const hits = (response as any).hits ?? [];
-      for (const h of hits) {
-        rawHits.push({ ...h, state });
-      }
-    } catch (err: unknown) {
-      // One state failing should not abort the whole window
-      stateErrors.push(`${state}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  // Load existing hit keys for deduplication
-  const existingSnap = await db
-    .collection('dreamHits')
-    .where('ownerUid',      '==', ownerUid)
-    .where('dreamWindowId', '==', window.id)
-    .get();
-
-  const existingKeys = new Set<string>();
-  existingSnap.forEach(d => {
-    const data = d.data() as DreamHitDoc;
-    existingKeys.add(hitKey(data.candidate, data.state, data.draw_date, data.draw_time, data.match_type));
-  });
-
-  const now   = Timestamp.now();
-  let newHits = 0;
-
-  for (const hit of rawHits) {
-    const key = hitKey(hit.candidate, hit.state, hit.draw_date, hit.draw_time, hit.match_type);
-    if (existingKeys.has(key)) continue;
-
-    const hitDoc: DreamHitDoc = {
-      ownerUid,
-      dreamWindowId:    window.id,
-      dreamEntryId:     window.dreamEntryId,
-      dreamerId:        window.dreamerId,
-      candidate:        hit.candidate,        // string — leading zeros intact
-      state:            hit.state,
-      draw_date:        hit.draw_date,
-      draw_time:        hit.draw_time,
-      winning_number:   hit.winning_number,
-      match_type:       hit.match_type,       // 'exact' | 'box'
-      is_verified:      hit.is_verified ?? false,
-      source_name:      hit.source_name ?? '',
-      game_type:        window.gameType,
-      termLabel:        window.termLabel,
-      anchor_date:      window.activeStart,
-      lookahead_days,
-      lastRefreshSource: 'lottery-engine',
-      detectedAt:       now,
-    };
-
-    await db
-      .collection('dreamHits')
-      .doc(`${window.id}__${key.replace(/::/g, '_')}`)
-      .set(hitDoc);
-    newHits++;
-  }
-
-  const totalHits = (window.lastHitCount ?? 0) + newHits;
-
-  await db.collection('activeDreamWindows').doc(window.id).update({
-    lastCheckedAt:         now,
-    lastHitCount:          totalHits,
-    newHitsSinceLastCheck: newHits,
-    lastRefreshSource:     'lottery-engine',
-  });
-
-  const errorSummary = stateErrors.length > 0
-    ? `${stateErrors.length} state(s) failed: ${stateErrors.slice(0, 3).join('; ')}`
-    : null;
-
-  return { windowId: window.id, newHits, totalHits, error: errorSummary };
+  return Math.max(1, Math.ceil((new Date(end).getTime() - new Date(activeStart).getTime()) / 86_400_000) + 1);
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export interface RefreshAllResult {
-  windowsChecked:     number;
+  windowsChecked: number;
   windowsWithNewHits: number;
-  totalNewHits:       number;
-  errors:             Array<{ windowId: string; error: string }>;
-  checkedAt:          string;
+  totalNewHits: number;
+  engineCallsMade: number;
+  errors: Array<{ context: string; error: string }>;
+  checkedAt: string;
 }
 
 export async function refreshAllActiveWindows(
@@ -219,6 +93,7 @@ export async function refreshAllActiveWindows(
   ownerUid: string,
   today: string
 ): Promise<RefreshAllResult> {
+  // 1. Load all active windows
   const snap = await db
     .collection('activeDreamWindows')
     .where('ownerUid', '==', ownerUid)
@@ -232,19 +107,161 @@ export async function refreshAllActiveWindows(
   }));
 
   if (windows.length === 0) {
-    return { windowsChecked: 0, windowsWithNewHits: 0, totalNewHits: 0, errors: [], checkedAt: new Date().toISOString() };
+    return { windowsChecked: 0, windowsWithNewHits: 0, totalNewHits: 0, engineCallsMade: 0, errors: [], checkedAt: new Date().toISOString() };
   }
 
-  const results: RefreshWindowResult[] = [];
-  for (const window of windows) {
-    results.push(await refreshOneWindow(db, window, ownerUid));
+  // 2. Group windows by gameType + anchorDate combination
+  type GroupKey = string; // `${gameType}::${activeStart}::${activeEnd}`
+  const groups = new Map<GroupKey, ActiveDreamWindowDoc[]>();
+  for (const w of windows) {
+    const key = `${w.gameType}::${w.activeStart}::${w.activeEnd}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(w);
   }
+
+  // 3. Load ALL existing hit keys for this owner upfront (one query)
+  const existingSnap = await db
+    .collection('dreamHits')
+    .where('ownerUid', '==', ownerUid)
+    .get();
+
+  // Map: windowId → Set of hit keys
+  const existingHitsByWindow = new Map<string, Set<string>>();
+  existingSnap.forEach(d => {
+    const data = d.data() as DreamHitDoc;
+    if (!existingHitsByWindow.has(data.dreamWindowId)) {
+      existingHitsByWindow.set(data.dreamWindowId, new Set());
+    }
+    existingHitsByWindow.get(data.dreamWindowId)!.add(
+      hitKey(data.candidate, data.state, data.draw_date, data.draw_time, data.match_type)
+    );
+  });
+
+  const now = Timestamp.now();
+  const errors: Array<{ context: string; error: string }> = [];
+  let engineCallsMade = 0;
+
+  // Track new hits per window
+  const newHitsPerWindow = new Map<string, number>();
+  const hitsToWrite: Array<{ docId: string; data: DreamHitDoc }> = [];
+
+  // 4. For each group, call engine once per state with ALL candidates
+  for (const [groupKey, groupWindows] of groups.entries()) {
+    const [gameType, activeStart, activeEnd] = groupKey.split('::') as ['pick3'|'pick4', string, string];
+    const lookahead_days = calcLookahead(activeStart, activeEnd);
+    const states = gameType === 'pick3' ? PICK3_STATES : PICK4_STATES;
+
+    // Unique candidates for this group
+    const candidateSet = new Set(groupWindows.map(w => w.number));
+    const candidates   = Array.from(candidateSet);
+
+    // Build candidate → windows index for fast lookup
+    const candidateWindowIndex = new Map<string, ActiveDreamWindowDoc[]>();
+    for (const w of groupWindows) {
+      if (!candidateWindowIndex.has(w.number)) candidateWindowIndex.set(w.number, []);
+      candidateWindowIndex.get(w.number)!.push(w);
+    }
+
+    // One engine call per state
+    for (const state of states) {
+      try {
+        const response = await runBacktest({
+          state,
+          game_type:   (gameType as string) === 'cash3' ? 'pick3' : (gameType as string) === 'cash4' ? 'pick4' : gameType,
+          anchor_date: activeStart,
+          lookahead_days,
+          candidates,
+          label:       `refresh::${gameType}::${state}`,
+        });
+
+        engineCallsMade++;
+        const hits: Array<EngineHit & { state: string }> =
+          ((response as any).hits ?? []).map((h: EngineHit) => ({ ...h, state }));
+
+        // Match each hit back to the windows tracking that candidate
+        for (const hit of hits) {
+          const matchingWindows = candidateWindowIndex.get(hit.candidate) ?? [];
+          for (const w of matchingWindows) {
+            const key = hitKey(hit.candidate, state, hit.draw_date, hit.draw_time, hit.match_type);
+            const existingKeys = existingHitsByWindow.get(w.id) ?? new Set();
+            if (existingKeys.has(key)) continue;
+
+            const hitDoc: DreamHitDoc = {
+              ownerUid,
+              dreamWindowId:    w.id,
+              dreamEntryId:     w.dreamEntryId,
+              dreamerId:        w.dreamerId,
+              candidate:        hit.candidate,
+              state,
+              draw_date:        hit.draw_date,
+              draw_time:        hit.draw_time,
+              winning_number:   hit.winning_number,
+              match_type:       hit.match_type,
+              is_verified:      hit.is_verified ?? false,
+              source_name:      hit.source_name ?? '',
+              game_type:        gameType,
+              termLabel:        w.termLabel,
+              anchor_date:      activeStart,
+              lookahead_days,
+              lastRefreshSource: 'lottery-engine',
+              detectedAt:       now,
+            };
+
+            hitsToWrite.push({
+              docId: `${w.id}__${key.replace(/::/g, '_')}`,
+              data:  hitDoc,
+            });
+
+            // Track for window update
+            newHitsPerWindow.set(w.id, (newHitsPerWindow.get(w.id) ?? 0) + 1);
+
+            // Add to local dedup set so same hit isn't written twice
+            if (!existingHitsByWindow.has(w.id)) existingHitsByWindow.set(w.id, new Set());
+            existingHitsByWindow.get(w.id)!.add(key);
+          }
+        }
+      } catch (err: unknown) {
+        errors.push({
+          context: `${gameType}::${state}::${activeStart}`,
+          error:   err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // 5. Write all new hits in batches of 500 (Firestore batch limit)
+  const BATCH_SIZE = 400;
+  for (let i = 0; i < hitsToWrite.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    for (const { docId, data } of hitsToWrite.slice(i, i + BATCH_SIZE)) {
+      batch.set(db.collection('dreamHits').doc(docId), data);
+    }
+    await batch.commit();
+  }
+
+  // 6. Update all windows with their new hit counts
+  const windowUpdateBatch = db.batch();
+  for (const w of windows) {
+    const newHits  = newHitsPerWindow.get(w.id) ?? 0;
+    const total    = (w.lastHitCount ?? 0) + newHits;
+    windowUpdateBatch.update(db.collection('activeDreamWindows').doc(w.id), {
+      lastCheckedAt:         now,
+      lastHitCount:          total,
+      newHitsSinceLastCheck: newHits,
+      lastRefreshSource:     'lottery-engine',
+    });
+  }
+  await windowUpdateBatch.commit();
+
+  const windowsWithNewHits = Array.from(newHitsPerWindow.values()).filter(n => n > 0).length;
+  const totalNewHits       = Array.from(newHitsPerWindow.values()).reduce((a, b) => a + b, 0);
 
   return {
-    windowsChecked:     windows.length,
-    windowsWithNewHits: results.filter(r => r.newHits > 0).length,
-    totalNewHits:       results.reduce((sum, r) => sum + r.newHits, 0),
-    errors:             results.filter(r => r.error !== null).map(r => ({ windowId: r.windowId, error: r.error! })),
-    checkedAt:          new Date().toISOString(),
+    windowsChecked: windows.length,
+    windowsWithNewHits,
+    totalNewHits,
+    engineCallsMade,
+    errors,
+    checkedAt: new Date().toISOString(),
   };
 }
