@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { IM_Fell_English, Lora } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/contexts/AuthContext';
+import GlobalChatDock from '@/components/chat/GlobalChatDock';
 
 const imFell = IM_Fell_English({
   subsets: ['latin'],
@@ -40,7 +41,10 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="antialiased">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          {children}
+          <GlobalChatDock />
+        </AuthProvider>
       </body>
     </html>
   );
