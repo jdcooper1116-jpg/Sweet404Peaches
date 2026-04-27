@@ -85,10 +85,8 @@ type DebugInfo = {
   raw_input:             string;
 };
 
-function isAllStatesResponse(
-  r: AnyBacktestResponse | null
-): r is AllStatesResponse {
-  return !!r && 'scope' in r && r.scope === 'all-states';
+function isAllStatesResponse(r: AnyBacktestResponse): r is AllStatesResponse {
+  return (r as AllStatesResponse).scope === 'all-states';
 }
 
 // ─── Hit card ────────────────────────────────────────────────────────────────

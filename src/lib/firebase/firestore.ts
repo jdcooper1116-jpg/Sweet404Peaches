@@ -16,7 +16,7 @@ import {
   where,
   writeBatch,
   type DocumentData,
-  type QueryConstraint,
+  type QueryConstraint
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import type {
@@ -1832,4 +1832,145 @@ export async function listSafeBacktestSummariesForDreams(
     .filter((item): item is PromiseFulfilledResult<any> => item.status === 'fulfilled')
     .map((item) => item.value)
     .filter(Boolean);
+}
+
+
+// ─── ENGINE REPLAY — add this block at the bottom of firestore.ts ─────────────
+//
+// Call saveEngineReplayHits() after a successful /api/backtest/engine-replay
+// response to persist the engine's hits into the backtestHits collection
+// using the same schema that runBacktestReplayForDream() writes.
+//
+// Import MappedBacktestHit from the route type — or just use the inline shape
+// below, which matches exactly what the route returns in response.hits[].
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function saveEngineReplayHits(
+  ownerUid: string,
+  backtestDreamId: string,
+  dreamDate: string,
+  hits: Array<{
+    termLabel:        string;
+    number:           string;
+    gameType:         'cash3' | 'cash4';
+    state:            string;
+    drawDate:         string;
+    drawTime:         string;
+    normalizedResult: string;
+    resultBoxedKey:   string;
+    hitType:          'straight' | 'boxed';
+    daysFromDream:    number;
+    sameDay:          boolean;
+    is_verified:      boolean;
+    source_name:      string;
+  }>
+): Promise<{
+  totalHits:    number;
+  straightHits: number;
+  boxedHits:    number;
+  uniqueStates: string[];
+  bestState:    string;
+  bestTerm:     string;
+}> {
+  const now = Timestamp.now();
+
+  // ── Write hits in Firestore batches of 400 ──────────────────────────────────
+  // Doc ID is deterministic so re-running the engine replay is safe (merge:true).
+  const BATCH_SIZE = 400;
+
+  for (let i = 0; i < hits.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db);
+    const chunk = hits.slice(i, i + BATCH_SIZE);
+
+    for (const hit of chunk) {
+      const hitId = [
+        backtestDreamId,
+        hit.termLabel,
+        hit.number,
+        hit.state,
+        hit.drawDate,
+        hit.drawTime,
+        hit.hitType,
+        hit.normalizedResult,
+      ]
+        .map(v => String(v ?? '').replace(/[^a-zA-Z0-9_-]/g, '_'))
+        .join('__');
+
+      batch.set(
+        doc(db, 'backtestHits', hitId),
+        {
+          ownerUid,
+          backtestDreamId,
+          dreamDate,
+          termLabel:        hit.termLabel,
+          number:           hit.number,
+          gameType:         hit.gameType,
+          state:            hit.state,
+          drawDate:         hit.drawDate,
+          drawTime:         hit.drawTime,
+          rawResult:        hit.normalizedResult,
+          normalizedResult: hit.normalizedResult,
+          resultBoxedKey:   hit.resultBoxedKey,
+          hitType:          hit.hitType,
+          daysFromDream:    hit.daysFromDream,
+          sameDay:          hit.sameDay,
+          is_verified:      hit.is_verified,
+          source_name:      hit.source_name,
+          replaySource:     'lottery-engine',
+          createdAt:        now,
+        },
+        { merge: true }
+      );
+    }
+
+    await batch.commit();
+  }
+
+  // ── Build summary stats ──────────────────────────────────────────────────────
+  const straightHits = hits.filter(h => h.hitType === 'straight').length;
+  const boxedHits    = hits.filter(h => h.hitType === 'boxed').length;
+
+  const stateCounts = new Map<string, number>();
+  const termCounts  = new Map<string, number>();
+  for (const hit of hits) {
+    stateCounts.set(hit.state,    (stateCounts.get(hit.state)    ?? 0) + 1);
+    termCounts.set(hit.termLabel, (termCounts.get(hit.termLabel) ?? 0) + 1);
+  }
+
+  const uniqueStates = Array.from(stateCounts.keys());
+  const bestState    = Array.from(stateCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+  const bestTerm     = Array.from(termCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+  // ── Write / update summary, dream, and window status ────────────────────────
+  const summary = {
+    ownerUid,
+    backtestDreamId,
+    dreamDate,
+    totalHits:    hits.length,
+    straightHits,
+    boxedHits,
+    uniqueStates,
+    bestState,
+    bestTerm,
+    replaySource: 'lottery-engine',
+    status:       'engine-replay-complete',
+    updatedAt:    now,
+    createdAt:    now,
+  };
+
+  await setDoc(doc(db, 'backtestSummaries', backtestDreamId), summary, { merge: true });
+
+  await setDoc(
+    doc(db, 'backtestDreams', backtestDreamId),
+    { status: 'engine-replay-complete', updatedAt: now },
+    { merge: true }
+  );
+
+  await setDoc(
+    doc(db, 'backtestWindows', backtestDreamId),
+    { status: 'engine-replay-complete', updatedAt: now },
+    { merge: true }
+  );
+
+  return { totalHits: hits.length, straightHits, boxedHits, uniqueStates, bestState, bestTerm };
 }

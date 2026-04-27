@@ -77,7 +77,6 @@ interface SingleStateBody {
   lookahead_days: number;
   candidates:     string[];
   mode?:          string;
-  match_mode?:    string;
   label?:         string;
 }
 
@@ -329,7 +328,6 @@ export async function POST(req: NextRequest) {
       lookahead_days,
       candidates: candidates as string[],
       mode:       typeof mode === 'string' && mode ? mode : undefined,
-      match_mode: typeof mode === 'string' && mode ? mode : undefined,
       label:      resolvedLabel || undefined,
     };
 
@@ -397,16 +395,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const singleBody: SingleStateBody = {
-      state:          body.state as string,
-      game_type:      body.game_type as string,
-      anchor_date:    body.anchor_date as string,
-      lookahead_days: body.lookahead_days as number,
-      candidates:     body.candidates as string[],
-      mode:           typeof body.mode === 'string' && body.mode ? body.mode : undefined,
-      match_mode:     typeof body.mode === 'string' && body.mode ? body.mode : undefined,
-      label:          typeof body.label === 'string' && body.label ? body.label : undefined,
-    };
+    const singleBody = body;
 
     const response = await fetch(`${ENGINE_URL}/backtest`, {
       method: 'POST',

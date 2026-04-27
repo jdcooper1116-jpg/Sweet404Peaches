@@ -4,295 +4,156 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import {
-  getBacktestSummaryForDream,
-  listSafeBacktestSummariesForDreams,
-  listBacktestDreams,
-  listBacktestHitsForDream,
-  listBacktestResultsForDream,
-} from '@/lib/firebase/firestore';
-
-type BacktestMonitorRow = {
-  id: string;
-  dreamDate: string;
-  source: string;
-  status: string;
-  activeWindowStart: string;
-  activeWindowEnd: string;
-  cash3Count: number;
-  cash4Count: number;
-  resultsCount: number;
-  hitsCount: number;
-  straightHits: number;
-  boxedHits: number;
-  bestState: string;
-  bestTerm: string;
-};
 
 export default function BacktestingArchivePage() {
   const { user } = useAuth();
-  const [rows, setRows] = useState<BacktestMonitorRow[]>([]);
+  const [rows,    setRows]    = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error,   setError]   = useState('');
 
   useEffect(() => {
     async function load() {
-      if (!user) {
-        setRows([]);
-        setLoading(false);
-        return;
-      }
-
+      if (!user) { setRows([]); setLoading(false); return; }
       try {
-        const dreams = await listBacktestDreams(user.uid);
-
-        const monitorRows = await Promise.all(
-          dreams.map(async (dream: any) => {
-            const [results, hits, summary] = await Promise.all([
-              listBacktestResultsForDream(user.uid, dream.id),
-              listBacktestHitsForDream(user.uid, dream.id),
-              getBacktestSummaryForDream(user.uid, dream.id),
-            ]);
-
-            return {
-              id: dream.id,
-              dreamDate: dream.dreamDate || '',
-              source: dream.source || '—',
-              status: dream.status || '—',
-              activeWindowStart: dream.activeWindowStart || '',
-              activeWindowEnd: dream.activeWindowEnd || '',
-              cash3Count: Array.isArray(dream.cash3Numbers) ? dream.cash3Numbers.length : 0,
-              cash4Count: Array.isArray(dream.cash4Numbers) ? dream.cash4Numbers.length : 0,
-              resultsCount: results.length,
-              hitsCount: hits.length,
-              straightHits: summary?.straightHits ?? 0,
-              boxedHits: summary?.boxedHits ?? 0,
-              bestState: summary?.bestState ?? '',
-              bestTerm: summary?.bestTerm ?? '',
-            };
-          })
-        );
-
-        monitorRows.sort((a, b) => {
-          if (a.dreamDate === b.dreamDate) return 0;
-          return a.dreamDate < b.dreamDate ? 1 : -1;
-        });
-
-        setRows(monitorRows);
+        const res  = await fetch(`/api/backtest/list-dreams?ownerUid=${encodeURIComponent(user.uid)}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed to load archive.');
+        setRows(Array.isArray(data.dreams) ? data.dreams : []);
       } catch (err) {
-        console.error(err);
-        setError('Could not load Backtest Archive.');
+        setError(err instanceof Error ? err.message : 'Could not load Backtest Archive.');
       } finally {
         setLoading(false);
       }
     }
-
     void load();
   }, [user]);
 
-  const totals = useMemo(() => {
-    return rows.reduce(
-      (acc, row) => {
-        acc.dreams += 1;
-        acc.results += row.resultsCount;
-        acc.hits += row.hitsCount;
-        acc.straight += row.straightHits;
-        acc.boxed += row.boxedHits;
-        return acc;
-      },
-      { dreams: 0, results: 0, hits: 0, straight: 0, boxed: 0 }
-    );
-  }, [rows]);
+  const totals = useMemo(() =>
+    rows.reduce((acc, r) => {
+      acc.dreams++;
+      acc.hits     += r.totalHits     ?? 0;
+      acc.straight += r.straightHits  ?? 0;
+      acc.boxed    += r.boxedHits     ?? 0;
+      return acc;
+    }, { dreams: 0, hits: 0, straight: 0, boxed: 0 }),
+  [rows]);
+
+  const engineCount = rows.filter(r => r.replaySource === 'lottery-engine').length;
+  const manualCount = rows.filter(r => r.replaySource && r.replaySource !== 'lottery-engine').length;
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        gridTemplateColumns: '280px 1fr',
-        background:
-          'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-      }}
-    >
+    <main style={{
+      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
+      background:
+        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
+        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
+        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
+    }}>
       <Sidebar />
 
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+
         <section className="journal-card">
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              gap: '16px',
-              alignItems: 'flex-start',
-              flexWrap: 'wrap',
-            }}
-          >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div className="page-header">
               <h1>Backtest Archive</h1>
-              <p>
-                Monitor every historical dream in Research Mode, including results loaded,
-                replay progress, hits found, and strongest backtest outcomes.
-              </p>
+              <p>All saved historical dreams with replay status, hit summaries, and source attribution.</p>
             </div>
-
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/backtesting" className="btn-secondary">
-                Backtesting Portal
-              </Link>
-              <Link href="/backtesting/intake" className="btn-secondary">
-                Historical Dream Intake
-              </Link>
-              <Link href="/backtesting/replay" className="btn-secondary">
-                Replay Lab
-              </Link>
+              <Link href="/backtesting/intake" className="btn-secondary">Dream Intake</Link>
+              <Link href="/backtesting/replay" className="btn-secondary">Replay Lab</Link>
             </div>
           </div>
         </section>
 
-        <section
-          className="journal-card-flat"
-          style={{
-            display: 'grid',
-            gap: '12px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          }}
-        >
-          <div>
-            <div className="journal-label">Backtest Dreams</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{totals.dreams}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Historical Results Rows</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{totals.results}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Detected Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{totals.hits}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Straight Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{totals.straight}</div>
-          </div>
-
-          <div>
-            <div className="journal-label">Boxed Hits</div>
-            <div style={{ fontSize: '28px', fontWeight: 700 }}>{totals.boxed}</div>
-          </div>
+        {/* Totals */}
+        <section className="journal-card-flat" style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+          {[
+            ['Dreams', totals.dreams],
+            ['Total Hits', totals.hits],
+            ['Straight', totals.straight],
+            ['Boxed', totals.boxed],
+            ['⚡ Engine Replayed', engineCount],
+            ['Manual Replayed', manualCount],
+          ].map(([label, val]) => (
+            <div key={String(label)}>
+              <div className="journal-label">{label}</div>
+              <div style={{ fontSize: '1.8rem', fontWeight: 700 }}>{val}</div>
+            </div>
+          ))}
         </section>
 
-        {loading ? (
-          <section className="journal-card">
-            <p>Loading Backtest Archive...</p>
-          </section>
-        ) : null}
+        {loading && <section className="journal-card"><p>Loading archive…</p></section>}
+        {error   && <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>{error}</section>}
+        {!loading && !rows.length && <section className="journal-card"><p>No backtest dreams saved yet. Go to <Link href="/backtesting/intake" style={{ color: '#b0b8ff' }}>Historical Dream Intake</Link> to add one.</p></section>}
 
-        {error ? (
-          <section
-            className="journal-card-flat"
-            style={{
-              borderColor: '#e9c2c2',
-              background: '#fff4f4',
-              color: '#8a2f2f',
-            }}
-          >
-            {error}
-          </section>
-        ) : null}
+        {rows.map(row => {
+          const isEngine  = row.replaySource === 'lottery-engine';
+          const isManual  = row.replaySource && !isEngine;
+          const isPending = !row.replaySource || row.status === 'intake-saved';
 
-        {!loading && !rows.length ? (
-          <section className="journal-card">
-            <p>No backtest dreams saved yet.</p>
-          </section>
-        ) : null}
-
-        {rows.length ? (
-          <section style={{ display: 'grid', gap: '16px' }}>
-            {rows.map((row) => (
-              <section key={row.id} className="journal-card" style={{ display: 'grid', gap: '14px' }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: '16px',
-                    alignItems: 'flex-start',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <div>
-                    <h2 style={{ margin: 0 }}>{row.dreamDate || 'No Dream Date'}</h2>
-                    <div style={{ marginTop: '6px', color: 'var(--ink-light)', fontSize: '14px' }}>
-                      {row.activeWindowStart || '—'} → {row.activeWindowEnd || '—'}
-                    </div>
-                    <div style={{ marginTop: '6px', color: 'var(--ink-light)', fontSize: '14px' }}>
-                      ID: {row.id}
-                    </div>
+          return (
+            <section key={row.id} className="journal-card" style={{ display: 'grid', gap: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>{row.dreamDate || 'No Date'}</h2>
+                  <div style={{ marginTop: '6px', fontSize: '14px', color: 'var(--ink-light)' }}>
+                    {row.activeWindowStart || '—'} → {row.activeWindowEnd || '—'}
                   </div>
-
-                  <div className="journal-card-flat" style={{ minWidth: '180px' }}>
-                    <div className="journal-label">Status</div>
-                    <div style={{ fontWeight: 700 }}>{row.status || '—'}</div>
-                  </div>
+                  <div style={{ marginTop: '4px', fontSize: '11px', opacity: 0.4 }}>ID: {row.id}</div>
                 </div>
-
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: '10px',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-                  }}
-                >
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Source</div>
-                    <div>{row.source}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Cash 3 Numbers</div>
-                    <div>{row.cash3Count}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Cash 4 Numbers</div>
-                    <div>{row.cash4Count}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Results Loaded</div>
-                    <div>{row.resultsCount}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Detected Hits</div>
-                    <div>{row.hitsCount}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Straight Hits</div>
-                    <div>{row.straightHits}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Boxed Hits</div>
-                    <div>{row.boxedHits}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Best State</div>
-                    <div>{row.bestState || '—'}</div>
-                  </div>
-
-                  <div className="journal-card-flat">
-                    <div className="journal-label">Best Term</div>
-                    <div>{row.bestTerm || '—'}</div>
-                  </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  <span style={{
+                    padding: '4px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: 700,
+                    background: isEngine ? 'rgba(74,124,89,0.2)' : isManual ? 'rgba(160,124,74,0.2)' : 'rgba(255,255,255,0.06)',
+                    border: `1px solid ${isEngine ? 'rgba(74,124,89,0.5)' : isManual ? 'rgba(160,124,74,0.5)' : 'rgba(255,255,255,0.12)'}`,
+                    color: isEngine ? '#6dbf8a' : isManual ? '#d4a95a' : 'rgba(255,255,255,0.35)',
+                  }}>
+                    {isEngine ? '⚡ Engine' : isManual ? 'Manual' : 'Pending'}
+                  </span>
+                  <span style={{
+                    padding: '4px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: 700,
+                    background: row.status?.includes('complete') ? 'rgba(108,120,255,0.14)' : 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(108,120,255,0.2)',
+                    color: row.status?.includes('complete') ? '#b0b8ff' : 'rgba(255,255,255,0.35)',
+                  }}>
+                    {row.status || '—'}
+                  </span>
                 </div>
-              </section>
-            ))}
-          </section>
-        ) : null}
+              </div>
+
+              <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+                {[
+                  ['Source', row.source],
+                  ['Pick 3', `${row.cash3Numbers?.length ?? 0} cands`],
+                  ['Pick 4', `${row.cash4Numbers?.length ?? 0} cands`],
+                  ['Total Hits', row.totalHits ?? 0],
+                  ['Straight', row.straightHits ?? 0],
+                  ['Boxed', row.boxedHits ?? 0],
+                  ['States', row.uniqueStatesCount ?? 0],
+                  ['Best State', row.bestState || '—'],
+                  ['Best Term', row.bestTerm || '—'],
+                ].map(([label, val]) => (
+                  <div key={String(label)} className="journal-card-flat">
+                    <div className="journal-label">{label}</div>
+                    <div style={{
+                      fontWeight: label === 'Total Hits' || label === 'Straight' || label === 'Boxed' ? 700 : 400,
+                      color: label === 'Straight' ? '#6dbf8a' : label === 'Boxed' ? '#d4a95a' : 'inherit',
+                    }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {isPending && (
+                <p style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.35)', margin: 0 }}>
+                  No replay yet.{' '}
+                  <Link href="/backtesting/replay" style={{ color: '#b0b8ff' }}>Open Replay Lab</Link>
+                  {' '}→ select this dream → ⚡ Run via Engine.
+                </p>
+              )}
+            </section>
+          );
+        })}
       </section>
     </main>
   );
