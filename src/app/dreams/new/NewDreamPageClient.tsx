@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { BookOpenText, Sparkles, Users } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import { listDreamers } from '@/lib/firebase/firestore';
 import { parseDreamText } from '@/lib/parser/dreamParser';
 import type { Dreamer, ParseResult } from '@/lib/types';
 
@@ -29,7 +28,11 @@ export default function NewDreamPageClient() {
   useEffect(() => {
     async function load() {
       if (!user) { setDreamersLoading(false); return; }
-      try { setDreamers(await listDreamers(user.uid)); }
+      try {
+        const res = await fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`);
+        const data = await res.json();
+        if (data.ok) setDreamers(Array.isArray(data.dreamers) ? data.dreamers : []);
+      }
       catch (err) { console.error('dreamers load (non-critical):', err); }
       finally { setDreamersLoading(false); }
     }
