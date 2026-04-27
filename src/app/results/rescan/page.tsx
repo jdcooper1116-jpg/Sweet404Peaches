@@ -1,130 +1,89 @@
 'use client';
-
-import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import { rescanLotteryResultsForDateRange } from '@/lib/firebase/firestore';
-
-function isoDate(daysOffset = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + daysOffset);
-  return d.toISOString().slice(0, 10);
-}
 
 export default function ResultsRescanPage() {
   const { user } = useAuth();
-  const [startDate, setStartDate] = useState(isoDate(-7));
-  const [endDate, setEndDate] = useState(isoDate(0));
   const [running, setRunning] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [result,  setResult]  = useState<any>(null);
+  const [error,   setError]   = useState('');
 
-  const label = useMemo(() => `${startDate} → ${endDate}`, [startDate, endDate]);
-
-  async function handleRescan() {
-    if (!user) {
-      setError('You must be signed in.');
-      return;
-    }
-
-    setRunning(true);
-    setError('');
-    setMessage('');
-
+  async function handleRefresh() {
+    if (!user) { setError('You must be signed in.'); return; }
+    setRunning(true); setResult(null); setError('');
     try {
-      const count = await rescanLotteryResultsForDateRange(user.uid, startDate, endDate);
-      setMessage(`Rescanned ${count} result row(s) for ${label}. Straight and boxed hits were re-checked and logged.`);
+      const res  = await fetch('/api/dreams/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ownerUid: user.uid }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Refresh failed.');
+      setResult(data);
     } catch (err) {
-      console.error(err);
-      const message =
-        err instanceof Error ? err.message : 'Rescan failed. Check Firestore permissions and console logs.';
-      setError(message);
-    } finally {
-      setRunning(false);
-    }
+      setError(err instanceof Error ? err.message : 'Refresh failed.');
+    } finally { setRunning(false); }
   }
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        gridTemplateColumns: '280px 1fr',
-        background:
-          'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-      }}
-    >
+    <main style={{
+      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
+      background: 'radial-gradient(circle at top left,rgba(228,192,123,0.14),transparent 18%),radial-gradient(circle at top right,rgba(108,120,255,0.12),transparent 22%),linear-gradient(135deg,#1A1A2E 0%,#16213E 48%,#0F3460 100%)',
+    }}>
       <Sidebar />
+      <section style={{ padding: '32px', display: 'grid', gap: '24px', alignContent: 'start' }}>
 
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div className="page-header">
-            <h1>Rescan Results for Hits</h1>
-            <p>
-              Re-check existing uploaded results against active 7-day dream windows and write any missing straight or boxed hits into the system.
-            </p>
+            <h1>Dream Re-Refresh</h1>
+            <p>Re-check all active dream windows against the latest Lottery Engine results and write any new confirmed hits. The engine is the source of truth — no local result scanning.</p>
           </div>
         </section>
 
-        <section className="journal-card" style={{ display: 'grid', gap: '16px' }}>
+        <section className="journal-card" style={{ display:'grid',gap:'14px' }}>
+          <p style={{ margin:0,color:'var(--ink-light)',fontSize:'14px',lineHeight:1.6 }}>
+            This triggers <strong>/api/dreams/refresh</strong> — it loads all active windows, calls the Railway Lottery Engine for each candidate set, and writes any new hits to Firestore. It is safe to run repeatedly (idempotent).
+          </p>
           <div>
-            <label className="journal-label" htmlFor="startDate">Start Date</label>
-            <input
-              id="startDate"
-              type="date"
-              className="journal-input"
-              value={startDate}
-              onChange={e => setStartDate(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="journal-label" htmlFor="endDate">End Date</label>
-            <input
-              id="endDate"
-              type="date"
-              className="journal-input"
-              value={endDate}
-              onChange={e => setEndDate(e.target.value)}
-            />
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleRescan}
-              disabled={running}
-            >
-              {running ? 'Rescanning...' : 'Rescan Results'}
+            <button type="button" className="btn-primary"
+              onClick={handleRefresh} disabled={running || !user}>
+              {running ? 'Refreshing all windows…' : '⚡ Re-Refresh Dream Windows Now'}
             </button>
           </div>
 
-          {message ? (
-            <div
-              className="journal-card-flat"
-              style={{
-                borderColor: '#cfe5c8',
-                background: '#f5fbf2',
-                color: '#315a2b',
-              }}
-            >
-              {message}
-            </div>
-          ) : null}
+          {error && <div className="journal-card-flat" style={{ borderColor:'#e9c2c2',background:'#fff4f4',color:'#8a2f2f' }}>{error}</div>}
 
-          {error ? (
-            <div
-              className="journal-card-flat"
-              style={{
-                borderColor: '#e9c2c2',
-                background: '#fff4f4',
-                color: '#8a2f2f',
-              }}
-            >
-              {error}
+          {result && (
+            <div className="journal-card-flat" style={{ borderColor:'#cfe5c8',background:'#f5fbf2',color:'#315a2b' }}>
+              <strong>Refresh complete.</strong>
+              <div style={{ display:'grid',gap:'6px',marginTop:'10px',fontSize:'13px' }}>
+                {[
+                  ['Windows Checked',    result.windowsChecked   ?? 0],
+                  ['Windows With Hits',  result.windowsWithNewHits ?? 0],
+                  ['New Hits Found',     result.totalNewHits      ?? 0],
+                  ['Engine Calls Made',  result.engineCallsMade   ?? 0],
+                  ['Errors',             result.errors?.length    ?? 0],
+                ].map(([label, val]) => (
+                  <div key={String(label)} style={{ display:'flex',justifyContent:'space-between' }}>
+                    <span>{label}</span><strong>{val}</strong>
+                  </div>
+                ))}
+                {result.checkedAt && <div style={{ marginTop:'4px',opacity:0.6 }}>Checked at: {String(result.checkedAt).slice(0,16).replace('T',' ')} UTC</div>}
+              </div>
             </div>
-          ) : null}
+          )}
+        </section>
+
+        <section className="journal-card-flat" style={{ display:'flex',gap:'10px',flexWrap:'wrap' }}>
+          {[
+            { href:'/windows',    label:'Active Windows' },
+            { href:'/hits',       label:'Hits Detector'  },
+            { href:'/daily-ops',  label:'Daily Ops'      },
+            { href:'/fell-before',label:'As They Fell Before' },
+          ].map(({ href, label }) => (
+            <Link key={href} href={href} className="btn-secondary" style={{ fontSize:'13px' }}>{label}</Link>
+          ))}
         </section>
       </section>
     </main>

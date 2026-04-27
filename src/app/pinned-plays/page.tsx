@@ -1,177 +1,137 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { BookmarkCheck, Pin, Save, Sparkles } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import { listPinnedPlays, updatePinnedPlay } from '@/lib/firebase/firestore';
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 type PinStatus = 'pinned' | 'played' | 'won' | 'archived';
+type PinnedPlay = {
+  id: string; label?: string; number?: string; familyKey?: string;
+  playType?: string; state?: string; score?: number; dreamerScope?: string;
+  playDate?: string; status?: PinStatus; notes?: string; reasons?: string[];
+};
 
-function unique<T>(items: T[]): T[] {
-  return Array.from(new Set(items));
-}
+function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 export default function PinnedPlaysPage() {
-  const { user, loading } = useAuth();
-  const [rows, setRows] = useState<any[]>([]);
-  const [pageLoading, setPageLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [playDateFilter, setPlayDateFilter] = useState(todayIso());
-  const [statusFilter, setStatusFilter] = useState<'ALL' | PinStatus>('ALL');
+  const { user } = useAuth();
+
+  const [rows,          setRows]         = useState<PinnedPlay[]>([]);
+  const [pageLoading,   setPageLoading]  = useState(true);
+  const [error,         setError]        = useState('');
+  const [message,       setMessage]      = useState('');
+  const [savingId,      setSavingId]     = useState('');
+  const [statusById,    setStatusById]   = useState<Record<string, PinStatus>>({});
+  const [notesById,     setNotesById]    = useState<Record<string, string>>({});
+
+  const [playDateFilter,    setPlayDateFilter]    = useState(todayIso());
+  const [statusFilter,      setStatusFilter]      = useState<'ALL' | PinStatus>('ALL');
   const [dreamerScopeFilter, setDreamerScopeFilter] = useState('ALL');
-  const [savingId, setSavingId] = useState('');
 
-  const [notesById, setNotesById] = useState<Record<string, string>>({});
-  const [statusById, setStatusById] = useState<Record<string, PinStatus>>({});
-
-  useEffect(() => {
-    async function load() {
-      if (!user) {
-        setRows([]);
-        setPageLoading(false);
-        return;
-      }
-
-      try {
-        setError('');
-        const result = await listPinnedPlays(user.uid);
-        setRows(result);
-
-        const notesState: Record<string, string> = {};
-        const statusState: Record<string, PinStatus> = {};
-
-        for (const row of result) {
-          notesState[row.id] = row.notes || '';
-          statusState[row.id] = (row.status || 'pinned') as PinStatus;
-        }
-
-        setNotesById(notesState);
-        setStatusById(statusState);
-      } catch (err) {
-        console.error(err);
-        setError('Could not load pinned plays.');
-      } finally {
-        setPageLoading(false);
-      }
-    }
-
-    if (!loading) {
-      void load();
-    }
-  }, [user, loading]);
-
-  const visibleScopes = useMemo(() => {
-    return unique(rows.map(row => row.dreamerScope || 'ALL')).sort();
-  }, [rows]);
-
-  const filteredRows = useMemo(() => {
-    return rows
-      .filter(row => !playDateFilter || row.playDate === playDateFilter)
-      .filter(row => statusFilter === 'ALL' || row.status === statusFilter)
-      .filter(row => dreamerScopeFilter === 'ALL' || row.dreamerScope === dreamerScopeFilter)
-      .sort((a, b) => {
-        if ((a.playDate || '') !== (b.playDate || '')) return (b.playDate || '').localeCompare(a.playDate || '');
-        if ((a.score || 0) !== (b.score || 0)) return (b.score || 0) - (a.score || 0);
-        return (a.label || '').localeCompare(b.label || '');
+  async function loadPlays() {
+    if (!user) { setPageLoading(false); return; }
+    try {
+      const qs = new URLSearchParams({ ownerUid: user.uid });
+      if (playDateFilter) qs.set('playDate', playDateFilter);
+      if (statusFilter !== 'ALL') qs.set('status', statusFilter);
+      if (dreamerScopeFilter !== 'ALL') qs.set('dreamerScope', dreamerScopeFilter);
+      const res  = await fetch(`/api/pinned-plays?${qs.toString()}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Load failed.');
+      const plays = Array.isArray(data.plays) ? data.plays : [];
+      setRows(plays);
+      // Initialise local edit state
+      const initStatus: Record<string, PinStatus> = {};
+      const initNotes:  Record<string, string>     = {};
+      plays.forEach((r: PinnedPlay) => {
+        initStatus[r.id] = r.status ?? 'pinned';
+        initNotes[r.id]  = r.notes  ?? '';
       });
-  }, [rows, playDateFilter, statusFilter, dreamerScopeFilter]);
+      setStatusById(initStatus);
+      setNotesById(initNotes);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load pinned plays.');
+    } finally { setPageLoading(false); }
+  }
+
+  useEffect(() => { void loadPlays(); }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const visibleScopes = useMemo(() =>
+    [...new Set(rows.map(r => r.dreamerScope).filter(Boolean))].sort(),
+    [rows]
+  );
+
+  // Apply client-side filters (date + scope already sent to route; status may vary)
+  const filteredRows = useMemo(() =>
+    rows.filter(r => dreamerScopeFilter === 'ALL' || r.dreamerScope === dreamerScopeFilter),
+    [rows, dreamerScopeFilter]
+  );
 
   const grouped = useMemo(() => {
-    const map = new Map<string, any[]>();
-
+    const map = new Map<string, PinnedPlay[]>();
     for (const row of filteredRows) {
       const key = row.playType || 'other';
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(row);
     }
-
     return [
       { key: 'agreement', label: 'Strong Agreements' },
-      { key: 'boxed', label: 'Boxed Plays' },
-      { key: 'straight', label: 'Straight Plays' },
-      { key: 'watch', label: 'Watch Only' },
-    ].map(section => ({
-      ...section,
-      rows: map.get(section.key) || [],
-    }));
+      { key: 'boxed',     label: 'Boxed Plays'       },
+      { key: 'straight',  label: 'Straight Plays'    },
+      { key: 'watch',     label: 'Watch Only'        },
+    ].map(s => ({ ...s, rows: map.get(s.key) ?? [] }));
   }, [filteredRows]);
 
   async function saveRow(rowId: string) {
     if (!user) return;
-
+    setSavingId(rowId); setError(''); setMessage('');
     try {
-      setSavingId(rowId);
-      setError('');
-      setMessage('');
-
-      await updatePinnedPlay(rowId, {
-        status: statusById[rowId],
-        notes: notesById[rowId] || '',
+      const res = await fetch('/api/pinned-plays', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerUid: user.uid, pinnedPlayId: rowId,
+          status: statusById[rowId],
+          notes:  notesById[rowId] ?? '',
+        }),
       });
-
-      const refreshed = await listPinnedPlays(user.uid);
-      setRows(refreshed);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Update failed.');
       setMessage('Pinned play updated.');
+      await loadPlays();
     } catch (err) {
-      console.error(err);
-      setError('Could not update pinned play.');
-    } finally {
-      setSavingId('');
-    }
+      setError(err instanceof Error ? err.message : 'Could not update pinned play.');
+    } finally { setSavingId(''); }
   }
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        gridTemplateColumns: '280px 1fr',
-        background:
-          'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-      }}
-    >
+    <main style={{
+      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
+      background: 'radial-gradient(circle at top left,rgba(228,192,123,0.14),transparent 18%),radial-gradient(circle at top right,rgba(108,120,255,0.12),transparent 22%),linear-gradient(135deg,#1A1A2E 0%,#16213E 48%,#0F3460 100%)',
+    }}>
       <Sidebar />
       <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+
         <section className="journal-card">
           <div className="page-header">
             <h1>Pinned Plays</h1>
-            <p>
-              Your daily shortlist of pinned families and numbers from the Forecast Board.
-            </p>
+            <p>Your daily shortlist of pinned families and numbers from the Forecast Board.</p>
           </div>
         </section>
 
+        {/* Filters */}
         <section className="journal-card-flat">
-          <div
-            style={{
-              display: 'grid',
-              gap: '16px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            }}
-          >
+          <div style={{ display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
             <div>
               <label className="journal-label">Play Date</label>
-              <input
-                type="date"
-                className="journal-input"
-                value={playDateFilter}
-                onChange={e => setPlayDateFilter(e.target.value)}
-              />
+              <input type="date" className="journal-input" value={playDateFilter}
+                onChange={e => setPlayDateFilter(e.target.value)} />
             </div>
-
             <div>
               <label className="journal-label">Status</label>
-              <select
-                className="journal-select"
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value as 'ALL' | PinStatus)}
-              >
+              <select className="journal-select" value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as 'ALL' | PinStatus)}>
                 <option value="ALL">All</option>
                 <option value="pinned">pinned</option>
                 <option value="played">played</option>
@@ -179,176 +139,112 @@ export default function PinnedPlaysPage() {
                 <option value="archived">archived</option>
               </select>
             </div>
-
             <div>
               <label className="journal-label">Dreamer Scope</label>
-              <select
-                className="journal-select"
-                value={dreamerScopeFilter}
-                onChange={e => setDreamerScopeFilter(e.target.value)}
-              >
+              <select className="journal-select" value={dreamerScopeFilter}
+                onChange={e => setDreamerScopeFilter(e.target.value)}>
                 <option value="ALL">All</option>
-                {visibleScopes.map(scope => (
-                  <option key={scope} value={scope}>
-                    {scope}
-                  </option>
-                ))}
+                {visibleScopes.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           </div>
-
-          <div style={{ marginTop: '12px' }}>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setPlayDateFilter(todayIso());
-                setStatusFilter('ALL');
-                setDreamerScopeFilter('ALL');
-              }}
-            >
-              Reset Filters
-            </button>
+          <div style={{ marginTop: '12px', display: 'flex', gap: '10px' }}>
+            <button type="button" className="btn-secondary" onClick={() => void loadPlays()}>Apply Filters</button>
+            <button type="button" className="btn-secondary" onClick={() => {
+              setPlayDateFilter(todayIso()); setStatusFilter('ALL'); setDreamerScopeFilter('ALL');
+            }}>Reset</button>
           </div>
         </section>
 
-        {message ? (
-          <div className="journal-card-flat" style={{ borderColor: '#cfe5c8', background: '#f5fbf2', color: '#315a2b' }}>
-            {message}
-          </div>
-        ) : null}
+        {message && <div className="journal-card-flat" style={{ borderColor:'#cfe5c8',background:'#f5fbf2',color:'#315a2b' }}>{message}</div>}
+        {error   && <div className="journal-card-flat" style={{ borderColor:'#e9c2c2',background:'#fff4f4',color:'#8a2f2f' }}>{error}</div>}
 
-        {error ? (
-          <div className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>
-            {error}
-          </div>
-        ) : null}
+        {pageLoading && <section className="journal-card"><p>Loading pinned plays…</p></section>}
 
-        {pageLoading ? (
+        {!pageLoading && filteredRows.length === 0 && (
           <section className="journal-card">
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading pinned plays...</p>
-          </section>
-        ) : filteredRows.length === 0 ? (
-          <section className="journal-card">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: 'var(--deep-plum)' }}>
+            <div style={{ display:'flex',alignItems:'center',gap:'10px',marginBottom:'10px',color:'var(--deep-plum)' }}>
               <Sparkles size={18} />
-              <strong>No pinned plays in this view yet</strong>
+              <strong>No pinned plays in this view</strong>
             </div>
-            <p style={{ margin: 0, color: 'var(--ink-light)' }}>
-              Pin items from the Forecast Board to build your daily shortlist.
+            <p style={{ margin:0,color:'var(--ink-light)' }}>
+              Pin items from the <Link href="/forecast-board" style={{color:'#b0b8ff'}}>Forecast Board</Link> to build your daily shortlist.
             </p>
           </section>
-        ) : (
-          <section style={{ display: 'grid', gap: '20px' }}>
-            {grouped.map(section => (
-              <article key={section.key} className="journal-card">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--deep-plum)', marginBottom: '14px' }}>
-                  <BookmarkCheck size={18} />
-                  <strong style={{ fontSize: '22px' }}>{section.label}</strong>
-                </div>
-
-                {section.rows.length === 0 ? (
-                  <div className="journal-card-flat" style={{ color: 'var(--ink-light)' }}>
-                    Nothing pinned in this section for the current filters.
-                  </div>
-                ) : (
-                  <div style={{ display: 'grid', gap: '14px' }}>
-                    {section.rows.map(row => (
-                      <div key={row.id} className="journal-card-flat">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
-                              <Pin size={16} />
-                              <strong style={{ fontSize: '18px' }}>{row.label}</strong>
-                            </div>
-
-                            <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
-                              {row.number ? `Number: ${row.number}` : `Family: ${row.familyKey || '—'}`}
-                            </div>
-                            <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '4px' }}>
-                              Scope: {row.dreamerScope} • State: {row.state} • Date: {row.playDate}
-                            </div>
-                          </div>
-
-                          <div className="journal-card-flat" style={{ minWidth: '140px', textAlign: 'center' }}>
-                            <div className="journal-label">Score</div>
-                            <div style={{ fontSize: '26px', fontWeight: 700, color: 'var(--deep-plum)' }}>
-                              {row.score || 0}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginTop: '14px' }}>
-                          <div>
-                            <label className="journal-label">Status</label>
-                            <select
-                              className="journal-select"
-                              value={statusById[row.id] || 'pinned'}
-                              onChange={e =>
-                                setStatusById(current => ({
-                                  ...current,
-                                  [row.id]: e.target.value as PinStatus,
-                                }))
-                              }
-                            >
-                              <option value="pinned">pinned</option>
-                              <option value="played">played</option>
-                              <option value="won">won</option>
-                              <option value="archived">archived</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="journal-label">Notes</label>
-                            <textarea
-                              className="journal-textarea"
-                              rows={3}
-                              value={notesById[row.id] || ''}
-                              onChange={e =>
-                                setNotesById(current => ({
-                                  ...current,
-                                  [row.id]: e.target.value,
-                                }))
-                              }
-                              placeholder="Add notes about why you pinned this, results, or outcome..."
-                            />
-                          </div>
-                        </div>
-
-                        <div style={{ marginTop: '12px' }}>
-                          <button
-                            type="button"
-                            className="btn-primary"
-                            disabled={savingId === row.id}
-                            onClick={() => saveRow(row.id)}
-                          >
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                              <Save size={14} />
-                              {savingId === row.id ? 'Saving...' : 'Save Update'}
-                            </span>
-                          </button>
-                        </div>
-
-                        {row.reasons?.length ? (
-                          <div className="journal-card-flat" style={{ marginTop: '12px' }}>
-                            <div className="journal-label">Reasons</div>
-                            <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--ink-light)' }}>
-                              {row.reasons.map((reason: string) => (
-                                <li key={reason} style={{ marginBottom: '6px' }}>
-                                  {reason}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </article>
-            ))}
-          </section>
         )}
+
+        {grouped.map(section => section.rows.length === 0 ? null : (
+          <article key={section.key} className="journal-card">
+            <div style={{ display:'flex',alignItems:'center',gap:'10px',color:'var(--deep-plum)',marginBottom:'14px' }}>
+              <BookmarkCheck size={18} />
+              <strong style={{ fontSize:'20px' }}>{section.label}</strong>
+            </div>
+            <div style={{ display:'grid',gap:'14px' }}>
+              {section.rows.map(row => (
+                <div key={row.id} className="journal-card-flat">
+                  <div style={{ display:'flex',justifyContent:'space-between',gap:'16px',alignItems:'flex-start',flexWrap:'wrap' }}>
+                    <div>
+                      <div style={{ display:'flex',alignItems:'center',gap:'10px',color:'var(--deep-plum)',marginBottom:'6px' }}>
+                        <Pin size={15} />
+                        <strong style={{ fontSize:'16px' }}>{row.label || row.number || row.familyKey || '—'}</strong>
+                      </div>
+                      <div style={{ color:'var(--ink-light)',fontSize:'13px' }}>
+                        {row.number ? `Number: ${row.number}` : `Family: ${row.familyKey || '—'}`}
+                      </div>
+                      <div style={{ color:'var(--ink-light)',fontSize:'13px',marginTop:'3px' }}>
+                        Scope: {row.dreamerScope || '—'} · State: {row.state || '—'} · Date: {row.playDate || '—'}
+                      </div>
+                    </div>
+                    <div className="journal-card-flat" style={{ minWidth:'120px',textAlign:'center' }}>
+                      <div className="journal-label">Score</div>
+                      <div style={{ fontSize:'24px',fontWeight:700,color:'var(--deep-plum)' }}>{row.score || 0}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display:'grid',gap:'10px',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',marginTop:'12px' }}>
+                    <div>
+                      <label className="journal-label">Status</label>
+                      <select className="journal-select"
+                        value={statusById[row.id] || 'pinned'}
+                        onChange={e => setStatusById(cur => ({ ...cur, [row.id]: e.target.value as PinStatus }))}>
+                        <option value="pinned">pinned</option>
+                        <option value="played">played</option>
+                        <option value="won">won</option>
+                        <option value="archived">archived</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="journal-label">Notes</label>
+                      <textarea className="journal-textarea" rows={2}
+                        value={notesById[row.id] || ''}
+                        onChange={e => setNotesById(cur => ({ ...cur, [row.id]: e.target.value }))}
+                        placeholder="Add notes, results, or outcome…" />
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop:'10px' }}>
+                    <button type="button" className="btn-primary"
+                      disabled={savingId === row.id}
+                      onClick={() => saveRow(row.id)}>
+                      <span style={{ display:'inline-flex',alignItems:'center',gap:'7px' }}>
+                        <Save size={13} />{savingId === row.id ? 'Saving…' : 'Save Update'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {(row.reasons?.length ?? 0) > 0 && (
+                    <div className="journal-card-flat" style={{ marginTop:'10px' }}>
+                      <div className="journal-label">Reasons</div>
+                      <ul style={{ margin:0,paddingLeft:'18px',color:'var(--ink-light)',fontSize:'13px' }}>
+                        {(row.reasons ?? []).map(r => <li key={r} style={{ marginBottom:'4px' }}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
       </section>
     </main>
   );
