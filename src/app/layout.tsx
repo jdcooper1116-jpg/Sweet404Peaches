@@ -3,6 +3,7 @@ import { IM_Fell_English, Lora } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/contexts/AuthContext';
 import GlobalChatDock from '@/components/chat/GlobalChatDock';
+import PeachLedgerAppShell from '@/components/layout/PeachLedgerAppShell';
 
 const imFell = IM_Fell_English({
   subsets: ['latin'],
@@ -42,7 +43,9 @@ export default function RootLayout({
     >
       <body className="antialiased">
         <AuthProvider>
-          {children}
+          <PeachLedgerAppShell>
+            {children}
+          </PeachLedgerAppShell>
           <GlobalChatDock />
         </AuthProvider>
       </body>
