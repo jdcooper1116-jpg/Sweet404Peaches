@@ -2,26 +2,83 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Peach Ledger Studio — Design Tokens ────────────────────────────────────
+   Phase 1: removed dark "Celestial Console" override block that was
+   re-defining --cream, --parchment, --ink, etc. with midnight values
+   and overriding html/body to a dark navy gradient.
+   All class names are preserved exactly. Only variable values change.
+   ─────────────────────────────────────────────────────────────────────────── */
+
 :root {
-  --cream: #FAF7F2;
-  --parchment: #F2EDE4;
-  --parchment-deep: #E8DDD0;
-  --dusty-rose: #C9A0A0;
-  --lavender: #B8A9C9;
-  --muted-plum: #7B5E7B;
-  --deep-plum: #5C3D5C;
-  --twilight-blue: #4A6680;
-  --night-blue: #2D4A66;
-  --soft-gold: #C9A84C;
-  --star-gold: #E8C547;
-  --ink: #2D2020;
-  --ink-muted: #5C4B4B;
-  --ink-light: #8B7B7B;
-  --ink-ghost: #BEB4B4;
-  --border-muted: #E7DED3;
+  /* ── Peach Ledger palette ────────────────────────────────────────────────── */
+  --cream:   #fff8f2;
+  --cream-2: #fff1e8;
+  --peach:   #f28a6a;
+  --peach-2: #f7b28f;
+  --rose:    #d8a6a1;
+  --clay:    #b87762;
+  --plum:    #7b5a6f;
+  --ink:     #2a2024;
+  --taupe:   #6b5a60;
+  --muted:   #9a8588;
+  --gold:    #d8a45b;
+  --mint:    #cfe8d6;
+  --green:   #3d7a52;
+  --red:     #b65b50;
+
+  /* ── Semantic aliases (used by existing classes) ─────────────────────────── */
+  --deep-plum:        var(--plum);
+  --soft-gold:        var(--gold);
+  --star-gold:        #e8b96a;          /* lighter gold for gradients */
+  --ink-muted:        var(--taupe);
+  --ink-light:        var(--muted);
+  --ink-ghost:        #c9bfbf;
+
+  /* Legacy warm-theme names kept for backwards compat with any inline refs */
+  --parchment:        var(--cream-2);
+  --parchment-deep:   #f5e8dc;
+  --dusty-rose:       var(--rose);
+  --lavender:         #c4b5d4;
+  --muted-plum:       var(--plum);
+  --twilight-blue:    #5a7a96;
+  --night-blue:       #3a5c78;
+  --soft-gold:        var(--gold);
+  --border-muted:     #ecddd6;
+
+  /* ── Surface / panel tokens ─────────────────────────────────────────────── */
+  --surface:          rgba(255, 248, 242, 0.96);
+  --surface-2:        rgba(255, 241, 232, 0.92);
+  --surface-raised:   rgba(255, 255, 255, 0.88);
+  --border-soft:      rgba(184, 119, 98, 0.18);   /* clay at low opacity */
+  --border-strong:    rgba(184, 119, 98, 0.38);
+
+  /* ── Shadows ─────────────────────────────────────────────────────────────── */
+  --shadow-soft:  0 4px 16px rgba(42, 32, 36, 0.08);
+  --shadow-card:  0 8px 28px rgba(42, 32, 36, 0.10);
+  --shadow-deep:  0 16px 48px rgba(42, 32, 36, 0.14);
+
+  /* ── Text levels ─────────────────────────────────────────────────────────── */
+  --text-main:    var(--ink);
+  --text-strong:  var(--ink);
+  --text-muted:   var(--taupe);
+  --text-soft:    var(--muted);
+
+  /* ── Legacy Celestial names — mapped to warm equivalents so any stray
+        inline reference that used them doesn't turn black ─────────────────── */
+  --midnight:     var(--plum);
+  --navy-deep:    var(--cream-2);
+  --royal-blue:   var(--peach-2);
+  --gold-accent:  var(--gold);
+  --panel:        var(--surface);
+  --panel-2:      var(--surface-2);
+  --panel-3:      var(--surface-raised);
 }
 
-* {
+/* ─── Base reset ─────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -34,10 +91,14 @@ body {
 
 body {
   background:
-    radial-gradient(circle at top, rgba(232, 197, 71, 0.10), transparent 30%),
-    linear-gradient(135deg, var(--cream) 0%, var(--parchment) 50%, var(--parchment-deep) 100%);
+    radial-gradient(ellipse at top left,  rgba(242, 138, 106, 0.12) 0%, transparent 40%),
+    radial-gradient(ellipse at top right, rgba(216, 164, 91,  0.10) 0%, transparent 40%),
+    radial-gradient(ellipse at bottom,    rgba(207, 232, 214, 0.14) 0%, transparent 50%),
+    linear-gradient(160deg, var(--cream) 0%, var(--cream-2) 55%, #f5e8dc 100%);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--font-body), Georgia, serif;
+  min-height: 100vh;
 }
 
 a {
@@ -52,305 +113,35 @@ select {
   font: inherit;
 }
 
+table { color: var(--ink); }
+th    { color: var(--ink); }
+td    { color: var(--taupe); }
+hr    { border-color: var(--border-soft); }
+
+small,
+.text-muted { color: var(--muted); }
+
+/* ─── Card system ─────────────────────────────────────────────────────────── */
+
 .journal-card {
-  border-radius: 16px;
+  border-radius: 20px;
   border: 1px solid var(--border-muted);
   padding: 24px;
-  background: rgba(250, 247, 242, 0.92);
-  backdrop-filter: blur(2px);
-  box-shadow: 0 10px 30px rgba(45, 32, 32, 0.08);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .journal-card-flat {
   border-radius: 16px;
   border: 1px solid var(--border-muted);
   padding: 16px;
-  background: rgba(250, 247, 242, 0.88);
+  background: var(--surface-raised);
 }
 
-.journal-label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--ink-muted);
-}
-
-.journal-input,
-.journal-textarea,
-.journal-select {
-  width: 100%;
-  border-radius: 12px;
-  border: 1px solid var(--border-muted);
-  background: rgba(255, 255, 255, 0.8);
-  padding: 10px 12px;
-  font-size: 14px;
-  outline: none;
-  transition: 0.2s ease;
-  color: var(--ink);
-}
-
-.journal-input:focus,
-.journal-textarea:focus,
-.journal-select:focus {
-  border-color: var(--soft-gold);
-  box-shadow: 0 0 0 3px rgba(201, 168, 76, 0.16);
-}
-
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 12px;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: 0.2s ease;
-  background: linear-gradient(135deg, var(--soft-gold), var(--star-gold));
-  color: #2d2020;
-  box-shadow: 0 0 16px rgba(201, 168, 76, 0.25);
-}
-
-.btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 0 18px rgba(201, 168, 76, 0.35);
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-muted);
-  border-radius: 12px;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: 0.2s ease;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--deep-plum);
-}
-
-.btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.page-header h1 {
-  margin: 0;
-  font-size: 32px;
-  font-style: italic;
-  line-height: 1;
-  color: var(--deep-plum);
-}
-
-.page-header p {
-  margin-top: 8px;
-  font-size: 14px;
-  font-style: italic;
-  color: var(--ink-light);
-}
-
-
-/* === FINISH POLISH HELPERS === */
-.page-shell {
-  display: grid;
-  gap: 24px;
-}
-
-.section-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--deep-plum);
-  margin-bottom: 14px;
-}
-
-.kpi-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.filter-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.soft-muted {
-  color: var(--ink-light);
-}
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border: 1px solid transparent;
-}
-
-.status-pinned {
-  background: rgba(201,168,76,0.14);
-  border-color: rgba(201,168,76,0.35);
-  color: var(--deep-plum);
-}
-
-.status-played {
-  background: rgba(92,140,186,0.14);
-  border-color: rgba(92,140,186,0.35);
-  color: #274d73;
-}
-
-.status-won {
-  background: rgba(99,155,102,0.14);
-  border-color: rgba(99,155,102,0.35);
-  color: #2f6232;
-}
-
-.status-archived {
-  background: rgba(120,120,120,0.12);
-  border-color: rgba(120,120,120,0.28);
-  color: #5f5f5f;
-}
-
-.quick-link-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.quick-link-card {
-  text-decoration: none;
-  color: inherit;
-}
-
-.empty-state {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-  color: var(--deep-plum);
-}
-
-@media print {
-  aside,
-  .btn-primary,
-  .btn-secondary,
-  button,
-  textarea,
-  select {
-    visibility: hidden !important;
-    display: none !important;
-  }
-
-  main,
-  section,
-  article,
-  div {
-    background: white !important;
-    color: black !important;
-    box-shadow: none !important;
-  }
-
-  .journal-card,
-  .journal-card-flat {
-    border: 1px solid #ccc !important;
-    break-inside: avoid;
-  }
-
-  body {
-    background: white !important;
-  }
-}
-
-
-
-/* === Visual Theme Bundle: Celestial Console === */
-:root {
-  --midnight: #111827;
-  --navy-deep: #16213E;
-  --royal-blue: #0F3460;
-  --gold-accent: #E4C07B;
-
-  --text-main: #FAFBFF;
-  --text-strong: #FFFFFF;
-  --text-muted: #DCE3F2;
-  --text-soft: #B8C2DA;
-
-  --border-soft: rgba(228, 192, 123, 0.16);
-  --border-strong: rgba(228, 192, 123, 0.32);
-
-  --panel: rgba(10, 18, 40, 0.92);
-  --panel-2: rgba(17, 29, 58, 0.96);
-  --panel-3: rgba(24, 40, 76, 0.92);
-
-  --shadow-deep: 0 18px 48px rgba(5, 9, 24, 0.46);
-  --shadow-soft: 0 8px 24px rgba(5, 9, 24, 0.30);
-
-  --cream: #111827;
-  --parchment: #16213E;
-  --parchment-deep: #0F3460;
-  --ink: #FAFBFF;
-  --ink-light: #DCE3F2;
-}
-
-html,
-body {
-  background:
-    radial-gradient(circle at top left, rgba(228, 192, 123, 0.10), transparent 18%),
-    radial-gradient(circle at top right, rgba(115, 120, 255, 0.10), transparent 22%),
-    linear-gradient(135deg, #111827 0%, #16213E 48%, #0F3460 100%);
-  color: var(--text-main);
-}
-
-body {
-  min-height: 100vh;
-}
-
-a {
-  color: inherit;
-}
-
-.page-header h1 {
-  color: var(--text-strong);
-  letter-spacing: -0.02em;
-  font-size: clamp(1.9rem, 2vw, 2.5rem);
-  font-weight: 800;
-}
-
-.page-header p {
-  color: var(--text-muted);
-  max-width: 72ch;
-  line-height: 1.7;
-  font-size: 1rem;
-}
-
+/* Ensure text inside cards stays legible (phase 5 will re-colour) */
 .journal-card,
 .journal-card-flat {
-  background: linear-gradient(180deg, rgba(10, 18, 40, 0.90) 0%, rgba(17, 29, 58, 0.96) 100%);
-  color: var(--text-main);
-  border: 1px solid var(--border-soft);
-  border-radius: 22px;
-  box-shadow: var(--shadow-deep);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-.journal-card {
-  padding: 24px;
-}
-
-.journal-card-flat {
-  padding: 16px 18px;
+  color: var(--ink);
 }
 
 .journal-card p,
@@ -370,121 +161,128 @@ a {
   color: inherit;
 }
 
+/* ─── Form elements ──────────────────────────────────────────────────────── */
+
 .journal-label {
-  color: var(--gold-accent);
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  font-size: 0.92rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--clay);
 }
 
 .journal-input,
 .journal-textarea,
 .journal-select {
-  background: rgba(7, 14, 34, 0.96);
-  color: var(--text-strong);
-  border: 1px solid rgba(228, 192, 123, 0.22);
-  border-radius: 16px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border-muted);
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 14px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  color: var(--ink);
 }
 
 .journal-input::placeholder,
 .journal-textarea::placeholder {
-  color: rgba(220, 227, 242, 0.72);
+  color: var(--muted);
 }
 
 .journal-input:focus,
 .journal-textarea:focus,
 .journal-select:focus {
-  outline: none;
-  border-color: rgba(228, 192, 123, 0.46);
-  box-shadow:
-    0 0 0 3px rgba(228, 192, 123, 0.12),
-    0 8px 20px rgba(7, 11, 28, 0.28);
+  border-color: var(--peach);
+  box-shadow: 0 0 0 3px rgba(242, 138, 106, 0.14);
 }
 
-.btn-primary,
-.btn-secondary {
-  border-radius: 16px;
-  transition: all 0.18s ease;
-  font-weight: 700;
+.journal-textarea {
+  resize: vertical;
 }
+
+/* ─── Buttons ─────────────────────────────────────────────────────────────── */
 
 .btn-primary {
-  background: linear-gradient(135deg, #E4C07B 0%, #d9af63 100%);
-  color: #10182f;
-  border: 1px solid rgba(228, 192, 123, 0.40);
-  box-shadow: 0 10px 24px rgba(228, 192, 123, 0.18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  background: linear-gradient(135deg, var(--peach) 0%, var(--clay) 100%);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(242, 138, 106, 0.30);
 }
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 14px 28px rgba(228, 192, 123, 0.24);
+  box-shadow: 0 8px 22px rgba(242, 138, 106, 0.38);
+}
+
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .btn-secondary {
-  background: rgba(255,255,255,0.05);
-  color: var(--text-strong);
-  border: 1px solid rgba(228, 192, 123, 0.20);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-muted);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--plum);
 }
 
 .btn-secondary:hover {
-  background: rgba(255,255,255,0.09);
-  border-color: rgba(228, 192, 123, 0.34);
+  background: rgba(255, 255, 255, 0.92);
+  border-color: var(--rose);
 }
 
-table {
-  color: var(--text-main);
+.btn-secondary:disabled {
+  opacity: 0.50;
+  cursor: not-allowed;
 }
 
-th {
-  color: var(--text-strong);
-}
+/* ─── Page header ────────────────────────────────────────────────────────── */
 
-td {
-  color: var(--text-muted);
-}
-
-small,
-.text-muted {
-  color: var(--text-soft);
-}
-
-hr {
-  border-color: rgba(228, 192, 123, 0.14);
-}
-
-
-
-/* === Visual Refinement Utilities === */
-.stat-tile {
-  background: linear-gradient(180deg, rgba(13, 22, 48, 0.94) 0%, rgba(20, 35, 68, 0.98) 100%);
-  border: 1px solid rgba(228, 192, 123, 0.16);
-  border-radius: 20px;
-  padding: 18px 20px;
-  box-shadow: 0 10px 30px rgba(4, 8, 24, 0.34);
-  display: grid;
-  gap: 8px;
-}
-
-.stat-tile .stat-label {
-  color: var(--text-soft);
-  font-size: 0.82rem;
+.page-header h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 2.2vw, 2.2rem);
+  font-style: italic;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--plum);
 }
 
-.stat-tile .stat-value {
-  color: var(--text-strong);
-  font-size: clamp(1.5rem, 2vw, 2rem);
-  font-weight: 800;
-  letter-spacing: -0.03em;
+.page-header p {
+  margin-top: 8px;
+  font-size: 14px;
+  font-style: italic;
+  color: var(--muted);
+  max-width: 72ch;
+  line-height: 1.65;
 }
 
-.stat-tile .stat-subtext {
-  color: var(--text-muted);
-  font-size: 0.92rem;
-  line-height: 1.5;
+/* ─── Layout helpers ─────────────────────────────────────────────────────── */
+
+.page-shell {
+  display: grid;
+  gap: 24px;
 }
 
 .panel-grid {
@@ -492,16 +290,35 @@ hr {
   gap: 24px;
 }
 
-.soft-divider {
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(228, 192, 123, 0.22), transparent);
-  border: 0;
+.section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--plum);
+  margin-bottom: 14px;
 }
 
-.surface-accent {
-  background: linear-gradient(135deg, rgba(228, 192, 123, 0.08) 0%, rgba(103, 114, 229, 0.08) 100%);
-  border: 1px solid rgba(228, 192, 123, 0.14);
-  border-radius: 18px;
+.kpi-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.filter-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.quick-link-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.quick-link-card {
+  text-decoration: none;
+  color: inherit;
 }
 
 .metric-row {
@@ -509,16 +326,159 @@ hr {
   gap: 10px;
 }
 
+/* ─── Stat tiles ─────────────────────────────────────────────────────────── */
+
+.stat-tile {
+  background: rgba(255, 255, 255, 0.80);
+  border: 1px solid var(--border-muted);
+  border-radius: 18px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 6px;
+}
+
+.stat-tile .stat-label {
+  color: var(--clay);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stat-tile .stat-value {
+  color: var(--plum);
+  font-size: clamp(1.5rem, 2vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.stat-tile .stat-subtext {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* ─── Surface accent (intelligence pages) ────────────────────────────────── */
+
+.surface-accent {
+  background: linear-gradient(135deg,
+    rgba(242, 138, 106, 0.06) 0%,
+    rgba(216, 164, 91,  0.06) 100%);
+  border: 1px solid rgba(184, 119, 98, 0.14);
+  border-radius: 16px;
+}
+
+/* ─── Divider ────────────────────────────────────────────────────────────── */
+
+.soft-divider {
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(184, 119, 98, 0.24),
+    transparent);
+  border: 0;
+  margin: 0;
+}
+
+/* ─── Metric chip ────────────────────────────────────────────────────────── */
+
 .metric-chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(228, 192, 123, 0.14);
-  color: var(--text-muted);
-  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.70);
+  border: 1px solid var(--border-muted);
+  color: var(--taupe);
+  font-size: 0.88rem;
   font-weight: 600;
 }
 
+/* ─── Status badges ──────────────────────────────────────────────────────── */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+}
+
+.status-pinned {
+  background: rgba(216, 164, 91, 0.14);
+  border-color: rgba(216, 164, 91, 0.35);
+  color: var(--clay);
+}
+
+.status-played {
+  background: rgba(90, 122, 150, 0.12);
+  border-color: rgba(90, 122, 150, 0.30);
+  color: #3a5c78;
+}
+
+.status-won {
+  background: rgba(61, 122, 82, 0.12);
+  border-color: rgba(61, 122, 82, 0.28);
+  color: var(--green);
+}
+
+.status-archived {
+  background: rgba(107, 90, 96, 0.10);
+  border-color: rgba(107, 90, 96, 0.22);
+  color: var(--taupe);
+}
+
+/* ─── Empty / soft states ────────────────────────────────────────────────── */
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: var(--plum);
+}
+
+.soft-muted {
+  color: var(--muted);
+}
+
+/* ─── Print ──────────────────────────────────────────────────────────────── */
+
+@media print {
+  aside,
+  .btn-primary,
+  .btn-secondary,
+  button,
+  textarea,
+  select {
+    visibility: hidden !important;
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  main,
+  section,
+  article,
+  div {
+    background: white !important;
+    color: black !important;
+    box-shadow: none !important;
+  }
+
+  .journal-card,
+  .journal-card-flat {
+    border: 1px solid #ccc !important;
+    break-inside: avoid;
+  }
+}
