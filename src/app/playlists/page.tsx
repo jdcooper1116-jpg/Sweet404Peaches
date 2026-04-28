@@ -3,202 +3,526 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import {
-  buildGroupedTermDictionary,
-  computeForecastScore,
-  flattenDictionary,
-  slugify,
-  type PersonalMappingRow,
-  type TermStateRecord,
-} from '@/lib/intelligence/termDictionary';
+import { MapPinned } from 'lucide-react';
 
-type StatePlaylistGroup = {
-  state: string;
-  records: Array<TermStateRecord & { forecastScore: number }>;
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type WindowRow = {
+  dreamEntryId: string;
+  dreamerName:  string;
+  activeStart:  string;
+  activeEnd:    string;
+  cash3Numbers: string[];
+  cash4Numbers: string[];
+  totalWatchItems: number;
+  termMap: Record<string, { cash3: string[]; cash4: string[] }>;
+  newHitsSinceLastCheck?: number;
 };
+
+type FellBeforeRow = {
+  termLabel?:   string;
+  number?:      string;
+  state?:       string;
+  gameType?:    string;
+  hitCount?:    number;
+  straightCount?: number;
+  boxedCount?:  number;
+  stateStrengthScore?: number;
+  lastHitDate?: string;
+  dreamerId?:   string;
+  dreamerName?: string;
+};
+
+// A single candidate number for a state's playlist
+type PlaylistEntry = {
+  number:       string;
+  gameType:     'cash3' | 'cash4';
+  sourceTerm:   string;
+  dreamerName:  string;
+  dreamEntryId: string;
+  fellBefore:   boolean;         // has confirmed fell-before support
+  stateHitCount: number;         // how many times it fell in this state
+  latestHitDate: string;
+  matchTypes:   string[];        // 'straight' | 'boxed' | 'mixed'
+  multiTerm:    boolean;         // multiple active terms → same number in this state
+  termList:     string[];        // all active terms pointing here
+};
+
+// ─── Grouping helpers ─────────────────────────────────────────────────────────
+
+// Re-use same grouping logic as Active Windows page
+function buildGroupedWindows(raw: any[]): WindowRow[] {
+  const map = new Map<string, WindowRow>();
+  for (const row of raw) {
+    const eid = String(row.dreamEntryId || row.id || '');
+    if (!map.has(eid)) {
+      map.set(eid, {
+        dreamEntryId: eid,
+        dreamerName:  String(row.dreamerName || 'Unknown'),
+        activeStart:  String(row.activeStart || ''),
+        activeEnd:    String(row.activeEnd   || ''),
+        cash3Numbers: [], cash4Numbers: [], totalWatchItems: 0,
+        termMap: {}, newHitsSinceLastCheck: row.newHitsSinceLastCheck ?? 0,
+      });
+    }
+    const g  = map.get(eid)!;
+    const gt = String(row.gameType || '');
+    const num = String(row.number || '');
+    const tl  = String(row.termLabel || row.term || '').trim().toLowerCase();
+
+    if (num) {
+      if (gt === 'cash4') { if (!g.cash4Numbers.includes(num)) g.cash4Numbers.push(num); }
+      else                { if (!g.cash3Numbers.includes(num)) g.cash3Numbers.push(num); }
+    }
+    if (tl && num) {
+      if (!g.termMap[tl]) g.termMap[tl] = { cash3: [], cash4: [] };
+      const bucket = gt === 'cash4' ? g.termMap[tl].cash4 : g.termMap[tl].cash3;
+      if (!bucket.includes(num)) bucket.push(num);
+    }
+    g.totalWatchItems++;
+    if ((row.activeEnd ?? '') > (g.activeEnd ?? '')) {
+      g.activeEnd   = row.activeEnd;
+      g.activeStart = row.activeStart;
+    }
+  }
+  return Array.from(map.values());
+}
+
+// Build a fast lookup: termLabel_lowercase::number::gameType → { states, hitCount, … }
+type FellKey = string;
+type FellEvidence = {
+  states:     string[];
+  hitCount:   number;
+  stateDetails: Map<string, { hitCount: number; matchType: string; lastHitDate: string }>;
+};
+
+function buildFellIndex(rows: FellBeforeRow[]): Map<FellKey, FellEvidence> {
+  const idx = new Map<FellKey, FellEvidence>();
+  for (const row of rows) {
+    const term = String(row.termLabel ?? '').trim().toLowerCase();
+    const num  = String(row.number   ?? '').trim();
+    const state= String(row.state    ?? '').trim();
+    const gt   = String(row.gameType ?? '').trim();
+    if (!term || !num || !state) continue;
+
+    const key: FellKey = `${term}::${num}::${gt}`;
+    if (!idx.has(key)) idx.set(key, { states: [], hitCount: 0, stateDetails: new Map() });
+    const ev = idx.get(key)!;
+    if (!ev.states.includes(state)) ev.states.push(state);
+    ev.hitCount += Number(row.hitCount ?? 1);
+
+    const sc = Number(row.straightCount ?? 0);
+    const bc = Number(row.boxedCount    ?? 0);
+    const mt = sc > 0 && bc > 0 ? 'mixed' : sc > 0 ? 'straight' : 'boxed';
+    const prev = ev.stateDetails.get(state);
+    if (!prev) {
+      ev.stateDetails.set(state, { hitCount: Number(row.hitCount ?? 1), matchType: mt, lastHitDate: String(row.lastHitDate ?? '') });
+    } else {
+      prev.hitCount += Number(row.hitCount ?? 1);
+      if (String(row.lastHitDate ?? '') > prev.lastHitDate) prev.lastHitDate = String(row.lastHitDate ?? '');
+    }
+  }
+  return idx;
+}
+
+// Build state-grouped playlist entries from active windows + fell index
+type StateGroup = { state: string; entries: PlaylistEntry[]; };
+
+function buildStatePlaylists(
+  windows: WindowRow[],
+  today: string,
+  fellIdx: Map<FellKey, FellEvidence>
+): { stateGroups: StateGroup[]; watchlist: PlaylistEntry[] } {
+  const stateMap  = new Map<string, Map<string, PlaylistEntry>>(); // state → num::gt → entry
+  const watchMap  = new Map<string, PlaylistEntry>();              // num::gt::term → entry (no state)
+
+  const activeWindows = windows.filter(w => (w.activeEnd ?? '') >= today);
+
+  for (const win of activeWindows) {
+    // Collect all term→number pairs from this window
+    const pairs: Array<{ term: string; num: string; gt: 'cash3'|'cash4' }> = [];
+
+    for (const [term, payload] of Object.entries(win.termMap)) {
+      for (const n of payload.cash3) pairs.push({ term, num: n, gt: 'cash3' });
+      for (const n of payload.cash4) pairs.push({ term, num: n, gt: 'cash4' });
+    }
+    // Fallback: numbers with no term mapping
+    for (const n of win.cash3Numbers) {
+      if (!pairs.some(p => p.num === n && p.gt === 'cash3')) pairs.push({ term: '', num: n, gt: 'cash3' });
+    }
+    for (const n of win.cash4Numbers) {
+      if (!pairs.some(p => p.num === n && p.gt === 'cash4')) pairs.push({ term: '', num: n, gt: 'cash4' });
+    }
+
+    for (const { term, num, gt } of pairs) {
+      const fellKey: FellKey = `${term}::${num}::${gt}`;
+      const ev = fellIdx.get(fellKey);
+
+      if (ev && ev.states.length > 0) {
+        // Has fell-before state evidence — add to each state
+        for (const state of ev.states) {
+          if (!stateMap.has(state)) stateMap.set(state, new Map());
+          const stateEntries = stateMap.get(state)!;
+          const entryKey = `${num}::${gt}`;
+          const sd = ev.stateDetails.get(state);
+
+          if (!stateEntries.has(entryKey)) {
+            stateEntries.set(entryKey, {
+              number: num, gameType: gt,
+              sourceTerm: term, dreamerName: win.dreamerName,
+              dreamEntryId: win.dreamEntryId, fellBefore: true,
+              stateHitCount: sd?.hitCount ?? 1,
+              latestHitDate: sd?.lastHitDate ?? '',
+              matchTypes: [sd?.matchType ?? 'boxed'],
+              multiTerm: false, termList: [term],
+            });
+          } else {
+            const e = stateEntries.get(entryKey)!;
+            if (!e.termList.includes(term)) { e.termList.push(term); e.multiTerm = e.termList.length > 1; }
+            if (sd && sd.hitCount > e.stateHitCount) e.stateHitCount = sd.hitCount;
+            if (sd?.matchType && !e.matchTypes.includes(sd.matchType)) e.matchTypes.push(sd.matchType);
+          }
+        }
+      } else {
+        // No fell-before evidence — add to watchlist
+        const watchKey = `${num}::${gt}::${term}`;
+        if (!watchMap.has(watchKey)) {
+          watchMap.set(watchKey, {
+            number: num, gameType: gt, sourceTerm: term,
+            dreamerName: win.dreamerName, dreamEntryId: win.dreamEntryId,
+            fellBefore: false, stateHitCount: 0, latestHitDate: '',
+            matchTypes: [], multiTerm: false, termList: [term],
+          });
+        }
+      }
+    }
+  }
+
+  const stateGroups: StateGroup[] = Array.from(stateMap.entries())
+    .map(([state, entryMap]) => ({
+      state,
+      entries: Array.from(entryMap.values())
+        .sort((a, b) => b.stateHitCount - a.stateHitCount || (a.multiTerm ? -1 : 1)),
+    }))
+    .sort((a, b) => b.entries.length - a.entries.length);
+
+  const watchlist = Array.from(watchMap.values());
+
+  return { stateGroups, watchlist };
+}
+
+// ─── Visual helpers ───────────────────────────────────────────────────────────
+
+function NumberChip({ n, game }: { n: string; game: 'cash3'|'cash4' }) {
+  return (
+    <span style={{
+      fontFamily: 'monospace', fontWeight: 700, fontSize: '14px',
+      background:   game === 'cash3' ? 'rgba(255,107,74,0.16)' : 'rgba(160,144,255,0.16)',
+      border:       `1px solid ${game === 'cash3' ? 'rgba(255,107,74,0.32)' : 'rgba(160,144,255,0.32)'}`,
+      color:        game === 'cash3' ? '#ff8a6a' : '#a090ff',
+      borderRadius: '8px', padding: '4px 10px', letterSpacing: '0.06em',
+    }}>{n}</span>
+  );
+}
+
+type BadgeKind = 'fell' | 'active' | 'multi' | 'straight' | 'boxed';
+const BADGE: Record<BadgeKind, { bg: string; border: string; color: string; label: string }> = {
+  fell:     { bg: 'rgba(96,224,154,0.14)',  border: 'rgba(96,224,154,0.30)',  color: '#60e09a', label: 'Fell Before' },
+  active:   { bg: 'rgba(255,107,74,0.14)',  border: 'rgba(255,107,74,0.30)',  color: '#ff8a6a', label: 'Active Dream' },
+  multi:    { bg: 'rgba(255,204,80,0.14)',  border: 'rgba(255,204,80,0.30)',  color: '#ffcc50', label: 'Multi-Term' },
+  straight: { bg: 'rgba(96,224,154,0.10)',  border: 'rgba(96,224,154,0.24)',  color: '#60e09a', label: 'Straight' },
+  boxed:    { bg: 'rgba(255,204,80,0.10)',  border: 'rgba(255,204,80,0.24)',  color: '#ffcc50', label: 'Boxed' },
+};
+
+function Badge({ kind }: { kind: BadgeKind }) {
+  const b = BADGE[kind];
+  return (
+    <span style={{ padding: '3px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, background: b.bg, border: `1px solid ${b.border}`, color: b.color, fontFamily: 'system-ui,sans-serif', letterSpacing: '0.03em' }}>
+      {b.label}
+    </span>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PlaylistsPage() {
   const { user } = useAuth();
 
-  const [rows,    setRows]    = useState<PersonalMappingRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
-  const [termSearch, setTermSearch] = useState('');
+  const [windowsRaw,  setWindowsRaw]  = useState<any[]>([]);
+  const [fellRows,    setFellRows]    = useState<FellBeforeRow[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState('');
+
+  const [stateSearch, setStateSearch] = useState('');
+  const [numSearch,   setNumSearch]   = useState('');
+  const [termSearch,  setTermSearch]  = useState('');
 
   useEffect(() => {
     async function load() {
       if (!user) { setLoading(false); return; }
       try {
-        const res  = await fetch(`/api/fell-before?ownerUid=${encodeURIComponent(user.uid)}`);
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'Load failed.');
-        setRows(data.rows ?? []);
-      } catch (err) {
-        console.error(err);
-        setError('Could not load State Playlist.');
-      } finally { setLoading(false); }
+        const uid = encodeURIComponent(user.uid);
+        const [winRes, fellRes] = await Promise.all([
+          fetch(`/api/dreams/windows?ownerUid=${uid}`),
+          fetch(`/api/fell-before?ownerUid=${uid}`),
+        ]);
+        const [winData, fellData] = await Promise.all([winRes.json(), fellRes.json()]);
+        if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
+        if (!fellData.ok) throw new Error(fellData.error || 'Fell-before load failed.');
+        setWindowsRaw(winData.windows  ?? []);
+        setFellRows(fellData.rows      ?? []);
+      } catch (err) { console.error(err); setError('Could not load playlist data.'); }
+      finally { setLoading(false); }
     }
     void load();
   }, [user]);
 
-  // Intelligence pipeline — unchanged
-  const dictionary = useMemo(() => buildGroupedTermDictionary(rows), [rows]);
-
-  const filteredTerms = useMemo(() => {
-    const q = termSearch.trim().toLowerCase();
-    return q ? dictionary.filter(g => g.term.toLowerCase().includes(q)) : dictionary;
-  }, [dictionary, termSearch]);
-
-  const letters = useMemo(() =>
-    Array.from(new Set(filteredTerms.map(g => g.letter))).sort(),
-    [filteredTerms]
+  const today   = new Date().toISOString().slice(0, 10);
+  const windows = useMemo(() => buildGroupedWindows(windowsRaw), [windowsRaw]);
+  const active  = useMemo(() => windows.filter(w => (w.activeEnd ?? '') >= today), [windows, today]);
+  const fellIdx = useMemo(() => buildFellIndex(fellRows), [fellRows]);
+  const { stateGroups, watchlist } = useMemo(
+    () => buildStatePlaylists(windows, today, fellIdx),
+    [windows, today, fellIdx]
   );
 
+  // Filters
+  const filteredGroups = useMemo(() => {
+    const qs = stateSearch.trim().toUpperCase();
+    const qn = numSearch.trim();
+    const qt = termSearch.trim().toLowerCase();
+    return stateGroups
+      .filter(g => !qs || g.state.toUpperCase().includes(qs))
+      .map(g => ({
+        ...g,
+        entries: g.entries.filter(e =>
+          (!qn || e.number.includes(qn)) &&
+          (!qt || e.sourceTerm.toLowerCase().includes(qt) || e.termList.some(t => t.toLowerCase().includes(qt)))
+        ),
+      }))
+      .filter(g => g.entries.length > 0);
+  }, [stateGroups, stateSearch, numSearch, termSearch]);
+
+  const filteredWatchlist = useMemo(() => {
+    const qn = numSearch.trim();
+    const qt = termSearch.trim().toLowerCase();
+    return watchlist.filter(e =>
+      (!qn || e.number.includes(qn)) &&
+      (!qt || e.sourceTerm.toLowerCase().includes(qt))
+    );
+  }, [watchlist, numSearch, termSearch]);
+
+  const totalEntries = stateGroups.reduce((s, g) => s + g.entries.length, 0);
+
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
+      {/* Header */}
+      <section className="journal-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div className="page-header">
+            <h1>State Playlists</h1>
+            <p>State-by-state candidate numbers built from active dream terms and fell-before evidence. Each number shows exactly why it appears.</p>
+          </div>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <Link href="/fell-before"    className="btn-secondary">As They Fell Before</Link>
+            <Link href="/windows"        className="btn-secondary">Active Windows</Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Stats */}
+      <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))' }}>
+        {([
+          ['Active Windows', active.length,         '#ff6b4a'],
+          ['States',         stateGroups.length,    '#a090ff'],
+          ['Candidates',     totalEntries,           '#60e09a'],
+          ['Watchlist',      watchlist.length,       '#ffcc50'],
+        ] as [string, number, string][]).map(([label, val, color]) => (
+          <div key={label} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: '18px', padding: '14px 18px' }}>
+            <strong style={{ fontSize: '1.9rem', fontWeight: 900, letterSpacing: '-0.05em', display: 'block', lineHeight: 1, color, fontFamily: 'system-ui,sans-serif' }}>{val}</strong>
+            <span style={{ color: 'rgba(255,255,255,0.40)', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.09em', fontFamily: 'system-ui,sans-serif' }}>{label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <section className="journal-card-flat" style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
+        <div>
+          <label className="journal-label" htmlFor="stateSearch">Filter State</label>
+          <input id="stateSearch" className="journal-input" value={stateSearch} onChange={e => setStateSearch(e.target.value)} placeholder="GA, FL, NC…" style={{ textTransform: 'uppercase' }} />
+        </div>
+        <div>
+          <label className="journal-label" htmlFor="numSearch">Filter Number</label>
+          <input id="numSearch" className="journal-input" value={numSearch} onChange={e => setNumSearch(e.target.value)} placeholder="856, 015…" style={{ fontFamily: 'monospace' }} />
+        </div>
+        <div>
+          <label className="journal-label" htmlFor="termSearch">Filter Term</label>
+          <input id="termSearch" className="journal-input" value={termSearch} onChange={e => setTermSearch(e.target.value)} placeholder="car, sister…" />
+        </div>
+      </section>
+
+      {loading && <section className="journal-card"><p style={{ margin: 0, color: 'rgba(255,255,255,0.55)' }}>Building playlists…</p></section>}
+      {!loading && error && <div style={{ padding: '16px 20px', borderRadius: '16px', border: '1px solid rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</div>}
+
+      {/* Empty state */}
+      {!loading && !error && stateGroups.length === 0 && watchlist.length === 0 && (
         <section className="journal-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <div className="page-header">
-              <h1>State Playlists</h1>
-              <p>Search a dream term and see the strongest state-specific watch recommendations sourced from confirmed personal hit memory.</p>
-            </div>
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/fell-before"    className="btn-secondary">As They Fell Before</Link>
-              <Link href="/forecast-board" className="btn-secondary">Forecast Board</Link>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: '#a090ff' }}>
+            <MapPinned size={18} />
+            <strong>No playlist entries yet</strong>
           </div>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.50)', lineHeight: 1.7 }}>
+            {active.length === 0
+              ? 'No active dream windows. Write a dream entry to generate candidates.'
+              : 'Active windows exist but no fell-before evidence yet. Run a refresh to match numbers against lottery results.'}
+          </p>
         </section>
+      )}
 
-        {/* Search + A–Z */}
-        <section className="journal-card-flat" style={{ display: 'grid', gap: '14px' }}>
-          <div>
-            <label className="journal-label" htmlFor="termSearch">Search Dream Term</label>
-            <input id="termSearch" className="journal-input" value={termSearch}
-              onChange={e => setTermSearch(e.target.value)}
-              placeholder="Search a term like dancing or car" />
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--ink-light)' }}>
-            <span style={{ alignSelf: 'center' }}>{rows.length} memory rows · {filteredTerms.length} terms shown</span>
-          </div>
-          {letters.length > 0 && (
-            <div>
-              <div className="journal-label">A–Z Terms</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
-                {letters.map(l => (
-                  <a key={l} href={`#letter-${l}`} className="btn-secondary"
-                    style={{ textDecoration: 'none', padding: '3px 10px', fontSize: '12px' }}>
-                    {l}
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
+      {/* State cards */}
+      {!loading && !error && filteredGroups.length > 0 && (
+        <section style={{ display: 'grid', gap: '16px' }}>
+          {filteredGroups.map(group => (
+            <article key={group.state} className="journal-card">
 
-        {loading && <section className="journal-card"><p>Loading playlist…</p></section>}
-        {error   && <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>{error}</section>}
-
-        {!loading && !error && filteredTerms.length === 0 && (
-          <section className="journal-card">
-            <p style={{ color: 'var(--ink-light)', margin: 0 }}>
-              {rows.length === 0
-                ? 'No hit memory yet. Run a dream refresh to populate the playlist.'
-                : 'No terms match the current search.'}
-            </p>
-          </section>
-        )}
-
-        {/* Term playlist sections */}
-        {letters.map(letter => {
-          const letterTerms = filteredTerms.filter(g => g.letter === letter);
-          if (!letterTerms.length) return null;
-
-          return (
-            <section key={letter} id={`letter-${letter}`} style={{ display: 'grid', gap: '16px' }}>
-              <div className="page-header">
-                <h1>{letter}</h1>
-                <p>{letterTerms.length} playlist term entr{letterTerms.length === 1 ? 'y' : 'ies'}</p>
+              {/* State header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '14px' }}>
+                <div style={{
+                  width: '48px', height: '48px', borderRadius: '14px', flexShrink: 0,
+                  background: 'rgba(160,144,255,0.14)', border: '1px solid rgba(160,144,255,0.28)',
+                  display: 'grid', placeItems: 'center',
+                  fontWeight: 900, fontSize: '14px', color: '#a090ff', fontFamily: 'system-ui,sans-serif',
+                }}>{group.state}</div>
+                <div>
+                  <strong style={{ fontSize: '1.1rem', fontWeight: 900, letterSpacing: '-0.03em', fontFamily: 'system-ui,sans-serif', color: '#ffffff' }}>
+                    {group.state}
+                  </strong>
+                  <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', marginTop: '2px' }}>
+                    {group.entries.filter(e => e.gameType === 'cash3').length} Cash 3
+                    {' · '}
+                    {group.entries.filter(e => e.gameType === 'cash4').length} Cash 4
+                    {' · '}
+                    {group.entries.length} total candidate{group.entries.length !== 1 ? 's' : ''}
+                  </div>
+                </div>
               </div>
 
-              {letterTerms.map(termGroup => {
-                const termRecords = flattenDictionary([termGroup])
-                  .map(r => ({ ...r, forecastScore: computeForecastScore(r) }))
-                  .sort((a, b) => b.forecastScore - a.forecastScore);
-
-                const stateGroups: StatePlaylistGroup[] = Array.from(
-                  termRecords.reduce((map, r) => {
-                    if (!map.has(r.state)) map.set(r.state, []);
-                    map.get(r.state)!.push(r);
-                    return map;
-                  }, new Map<string, any[]>())
-                )
-                  .map(([state, records]) => ({
-                    state,
-                    records: records.sort((a: any, b: any) => b.forecastScore - a.forecastScore),
-                  }))
-                  .sort((a, b) => (b.records[0]?.forecastScore ?? 0) - (a.records[0]?.forecastScore ?? 0));
-
-                return (
-                  <section key={termGroup.term} id={`term-${slugify(termGroup.term)}`}
-                    className="journal-card" style={{ display: 'grid', gap: '18px' }}>
-                    <div>
-                      <h2 style={{ margin: 0 }}>{termGroup.term}</h2>
-                      <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '6px' }}>
-                        {termRecords.length} state recommendation{termRecords.length !== 1 ? 's' : ''}
-                      </div>
-                    </div>
-
-                    {stateGroups.length ? (
-                      <div style={{ display: 'grid', gap: '16px' }}>
-                        {stateGroups.map(group => (
-                          <div key={group.state} className="journal-card-flat" style={{ display: 'grid', gap: '12px' }}>
-                            <div>
-                              <strong>{group.state}</strong>
-                              <div style={{ color: 'var(--ink-light)', fontSize: '13px', marginTop: '4px' }}>
-                                Top numbers for {termGroup.term} in {group.state}
-                              </div>
-                            </div>
-                            <div style={{ display: 'grid', gap: '8px' }}>
-                              {group.records.map((record: any, idx: number) => (
-                                <div key={`${record.term}-${record.number}-${record.state}-${record.gameType}-${record.drawTime}`}
-                                  style={{
-                                    border: '1px solid rgba(255,255,255,0.11)', borderRadius: '14px', padding: '12px',
-                                    background: 'rgba(255,255,255,0.04)', display: 'grid', gap: '6px',
-                                    borderLeft: `3px solid ${record.latestHitType === 'straight' ? '#4a7c59' : record.latestHitType === 'mixed' ? '#6c78ff' : '#a07c4a'}`,
-                                  }}>
-                                  <div style={{ display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', fontSize: '12.5px' }}>
-                                    <div><div className="journal-label">Rank</div><div>{idx + 1}</div></div>
-                                    <div><div className="journal-label">Number</div><div style={{ fontFamily: 'monospace', fontWeight: 700 }}>{record.number}</div></div>
-                                    <div><div className="journal-label">Game</div><div>{record.gameType}</div></div>
-                                    <div><div className="journal-label">Draw</div><div>{record.drawTime}</div></div>
-                                    <div><div className="journal-label">Hit Type</div>
-                                      <div style={{ color: record.latestHitType === 'straight' ? '#6dbf8a' : record.latestHitType === 'mixed' ? '#b0b8ff' : '#d4a95a', fontWeight: 700 }}>
-                                        {record.latestHitType}
-                                      </div>
-                                    </div>
-                                    <div><div className="journal-label">Hits</div><div>{record.hitCount}</div></div>
-                                    <div><div className="journal-label">Strength</div><div>{record.stateStrengthScore}</div></div>
-                                    <div><div className="journal-label">Forecast Score</div><div>{record.forecastScore}</div></div>
-                                    <div><div className="journal-label">Last Hit</div><div>{record.lastHitDate || '—'}</div></div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
+              {/* Cash 3 entries */}
+              {group.entries.filter(e => e.gameType === 'cash3').length > 0 && (
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 800, color: '#ff6b4a', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '8px', fontFamily: 'system-ui,sans-serif' }}>
+                    Cash 3 — {group.entries.filter(e => e.gameType === 'cash3').length} numbers
+                  </div>
+                  <div style={{ display: 'grid', gap: '8px' }}>
+                    {group.entries.filter(e => e.gameType === 'cash3').map(entry => (
+                      <div key={`${entry.number}::cash3`} style={{
+                        display: 'flex', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap',
+                        padding: '10px 12px', borderRadius: '12px',
+                        background: entry.fellBefore ? 'rgba(96,224,154,0.07)' : 'rgba(255,255,255,0.05)',
+                        border: `1px solid ${entry.fellBefore ? 'rgba(96,224,154,0.18)' : 'rgba(255,255,255,0.09)'}`,
+                      }}>
+                        <NumberChip n={entry.number} game="cash3" />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '5px' }}>
+                            {entry.fellBefore   && <Badge kind="fell"     />}
+                            <Badge kind="active" />
+                            {entry.multiTerm    && <Badge kind="multi"    />}
+                            {entry.matchTypes.includes('straight') && <Badge kind="straight" />}
+                            {entry.matchTypes.includes('boxed')    && <Badge kind="boxed"    />}
                           </div>
-                        ))}
+                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.55)', lineHeight: 1.5 }}>
+                            {entry.termList.length > 0 && (
+                              <span>
+                                {entry.termList.map(t => (
+                                  <span key={t} style={{ fontWeight: 700, color: 'rgba(255,255,255,0.80)', marginRight: '6px' }}>{t}</span>
+                                ))}
+                                {' '}·{' '}
+                              </span>
+                            )}
+                            {entry.dreamerName}
+                            {entry.fellBefore && entry.stateHitCount > 0 && (
+                              <span style={{ color: '#60e09a' }}> · {entry.stateHitCount} hit{entry.stateHitCount !== 1 ? 's' : ''}</span>
+                            )}
+                            {entry.latestHitDate && (
+                              <span style={{ color: 'rgba(255,255,255,0.35)' }}> · {entry.latestHitDate}</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="journal-card-flat" style={{ color: 'var(--ink-light)', fontSize: '13px' }}>
-                        No state recommendations for this term yet.
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Cash 4 entries */}
+              {group.entries.filter(e => e.gameType === 'cash4').length > 0 && (
+                <div>
+                  <div style={{ fontSize: '10px', fontWeight: 800, color: '#a090ff', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '8px', fontFamily: 'system-ui,sans-serif' }}>
+                    Cash 4 — {group.entries.filter(e => e.gameType === 'cash4').length} numbers
+                  </div>
+                  <div style={{ display: 'grid', gap: '8px' }}>
+                    {group.entries.filter(e => e.gameType === 'cash4').map(entry => (
+                      <div key={`${entry.number}::cash4`} style={{
+                        display: 'flex', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap',
+                        padding: '10px 12px', borderRadius: '12px',
+                        background: entry.fellBefore ? 'rgba(96,224,154,0.07)' : 'rgba(255,255,255,0.05)',
+                        border: `1px solid ${entry.fellBefore ? 'rgba(96,224,154,0.18)' : 'rgba(255,255,255,0.09)'}`,
+                      }}>
+                        <NumberChip n={entry.number} game="cash4" />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '5px' }}>
+                            {entry.fellBefore   && <Badge kind="fell"     />}
+                            <Badge kind="active" />
+                            {entry.multiTerm    && <Badge kind="multi"    />}
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.55)', lineHeight: 1.5 }}>
+                            {entry.termList.filter(Boolean).map(t => (
+                              <span key={t} style={{ fontWeight: 700, color: 'rgba(255,255,255,0.80)', marginRight: '6px' }}>{t}</span>
+                            ))}
+                            · {entry.dreamerName}
+                            {entry.fellBefore && entry.stateHitCount > 0 && (
+                              <span style={{ color: '#60e09a' }}> · {entry.stateHitCount} hit{entry.stateHitCount !== 1 ? 's' : ''}</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    )}
-                  </section>
-                );
-              })}
-            </section>
-          );
-        })}
+                    ))}
+                  </div>
+                </div>
+              )}
+            </article>
+          ))}
+        </section>
+      )}
+
+      {/* Active Dream Watchlist — no state evidence yet */}
+      {!loading && !error && filteredWatchlist.length > 0 && (
+        <section className="journal-card" style={{ borderLeft: '3px solid rgba(255,204,80,0.40)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: '#ffcc50' }}>
+            <MapPinned size={16} strokeWidth={1.8} />
+            <strong style={{ fontFamily: 'system-ui,sans-serif', fontWeight: 800, fontSize: '14px' }}>
+              Active Dream Watchlist — No State Memory Yet
+            </strong>
+          </div>
+          <p style={{ margin: '0 0 14px', color: 'rgba(255,255,255,0.45)', fontSize: '13px', lineHeight: 1.65 }}>
+            These numbers are active from current dream windows but have no fell-before state evidence.
+            They become state-specific after a refresh finds matching results.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {filteredWatchlist.map(e => (
+              <div key={`${e.number}::${e.gameType}::${e.sourceTerm}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <NumberChip n={e.number} game={e.gameType} />
+                {e.sourceTerm && (
+                  <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)' }}>{e.sourceTerm}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
     </div>
   );
 }
