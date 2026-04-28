@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { BookmarkCheck, Pin, Save, Sparkles } from 'lucide-react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 
 type PinStatus = 'pinned' | 'played' | 'won' | 'archived';
@@ -106,12 +105,7 @@ export default function PinnedPlaysPage() {
   }
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background: 'radial-gradient(circle at top left,rgba(228,192,123,0.14),transparent 18%),radial-gradient(circle at top right,rgba(108,120,255,0.12),transparent 22%),linear-gradient(135deg,#1A1A2E 0%,#16213E 48%,#0F3460 100%)',
-    }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         <section className="journal-card">
           <div className="page-header">
@@ -245,7 +239,6 @@ export default function PinnedPlaysPage() {
             </div>
           </article>
         ))}
-      </section>
-    </main>
+    </div>
   );
 }

@@ -1,15 +1,9 @@
 'use client';
 import Link from 'next/link';
-import Sidebar from '@/components/layout/Sidebar';
 
 export default function OwnerNamePage() {
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background: 'radial-gradient(circle at top left,rgba(228,192,123,0.14),transparent 18%),radial-gradient(circle at top right,rgba(108,120,255,0.12),transparent 22%),linear-gradient(135deg,#1A1A2E 0%,#16213E 48%,#0F3460 100%)',
-    }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px', alignContent: 'start' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div style={{ display:'inline-flex',alignItems:'center',gap:'8px',padding:'3px 10px',borderRadius:'8px',background:'rgba(156,163,175,0.12)',border:'1px solid rgba(156,163,175,0.2)',color:'#9ca3af',fontSize:'11px',fontWeight:700,marginBottom:'12px' }}>
             LEGACY
@@ -29,7 +23,6 @@ export default function OwnerNamePage() {
             <Link href="/cleanup"  className="btn-secondary">Cleanup Tools</Link>
           </div>
         </section>
-      </section>
-    </main>
+    </div>
   );
 }

@@ -3,7 +3,6 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
 import { buildGroupedTermDictionary, flattenDictionary } from '@/lib/intelligence/termDictionary';
@@ -76,15 +75,7 @@ export default function ForecastBoardPage() {
   }, [boosted.boostedStateGroups, stateSearch]);
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background:
-        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-    }}>
-      <Sidebar />
-      <section className="panel-grid" style={{ padding: '32px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
         <PageIntro
           title="Forecast Board"
           description="Unresolved-only forecast with backtest-to-live learning boosts and evidence-weighted recommendation scores."
@@ -116,7 +107,7 @@ export default function ForecastBoardPage() {
         </section>
 
         {loading && <section className="journal-card"><p>Loading Forecast Board…</p></section>}
-        {error   && <section className="journal-card-flat" style={{ borderColor: '#f2a6a6', background: 'rgba(110,20,20,0.22)', color: '#fff0f0' }}>{error}</section>}
+        {error   && <section className="journal-card-flat" style={{ borderColor: 'rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</section>}
 
         <section className="journal-card">
           <div className="page-header">
@@ -136,19 +127,8 @@ export default function ForecastBoardPage() {
                   </div>
                   <hr className="soft-divider" />
                   <div style={{ display: 'grid', gap: '10px' }}>
-                    {group.rows.slice(0, 5).map((row: any, idx: number) => (
-                      <div key={[
-                          row.id,
-                          row.dreamerId,
-                          row.term,
-                          row.number,
-                          row.state,
-                          row.gameType,
-                          row.drawDate,
-                          row.drawTime,
-                          row.hitType,
-                          idx,
-                        ].filter(Boolean).join('-')}
+                    {group.rows.slice(0, 5).map((row: any) => (
+                      <div key={`${row.term}-${row.number}-${row.state}-${row.gameType}`}
                         className="journal-card-flat" style={{ display: 'grid', gap: '8px' }}>
                         <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', fontSize: '13px' }}>
                           <div><strong>Number:</strong> <span style={{ fontFamily: 'monospace' }}>{row.number}</span></div>
@@ -175,7 +155,6 @@ export default function ForecastBoardPage() {
             <p style={{ marginTop: '12px' }}>No boosted state recommendations yet. Save current dreams and run a refresh.</p>
           )}
         </section>
-      </section>
-    </main>
+    </div>
   );
 }

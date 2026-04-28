@@ -16,81 +16,72 @@ import {
   buildTermStrengthStats,
 } from '@/lib/intelligence/scoring';
 
-// ─── Design tokens — rich modern palette ─────────────────────────────────────
+// ─── Design tokens (inline — no CSS class dependency) ─────────────────────────
 const T = {
-  // Aurora Glass tokens
-  white:    'rgba(255,255,255,0.09)',
-  cream:    'rgba(255,255,255,0.06)',
-  cream2:   'rgba(255,255,255,0.04)',
-  peach:    '#ff6b4a',
-  peach2:   '#ff8a6a',
-  clay:     '#e8553a',
-  plum:     '#a090ff',
-  gold:     '#ffcc50',
-  green:    '#60e09a',
-  red:      '#ff5555',
-  ink:      '#ffffff',
-  ink2:     'rgba(255,255,255,0.85)',
-  taupe:    'rgba(255,255,255,0.65)',
-  muted:    'rgba(255,255,255,0.40)',
-  line:     'rgba(255,255,255,0.12)',
-  shadow:   '0 24px 64px rgba(0,0,0,0.40)',
-  shadowSm: '0 8px 28px rgba(0,0,0,0.28)',
-  shadowCard: '0 2px 12px rgba(0,0,0,0.20)',
+  cream:    '#fff8f2',
+  cream2:   '#fff1e8',
+  peach:    '#f28a6a',
+  clay:     '#b87762',
+  plum:     '#7b5a6f',
+  ink:      '#2a2024',
+  taupe:    '#6b5a60',
+  muted:    '#9a8588',
+  gold:     '#d8a45b',
+  green:    '#3d7a52',
+  line:     'rgba(120,90,85,0.15)',
+  shadow:   '0 22px 60px rgba(82,39,28,0.14)',
+  shadowSm: '0 6px 20px rgba(82,39,28,0.08)',
 };
 
 // ─── Shared inline style blocks ────────────────────────────────────────────────
 const card: React.CSSProperties = {
-  background:              'rgba(255,255,255,0.08)',
-  border:                  '1px solid rgba(255,255,255,0.13)',
-  borderRadius:            '22px',
-  padding:                 '24px 26px',
-  backdropFilter:          'blur(20px)',
-  WebkitBackdropFilter:    'blur(20px)',
+  background:    'rgba(255,255,255,0.82)',
+  border:        `1px solid ${T.line}`,
+  borderRadius:  '28px',
+  padding:       '22px 24px',
+  boxShadow:     '0 14px 38px rgba(82,39,28,0.09)',
 };
 
 const statTile = (color = T.ink): { wrap: React.CSSProperties; num: React.CSSProperties; lbl: React.CSSProperties } => ({
   wrap: {
-    background:   T.white,
+    background:   T.cream,
     border:       `1px solid ${T.line}`,
-    borderRadius: '18px',
-    padding:      '16px 20px',
-    boxShadow:    T.shadowCard,
+    borderRadius: '20px',
+    padding:      '14px 18px',
+    boxShadow:    T.shadowSm,
   },
   num: {
-    fontSize:      '2.4rem',
-    letterSpacing: '-0.05em',
-    fontWeight:    900,
+    fontSize:      '2rem',
+    letterSpacing: '-0.06em',
+    fontWeight:    800,
     display:       'block',
     lineHeight:    1,
-    marginBottom:  '6px',
+    marginBottom:  '4px',
     color,
-    fontFamily:    'system-ui, -apple-system, "Segoe UI", sans-serif',
   },
   lbl: {
     color:          T.muted,
-    fontSize:       '11px',
+    fontSize:       '10px',
     fontWeight:     700,
     textTransform:  'uppercase' as const,
-    letterSpacing:  '0.08em',
+    letterSpacing:  '0.09em',
   },
 });
 
 const pill = (variant: 'default'|'green'|'plum' = 'default'): React.CSSProperties => ({
-  display:      'inline-flex',
-  alignItems:   'center',
-  borderRadius: '999px',
-  padding:      '5px 13px',
-  fontSize:     '11px',
-  fontWeight:   700,
-  border:       '1px solid',
-  letterSpacing:'0.02em',
+  display:       'inline-flex',
+  alignItems:    'center',
+  borderRadius:  '999px',
+  padding:       '5px 12px',
+  fontSize:      '11px',
+  fontWeight:    700,
+  border:        '1px solid',
   ...(variant === 'green' ? {
-    background: 'rgba(31,107,64,0.10)', borderColor: 'rgba(31,107,64,0.28)', color: T.green,
+    background: 'rgba(207,232,214,0.55)', borderColor: 'rgba(61,122,82,0.25)', color: T.green,
   } : variant === 'plum' ? {
-    background: 'rgba(61,26,44,0.08)', borderColor: 'rgba(61,26,44,0.22)', color: T.plum,
+    background: 'rgba(123,90,111,0.10)', borderColor: 'rgba(123,90,111,0.25)', color: T.plum,
   } : {
-    background: 'rgba(232,87,46,0.08)', borderColor: 'rgba(232,87,46,0.28)', color: T.peach,
+    background: 'white', borderColor: 'rgba(242,138,106,0.25)', color: T.clay,
   }),
 });
 
@@ -99,24 +90,21 @@ const actionCard: React.CSSProperties = {
   gap:            '6px',
   textDecoration: 'none',
   color:          'inherit',
-  background:     T.white,
+  background:     'white',
   border:         `1px solid ${T.line}`,
-  borderRadius:   '20px',
+  borderRadius:   '22px',
   padding:        '16px 18px',
   minHeight:      '44px',
-  boxShadow:      T.shadowCard,
 };
 
 const sectionHead: React.CSSProperties = {
-  display:      'flex',
-  alignItems:   'center',
-  gap:          '9px',
-  marginBottom: '16px',
-  color:        T.plum,
-  fontWeight:   800,
-  fontSize:     '15px',
-  letterSpacing:'-0.01em',
-  fontFamily:   'system-ui, -apple-system, "Segoe UI", sans-serif',
+  display:       'flex',
+  alignItems:    'center',
+  gap:           '9px',
+  marginBottom:  '14px',
+  color:         T.plum,
+  fontWeight:    700,
+  fontSize:      '16px',
 };
 
 // ─── Refresh Now — logic unchanged ────────────────────────────────────────────
@@ -221,20 +209,18 @@ export default function DashboardPage() {
 
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
       <section style={{
-        background:              'radial-gradient(ellipse 80% 60% at 0% 50%, rgba(160,80,255,0.18) 0%, transparent 60%), radial-gradient(ellipse 60% 40% at 100% 0%, rgba(255,107,74,0.14) 0%, transparent 55%), rgba(255,255,255,0.07)',
-        border:                  '1px solid rgba(255,255,255,0.14)',
-        borderRadius:            '28px',
-        padding:                 'clamp(24px, 4vw, 40px)',
-        backdropFilter:          'blur(24px)',
-        WebkitBackdropFilter:    'blur(24px)',
-        boxShadow:               '0 24px 64px rgba(0,0,0,0.30)',
+        border:        '1px solid rgba(255,255,255,0.90)',
+        background:    'linear-gradient(135deg, rgba(255,255,255,0.86) 0%, rgba(255,241,232,0.90) 100%)',
+        borderRadius:  '36px',
+        padding:       'clamp(24px, 4vw, 36px)',
+        boxShadow:     T.shadow,
         overflow:      'hidden',
         position:      'relative',
       }}>
         {/* Peach watermark */}
         <div aria-hidden="true" style={{
           position: 'absolute', right: '-20px', top: '-50px',
-          fontSize: '160px', opacity: 0.04, lineHeight: 1, pointerEvents: 'none', userSelect: 'none',
+          fontSize: '200px', opacity: 0.055, lineHeight: 1, pointerEvents: 'none', userSelect: 'none',
         }}>🍑</div>
 
         <div style={{
@@ -256,21 +242,21 @@ export default function DashboardPage() {
               <span style={pill('plum')}>Duplicate protected</span>
             </div>
 
-            {/* Heading — system-ui bold, no antique font */}
+            {/* Heading */}
             <h1 style={{
-              fontSize:      'clamp(2.8rem, 5.5vw, 5.2rem)',
-              lineHeight:    0.88,
-              letterSpacing: '-0.05em',
-              fontWeight:    900,
-              fontStyle:     'normal',
+              fontSize:      'clamp(2.6rem, 5vw, 5rem)',
+              lineHeight:    0.9,
+              letterSpacing: '-0.07em',
+              fontWeight:    800,
+              fontStyle:     'italic',
               color:         T.ink,
-              margin:        '0 0 16px',
-              fontFamily:    'system-ui, -apple-system, "Segoe UI", sans-serif',
+              margin:        '0 0 14px',
+              fontFamily:    'var(--font-display, Georgia, serif)',
             }}>
               Ledger Dashboard
             </h1>
 
-            <p style={{ color: T.taupe, fontSize: '15px', lineHeight: 1.6, margin: '0 0 24px', maxWidth: '48ch', fontWeight: 450 }}>
+            <p style={{ color: T.taupe, fontSize: '15px', lineHeight: 1.65, margin: '0 0 22px', maxWidth: '50ch' }}>
               Active dream windows, verified hits, and engine-backed intelligence —
               all in one place. Your dream data works even while you sleep.
             </p>
@@ -279,24 +265,20 @@ export default function DashboardPage() {
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               <Link href="/dreams/new" style={{
                 display:        'inline-flex', alignItems: 'center', gap: '8px',
-                minHeight:      '46px', padding: '12px 26px', borderRadius: '14px',
-                background:     T.peach,
-                color:          'white', fontWeight: 800, fontSize: '15px',
-                textDecoration: 'none',
-                boxShadow:      `0 6px 20px rgba(232,87,46,0.35)`,
-                letterSpacing:  '-0.01em',
-                fontFamily:     'system-ui, -apple-system, "Segoe UI", sans-serif',
+                minHeight:      '46px', padding: '11px 24px', borderRadius: '15px',
+                background:     `linear-gradient(135deg, ${T.peach}, ${T.clay})`,
+                color:          'white', fontWeight: 700, fontSize: '15px',
+                textDecoration: 'none', boxShadow: '0 8px 22px rgba(242,138,106,0.32)',
               }}>
                 <PenLine size={16} /> Write a Dream
               </Link>
               <Link href="/daily-ops" style={{
                 display:        'inline-flex', alignItems: 'center',
-                minHeight:      '46px', padding: '12px 22px', borderRadius: '14px',
-                background:     T.white,
-                border:         `1.5px solid ${T.line}`,
-                color:          T.plum, fontWeight: 700, fontSize: '14px',
+                minHeight:      '46px', padding: '11px 20px', borderRadius: '15px',
+                background:     'rgba(255,255,255,0.75)',
+                border:         `1px solid ${T.line}`,
+                color:          T.plum, fontWeight: 600, fontSize: '14px',
                 textDecoration: 'none',
-                fontFamily:     'system-ui, -apple-system, "Segoe UI", sans-serif',
               }}>
                 Daily Ops
               </Link>
@@ -311,14 +293,13 @@ export default function DashboardPage() {
 
           {/* Right — stats panel */}
           <div style={{
-            background:              'rgba(255,255,255,0.10)',
-            border:                  '1px solid rgba(255,255,255,0.16)',
-            borderRadius:            '22px',
-            padding:                 '22px 24px',
-            backdropFilter:          'blur(16px)',
-            WebkitBackdropFilter:    'blur(16px)',
+            background:    'rgba(255,255,255,0.90)',
+            border:        '1px solid rgba(255,255,255,0.95)',
+            borderRadius:  '26px',
+            padding:       '20px 22px',
+            boxShadow:     '0 12px 34px rgba(82,39,28,0.09)',
           }}>
-            <div style={{ fontSize: '10px', fontWeight: 800, color: T.muted, marginBottom: '14px', textTransform: 'uppercase', letterSpacing: '0.12em', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: T.muted, marginBottom: '14px', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
               System Status
             </div>
 
@@ -341,11 +322,11 @@ export default function DashboardPage() {
 
             {latestDream && (
               <div style={{
-                marginTop: '14px', padding: '11px 14px', borderRadius: '12px',
-                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', fontSize: '12px',
+                marginTop: '12px', padding: '10px 12px', borderRadius: '14px',
+                background: T.cream, border: `1px solid ${T.line}`, fontSize: '12px',
               }}>
-                <span style={{ color: T.muted, fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.10em', fontFamily: 'system-ui, sans-serif' }}>Latest Dream</span>
-                <div style={{ color: T.ink, fontWeight: 700, marginTop: '4px', fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
+                <span style={{ color: T.muted, fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Latest Dream</span>
+                <div style={{ color: T.ink, fontWeight: 600, marginTop: '3px', fontSize: '13px' }}>
                   {latestDream.dreamerName || 'Owner'} · {latestDream.dreamDate}
                 </div>
               </div>
@@ -416,7 +397,7 @@ export default function DashboardPage() {
                     }}>
                       <Icon size={14} strokeWidth={1.8} />
                     </span>
-                    <strong style={{ fontSize: '13px', color: T.plum, letterSpacing: '-0.01em', fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 700 }}>{label}</strong>
+                    <strong style={{ fontSize: '13px', color: T.plum, letterSpacing: '-0.01em' }}>{label}</strong>
                   </div>
                   <div style={{ color: T.taupe, fontSize: '12px', lineHeight: 1.5, paddingLeft: '40px' }}>{desc}</div>
                 </Link>
@@ -441,7 +422,7 @@ export default function DashboardPage() {
                   borderRadius: '18px', padding: '13px 15px',
                   textDecoration: 'none',
                 }}>
-                  <strong style={{ fontSize: '13px', color: T.ink, fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 700, letterSpacing: '-0.01em' }}>{label}</strong>
+                  <strong style={{ fontSize: '13px', color: T.ink }}>{label}</strong>
                 </Link>
               ))}
             </div>
@@ -480,7 +461,7 @@ export default function DashboardPage() {
                       <div key={`${row.gameType}__${row.familyKey}`} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '9px 12px', borderRadius: '13px',
-                        background: i === 0 ? 'rgba(242,138,106,0.08)' : 'rgba(255,255,255,0.05)',
+                        background: i === 0 ? 'rgba(242,138,106,0.08)' : T.cream,
                         border: `1px solid ${T.line}`,
                       }}>
                         <div>
@@ -506,7 +487,7 @@ export default function DashboardPage() {
                       <div key={row.term} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '9px 12px', borderRadius: '13px',
-                        background: i === 0 ? 'rgba(61,122,82,0.06)' : 'rgba(255,255,255,0.05)',
+                        background: i === 0 ? 'rgba(61,122,82,0.06)' : T.cream,
                         border: `1px solid ${T.line}`,
                       }}>
                         <div>
@@ -555,7 +536,7 @@ export default function DashboardPage() {
                     {duplicateSignals.slice(0, 5).map((row: any, i: number) => (
                       <div key={`${row.kind}-${i}`} style={{
                         padding: '9px 12px', borderRadius: '13px',
-                        background: 'rgba(255,85,85,0.08)', border: '1px solid rgba(255,85,85,0.18)',
+                        background: 'rgba(181,91,80,0.05)', border: '1px solid rgba(181,91,80,0.14)',
                       }}>
                         <div style={{ fontWeight: 600, fontSize: '13px', color: T.ink }}>{row.label}</div>
                         <div style={{ color: T.muted, fontSize: '12px', marginTop: '3px' }}>{row.detail}</div>

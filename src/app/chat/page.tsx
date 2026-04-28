@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import { loadChatContext, EMPTY_CONTEXT, type ChatContext } from '@/lib/intelligence/chatContext';
 import { answerQuestion } from '@/lib/intelligence/chatAnswering';
@@ -81,16 +80,7 @@ export default function ChatPage() {
   const liveWins = ctx.windows.filter(w => (w.activeEnd ?? w.activeWindowEnd ?? '') >= today).length;
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background:
-        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-    }}>
-      <Sidebar />
-
-      <section style={{ padding: '32px', display: 'grid', gap: '24px', alignContent: 'start' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         {/* Header */}
         <section className="journal-card">
@@ -151,7 +141,7 @@ export default function ChatPage() {
             {messages.map((msg, idx) => (
               <div key={idx} className="journal-card-flat" style={{
                 borderLeft: msg.role === 'user'
-                  ? '4px solid rgba(90,52,74,0.45)'
+                  ? '4px solid rgba(160,144,255,0.55)'
                   : '4px solid rgba(201,168,76,0.65)',
               }}>
                 <strong style={{ fontSize: '12px', letterSpacing: '0.05em', opacity: 0.7 }}>
@@ -196,7 +186,6 @@ export default function ChatPage() {
           </div>
         </section>
 
-      </section>
-    </main>
+    </div>
   );
 }

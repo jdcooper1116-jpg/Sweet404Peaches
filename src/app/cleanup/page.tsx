@@ -2,7 +2,6 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 
 export default function CleanupPage() {
@@ -39,12 +38,7 @@ export default function CleanupPage() {
   const desc = SCOPE_DESC[scope];
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background: 'radial-gradient(circle at top left,rgba(228,192,123,0.14),transparent 18%),radial-gradient(circle at top right,rgba(108,120,255,0.12),transparent 22%),linear-gradient(135deg,#1A1A2E 0%,#16213E 48%,#0F3460 100%)',
-    }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px', alignContent: 'start' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         <section className="journal-card">
           <div style={{ display:'flex',justifyContent:'space-between',gap:'16px',alignItems:'flex-start',flexWrap:'wrap' }}>
@@ -125,7 +119,6 @@ export default function CleanupPage() {
           Use <em>Hard Reset</em> only when you want a complete clean slate for operational data before a fresh start.
         </section>
 
-      </section>
-    </main>
+    </div>
   );
 }

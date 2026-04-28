@@ -1,11 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import { Suspense } from 'react';
+import { useEffect, useMemo, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { BookMarked, NotebookPen, Plus, Users } from 'lucide-react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -29,27 +27,27 @@ function formatPosted(value: string | null): string {
   try { return new Date(value).toLocaleString(); } catch { return 'Unknown'; }
 }
 
-// ─── Inner (needs useSearchParams) ───────────────────────────────────────────
+// ─── Inner component (needs useSearchParams) ──────────────────────────────────
 
 function DreamJournalInner() {
   const { user, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
 
-  const [entries,      setEntries]      = useState<DreamEntry[]>([]);
-  const [dreamers,     setDreamers]     = useState<DreamerOption[]>([]);
-  const [pageLoading,  setPageLoading]  = useState(true);
-  const [error,        setError]        = useState('');
-  const [dreamerFilter, setDreamerFilter] = useState('');  // '' = All
+  const [entries,       setEntries]       = useState<DreamEntry[]>([]);
+  const [dreamers,      setDreamers]      = useState<DreamerOption[]>([]);
+  const [pageLoading,   setPageLoading]   = useState(true);
+  const [error,         setError]         = useState('');
+  const [dreamerFilter, setDreamerFilter] = useState('');
 
   // Read ?dreamerId= or legacy ?dreamer= from URL
   useEffect(() => {
     const qId   = searchParams.get('dreamerId') ?? '';
     const qName = searchParams.get('dreamer')   ?? '';
-    if (qId)   setDreamerFilter(qId);
-    else if (qName) setDreamerFilter(qName);  // legacy name-based filter falls through to client filter
+    if (qId)        setDreamerFilter(qId);
+    else if (qName) setDreamerFilter(qName);
   }, [searchParams]);
 
-  // Load dreamers for selector
+  // Load dreamer list for selector
   useEffect(() => {
     if (!user) return;
     fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`)
@@ -65,7 +63,6 @@ function DreamJournalInner() {
     try {
       const activeDid = did !== undefined ? did : dreamerFilter;
       const qs = new URLSearchParams({ ownerUid: user.uid });
-      // Only pass dreamerId if it looks like a real id or 'owner-self' (not a display name)
       if (activeDid && !activeDid.includes(' ') && activeDid.length < 60) {
         qs.set('dreamerId', activeDid);
       }
@@ -90,9 +87,8 @@ function DreamJournalInner() {
     void loadEntries(did);
   }
 
-  // Client-side filter for legacy ?dreamer= name param (when it contains spaces)
+  // Client-side name filter for legacy ?dreamer= param
   const filteredEntries = useMemo(() => {
-    // If dreamerFilter looks like a display name (has spaces), filter client-side
     if (dreamerFilter && dreamerFilter.includes(' ')) {
       return entries.filter(e =>
         e.dreamerName?.toLowerCase() === dreamerFilter.toLowerCase()
@@ -101,180 +97,209 @@ function DreamJournalInner() {
     return entries;
   }, [entries, dreamerFilter]);
 
-  const dreamerLabel = dreamerFilter === '' ? 'All Dreamers'
-    : dreamerFilter === 'owner-self'         ? 'Owner / Self'
+  const dreamerLabel =
+    dreamerFilter === ''          ? 'All Dreamers'
+    : dreamerFilter === 'owner-self' ? 'Owner / Self'
     : dreamers.find(d => d.id === dreamerFilter)?.displayName ?? dreamerFilter;
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background:
-        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-    }}>
-      <Sidebar />
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
-
-        {/* Header */}
-        <section className="journal-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <div className="page-header">
-              <h1>Dream Journal</h1>
-              <p>Journal-style view of all dreams, mapped terms, and parsed numbers. Filter by dreamer to see a personal journal.</p>
-            </div>
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <Link href="/dreamers" className="btn-secondary">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                  <Users size={16} /> Manage Dreamers
-                </span>
-              </Link>
-              <Link href="/dreams/new" className="btn-primary">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                  <Plus size={16} /> New Dream
-                </span>
-              </Link>
-            </div>
+      {/* Header */}
+      <section className="journal-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div className="page-header">
+            <h1>Dream Journal</h1>
+            <p>Journal-style view of all dreams, mapped terms, and parsed numbers.</p>
           </div>
-        </section>
-
-        {/* Dreamer selector */}
-        <section className="journal-card-flat" style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
-          <div>
-            <label className="journal-label" htmlFor="dreamerFilter">Filter by Dreamer</label>
-            <select id="dreamerFilter" className="journal-select" value={dreamerFilter}
-              onChange={e => handleDreamerChange(e.target.value)}>
-              <option value="">All Dreamers</option>
-              <option value="owner-self">Owner / Self</option>
-              {dreamers.map(d => <option key={d.id} value={d.id}>{d.displayName}</option>)}
-            </select>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <Link href="/dreamers" className="btn-secondary">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <Users size={16} /> Manage Dreamers
+              </span>
+            </Link>
+            <Link href="/dreams/new" className="btn-primary">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <Plus size={16} /> New Dream
+              </span>
+            </Link>
           </div>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap', fontSize: '13px', color: 'var(--ink-light)', paddingBottom: '4px' }}>
-            <span><strong style={{ color: 'var(--ink)' }}>{filteredEntries.length}</strong> entr{filteredEntries.length !== 1 ? 'ies' : 'y'}</span>
-            <span>Scope: <strong style={{ color: '#b0b8ff' }}>{dreamerLabel}</strong></span>
-          </div>
-        </section>
-
-        {pageLoading && <section className="journal-card"><p style={{ margin: 0, color: 'var(--ink-light)' }}>Loading journal…</p></section>}
-        {error      && <section className="journal-card" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>{error}</section>}
-
-        {!pageLoading && !error && filteredEntries.length === 0 && (
-          <section className="journal-card">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: 'var(--deep-plum)' }}>
-              <BookMarked size={18} />
-              <strong>No journal entries in this view yet</strong>
-            </div>
-            <p style={{ color: 'var(--ink-light)', margin: 0 }}>Save a dream entry and it will appear here.</p>
-          </section>
-        )}
-
-        {/* Dream entries */}
-        {filteredEntries.length > 0 && (
-          <section style={{ display: 'grid', gap: '18px' }}>
-            {filteredEntries.map(entry => {
-              const cash3    = Array.from(new Set((entry.termMappings ?? []).flatMap(m => m.cash3Numbers     ?? [])));
-              const cash4    = Array.from(new Set((entry.termMappings ?? []).flatMap(m => m.cash4Numbers     ?? [])));
-              const archived = Array.from(new Set((entry.termMappings ?? []).flatMap(m => m.archivedNumbers  ?? [])));
-              const idParam  = encodeURIComponent(entry.dreamerId || 'owner-self');
-
-              return (
-                <article key={entry.id} className="journal-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
-                        <NotebookPen size={18} />
-                        <strong style={{ fontSize: '22px' }}>{entry.dreamerName || 'Unknown'}</strong>
-                      </div>
-                      <div style={{ color: 'var(--ink-light)', fontSize: '14px' }}>
-                        Posted: {formatPosted(entry.uploadedAt)}
-                      </div>
-                      <div style={{ color: 'var(--ink-light)', fontSize: '14px', marginTop: '4px' }}>
-                        Dream Date: {entry.dreamDate}
-                      </div>
-                    </div>
-                    <div className="journal-card-flat" style={{ minWidth: '220px', textAlign: 'center' }}>
-                      <div className="journal-label">Active Timeframe</div>
-                      <div style={{ fontSize: '15px', color: 'var(--ink)' }}>
-                        {entry.activeWindowStart ?? '—'} → {entry.activeWindowEnd ?? '—'}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="journal-card-flat" style={{ marginTop: '18px' }}>
-                    <div className="journal-label">Dream Entry</div>
-                    <div style={{ marginTop: '10px', whiteSpace: 'pre-wrap', lineHeight: 1.8, color: 'var(--ink)' }}>
-                      {entry.rawText}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', marginTop: '16px' }}>
-                    <div className="journal-card-flat">
-                      <div className="journal-label">Cash 3 Numbers</div>
-                      <div style={{ color: 'var(--ink-light)', fontFamily: 'monospace', fontSize: '0.85rem', marginTop: '6px' }}>
-                        {cash3.length ? cash3.join(', ') : 'None'}
-                      </div>
-                    </div>
-                    <div className="journal-card-flat">
-                      <div className="journal-label">Cash 4 Numbers</div>
-                      <div style={{ color: 'var(--ink-light)', fontFamily: 'monospace', fontSize: '0.85rem', marginTop: '6px' }}>
-                        {cash4.length ? cash4.join(', ') : 'None'}
-                      </div>
-                    </div>
-                    <div className="journal-card-flat">
-                      <div className="journal-label">Archived / Symbolic</div>
-                      <div style={{ color: 'var(--ink-light)', marginTop: '6px' }}>
-                        {archived.length ? archived.join(', ') : 'None'}
-                      </div>
-                    </div>
-                  </div>
-
-                  {(entry.termMappings ?? []).length > 0 && (
-                    <div className="journal-card-flat" style={{ marginTop: '16px' }}>
-                      <div className="journal-label">Mapped Terms</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
-                        {(entry.termMappings ?? []).map(m => (
-                          <span key={m.term} style={{
-                            padding: '8px 12px', borderRadius: '999px',
-                            background: 'rgba(201,168,76,0.14)', border: '1px solid rgba(201,168,76,0.35)',
-                            color: 'var(--deep-plum)', fontSize: '14px',
-                          }}>{m.term}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Quick links */}
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '16px' }}>
-                    {[
-                      { label: 'Active Windows', href: `/windows?dreamerId=${idParam}` },
-                      { label: 'Hits', href: `/hits?dreamerId=${idParam}` },
-                      { label: 'As They Fell Before', href: `/fell-before?dreamerId=${idParam}` },
-                      { label: 'Dictionary', href: `/dictionary?dreamerId=${idParam}` },
-                    ].map(({ label, href }) => (
-                      <Link key={label} href={href} className="btn-secondary"
-                        style={{ fontSize: '12px', padding: '4px 12px' }}>
-                        {label}
-                      </Link>
-                    ))}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
-        )}
+        </div>
       </section>
-    </main>
+
+      {/* Dreamer filter */}
+      <section className="journal-card-flat" style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+        <div>
+          <label className="journal-label" htmlFor="dreamerFilter">Filter by Dreamer</label>
+          <select
+            id="dreamerFilter"
+            className="journal-select"
+            value={dreamerFilter}
+            onChange={e => handleDreamerChange(e.target.value)}
+          >
+            <option value="">All Dreamers</option>
+            <option value="owner-self">Owner / Self</option>
+            {dreamers.map(d => (
+              <option key={d.id} value={d.id}>{d.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap', fontSize: '13px', color: 'var(--aurora-text2)', paddingBottom: '4px' }}>
+          <span>
+            <strong style={{ color: 'var(--aurora-text)' }}>{filteredEntries.length}</strong>
+            {' '}entr{filteredEntries.length !== 1 ? 'ies' : 'y'}
+          </span>
+          <span>
+            Scope: <strong style={{ color: 'var(--aurora-purple)' }}>{dreamerLabel}</strong>
+          </span>
+        </div>
+      </section>
+
+      {/* Loading */}
+      {pageLoading && (
+        <section className="journal-card">
+          <p style={{ margin: 0, color: 'var(--aurora-text2)' }}>Loading journal…</p>
+        </section>
+      )}
+
+      {/* Error */}
+      {!pageLoading && error && (
+        <section className="journal-card" style={{ borderColor: 'rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>
+          {error}
+        </section>
+      )}
+
+      {/* Empty state */}
+      {!pageLoading && !error && filteredEntries.length === 0 && (
+        <section className="journal-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: 'var(--aurora-purple)' }}>
+            <BookMarked size={18} />
+            <strong>No journal entries in this view yet</strong>
+          </div>
+          <p style={{ color: 'var(--aurora-text2)', margin: 0 }}>
+            Save a dream entry and it will appear here.
+          </p>
+        </section>
+      )}
+
+      {/* Dream entries */}
+      {!pageLoading && !error && filteredEntries.length > 0 && (
+        <section style={{ display: 'grid', gap: '18px' }}>
+          {filteredEntries.map(entry => {
+            const cash3    = Array.from(new Set((entry.termMappings ?? []).flatMap(m => m.cash3Numbers    ?? [])));
+            const cash4    = Array.from(new Set((entry.termMappings ?? []).flatMap(m => m.cash4Numbers    ?? [])));
+            const archived = Array.from(new Set((entry.termMappings ?? []).flatMap(m => m.archivedNumbers ?? [])));
+            const idParam  = encodeURIComponent(entry.dreamerId || 'owner-self');
+
+            return (
+              <article key={entry.id} className="journal-card">
+                {/* Entry header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--aurora-purple)', marginBottom: '8px' }}>
+                      <NotebookPen size={18} />
+                      <strong style={{ fontSize: '20px', letterSpacing: '-0.02em', fontFamily: 'system-ui, sans-serif' }}>
+                        {entry.dreamerName || 'Unknown'}
+                      </strong>
+                    </div>
+                    <div style={{ color: 'var(--aurora-text2)', fontSize: '13px' }}>
+                      Posted: {formatPosted(entry.uploadedAt)}
+                    </div>
+                    <div style={{ color: 'var(--aurora-text2)', fontSize: '13px', marginTop: '2px' }}>
+                      Dream Date: <strong style={{ color: 'var(--aurora-text)' }}>{entry.dreamDate}</strong>
+                    </div>
+                  </div>
+                  <div className="journal-card-flat" style={{ minWidth: '200px', textAlign: 'center' }}>
+                    <div className="journal-label">Active Timeframe</div>
+                    <div style={{ fontSize: '14px', color: 'var(--aurora-text)', marginTop: '4px', fontFamily: 'monospace' }}>
+                      {entry.activeWindowStart ?? '—'} → {entry.activeWindowEnd ?? '—'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Dream text */}
+                <div className="journal-card-flat" style={{ marginTop: '16px' }}>
+                  <div className="journal-label">Dream Entry</div>
+                  <div style={{ marginTop: '8px', whiteSpace: 'pre-wrap', lineHeight: 1.8, color: 'var(--aurora-text)', fontSize: '14px' }}>
+                    {entry.rawText}
+                  </div>
+                </div>
+
+                {/* Number grids */}
+                <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', marginTop: '14px' }}>
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Cash 3</div>
+                    <div style={{ color: 'var(--aurora-coral2)', fontFamily: 'monospace', fontSize: '13px', marginTop: '5px' }}>
+                      {cash3.length ? cash3.join(', ') : <span style={{ color: 'var(--aurora-text3)' }}>None</span>}
+                    </div>
+                  </div>
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Cash 4</div>
+                    <div style={{ color: 'var(--aurora-purple)', fontFamily: 'monospace', fontSize: '13px', marginTop: '5px' }}>
+                      {cash4.length ? cash4.join(', ') : <span style={{ color: 'var(--aurora-text3)' }}>None</span>}
+                    </div>
+                  </div>
+                  <div className="journal-card-flat">
+                    <div className="journal-label">Archived / Symbolic</div>
+                    <div style={{ color: 'var(--aurora-text2)', fontSize: '13px', marginTop: '5px' }}>
+                      {archived.length ? archived.join(', ') : <span style={{ color: 'var(--aurora-text3)' }}>None</span>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Term mappings */}
+                {(entry.termMappings ?? []).length > 0 && (
+                  <div className="journal-card-flat" style={{ marginTop: '14px' }}>
+                    <div className="journal-label">Mapped Terms</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
+                      {(entry.termMappings ?? []).map(m => (
+                        <span key={m.term} style={{
+                          padding: '5px 12px', borderRadius: '999px',
+                          background: 'rgba(255,204,80,0.12)',
+                          border: '1px solid rgba(255,204,80,0.28)',
+                          color: 'var(--aurora-gold)', fontSize: '13px',
+                          fontWeight: 600,
+                        }}>
+                          {m.term}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Quick links */}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}>
+                  {[
+                    { label: 'Active Windows',    href: `/windows?dreamerId=${idParam}` },
+                    { label: 'Hits',              href: `/hits?dreamerId=${idParam}` },
+                    { label: 'As They Fell Before', href: `/fell-before?dreamerId=${idParam}` },
+                    { label: 'Dictionary',        href: `/dictionary?dreamerId=${idParam}` },
+                  ].map(({ label, href }) => (
+                    <Link key={label} href={href} className="btn-secondary"
+                      style={{ fontSize: '12px', padding: '5px 12px' }}>
+                      {label}
+                    </Link>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
+        </section>
+      )}
+
+    </div>
   );
 }
 
-// Suspense wrapper required for useSearchParams in App Router
+// ─── Export wrapped in Suspense (required for useSearchParams) ────────────────
+
 export default function DreamsPage() {
   return (
     <Suspense fallback={
-      <main style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr' }}>
-        <div /><section style={{ padding: '32px' }}><p>Loading journal…</p></section>
-      </main>
+      <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)' }}>
+        <p style={{ color: 'var(--aurora-text2)' }}>Loading journal…</p>
+      </div>
     }>
       <DreamJournalInner />
     </Suspense>

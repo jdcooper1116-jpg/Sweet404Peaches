@@ -3,7 +3,6 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
 import { buildGroupedTermDictionary, flattenDictionary } from '@/lib/intelligence/termDictionary';
@@ -88,12 +87,7 @@ export default function BacktestingEvidencePage() {
   }, [backtestSummaries]);
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background: 'radial-gradient(circle at top left,rgba(228,192,123,0.14),transparent 18%),radial-gradient(circle at top right,rgba(108,120,255,0.12),transparent 22%),linear-gradient(135deg,#1A1A2E 0%,#16213E 48%,#0F3460 100%)',
-    }}>
-      <Sidebar />
-      <section className="panel-grid" style={{ padding: '32px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
         <PageIntro title="Evidence Tracker"
           description="Historical backtest performance + weighted promotion engine for Universal and Personal Dictionary learning."
           actions={[
@@ -124,7 +118,7 @@ export default function BacktestingEvidencePage() {
         </section>
 
         {loading && <section className="journal-card"><p>Loading Evidence Tracker…</p></section>}
-        {error   && <section className="journal-card-flat" style={{ borderColor:'#f2a6a6',background:'rgba(110,20,20,0.22)',color:'#fff0f0' }}>{error}</section>}
+        {error   && <section className="journal-card-flat" style={{ borderColor:'rgba(255,85,85,0.28)',background:'rgba(255,85,85,0.10)',color:'#ff9090' }}>{error}</section>}
 
         {/* Historical performance */}
         <section style={{ display:'grid',gap:'20px',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))' }}>
@@ -224,7 +218,6 @@ export default function BacktestingEvidencePage() {
             </div>
           </section>
         </section>
-      </section>
-    </main>
+    </div>
   );
 }

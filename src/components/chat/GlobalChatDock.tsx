@@ -152,7 +152,7 @@ export default function GlobalChatDock() {
           </div>
 
           {/* Answer */}
-          <div className="journal-card-flat" style={{ background: 'rgba(255,255,255,0.03)' }}>
+          <div className="journal-card-flat" style={{ background: 'rgba(255,255,255,0.07)' }}>
             <div className="journal-label">Answer</div>
             <pre style={{
               whiteSpace: 'pre-wrap', lineHeight: 1.6,

@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   buildGroupedTermDictionary,
@@ -56,15 +55,7 @@ export default function PlaylistsPage() {
   );
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background:
-        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-    }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         <section className="journal-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -172,7 +163,7 @@ export default function PlaylistsPage() {
                               {group.records.map((record: any, idx: number) => (
                                 <div key={`${record.term}-${record.number}-${record.state}-${record.gameType}-${record.drawTime}`}
                                   style={{
-                                    border: '1px solid rgba(90,52,74,0.12)', borderRadius: '14px', padding: '12px',
+                                    border: '1px solid rgba(255,255,255,0.11)', borderRadius: '14px', padding: '12px',
                                     background: 'rgba(255,255,255,0.04)', display: 'grid', gap: '6px',
                                     borderLeft: `3px solid ${record.latestHitType === 'straight' ? '#4a7c59' : record.latestHitType === 'mixed' ? '#6c78ff' : '#a07c4a'}`,
                                   }}>
@@ -208,7 +199,6 @@ export default function PlaylistsPage() {
             </section>
           );
         })}
-      </section>
-    </main>
+    </div>
   );
 }
