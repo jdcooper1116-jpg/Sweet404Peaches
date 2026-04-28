@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -193,16 +192,7 @@ function FellBeforeInner() {
     : dreamers.find(d => d.id === dreamerId)?.displayName ?? dreamerId;
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background:
-        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-    }}>
-      <Sidebar />
-
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         {/* Header */}
         <section className="journal-card">
@@ -261,7 +251,7 @@ function FellBeforeInner() {
             <span><strong style={{ color: 'var(--ink)' }}>{rows.length}</strong> mapping rows</span>
             <span><strong style={{ color: 'var(--ink)' }}>{dictionary.length}</strong> terms</span>
             <span><strong style={{ color: 'var(--ink)' }}>{filtered.length}</strong> shown</span>
-            <span>Scope: <strong style={{ color: '#b0b8ff' }}>{scopeLabel}</strong></span>
+            <span>Scope: <strong style={{ color: 'var(--plum)' }}>{scopeLabel}</strong></span>
           </div>
 
           {/* A–Z jump links */}
@@ -336,13 +326,13 @@ function FellBeforeInner() {
                           <div
                             key={`${ng.number}-${sr.state}-${sr.gameType}-${sr.drawTime}`}
                             style={{
-                              border: '1px solid rgba(90,52,74,0.12)',
+                              border: '1px solid rgba(120,90,85,0.14)',
                               borderRadius: '14px', padding: '12px',
-                              background: 'rgba(255,255,255,0.04)',
+                              background: 'rgba(255,248,242,0.80)',
                               borderLeft: `3px solid ${
-                                sr.latestHitType === 'straight' ? '#4a7c59'
-                                : sr.latestHitType === 'mixed'    ? '#6c78ff'
-                                : '#a07c4a'
+                                sr.latestHitType === 'straight' ? 'var(--green)'
+                                : sr.latestHitType === 'mixed'    ? 'var(--plum)'
+                                : 'var(--clay)'
                               }`,
                             }}
                           >
@@ -353,7 +343,7 @@ function FellBeforeInner() {
                               <div><div className="journal-label">Draw</div><div>{sr.drawTime}</div></div>
                               <div><div className="journal-label">Hit Type</div>
                                 <div style={{
-                                  color: sr.latestHitType === 'straight' ? '#6dbf8a' : sr.latestHitType === 'mixed' ? '#b0b8ff' : '#d4a95a',
+                                  color: sr.latestHitType === 'straight' ? 'var(--green)' : sr.latestHitType === 'mixed' ? 'var(--plum)' : 'var(--gold)',
                                   fontWeight: 700,
                                 }}>{sr.latestHitType}</div>
                               </div>
@@ -372,8 +362,7 @@ function FellBeforeInner() {
             </section>
           );
         })}
-      </section>
-    </main>
+    </div>
   );
 }
 
@@ -382,12 +371,9 @@ function FellBeforeInner() {
 export default function FellBeforePage() {
   return (
     <Suspense fallback={
-      <main style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr' }}>
-        <div />
-        <section style={{ padding: '32px' }}>
-          <p style={{ color: 'var(--ink-light)' }}>Loading As They Fell Before…</p>
-        </section>
-      </main>
+      <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)' }}>
+        <p style={{ color: 'var(--muted)' }}>Loading As They Fell Before…</p>
+      </div>
     }>
       <FellBeforeInner />
     </Suspense>

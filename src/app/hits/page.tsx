@@ -1,7 +1,6 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 
 type DreamHitRow = {
@@ -53,9 +52,7 @@ export default function HitsPage() {
   const verifiedCount = sorted.filter(h => h.is_verified).length;
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr', background: 'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)' }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         <section className="journal-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -71,11 +68,22 @@ export default function HitsPage() {
           </div>
         </section>
 
-        <section className="journal-card-flat" style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
-          <div><div className="journal-label">Total Hits</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{sorted.length}</div></div>
-          <div><div className="journal-label">Exact / Straight</div><div style={{ fontSize: '28px', fontWeight: 700, color: '#6dbf8a' }}>{exactCount}</div></div>
-          <div><div className="journal-label">Box</div><div style={{ fontSize: '28px', fontWeight: 700, color: '#d4a95a' }}>{boxCount}</div></div>
-          <div><div className="journal-label">Verified</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{verifiedCount}</div></div>
+        <section style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+          {[
+            ['Total Hits',       sorted.length,    'var(--ink)'],
+            ['Exact / Straight', exactCount,       'var(--green)'],
+            ['Box',              boxCount,         'var(--gold)'],
+            ['Verified',         verifiedCount,    'var(--plum)'],
+          ].map(([label, val, color]) => (
+            <div key={String(label)} style={{
+              background: 'var(--cream)', border: '1px solid rgba(120,90,85,0.15)',
+              borderRadius: '20px', padding: '15px 18px',
+              boxShadow: '0 4px 14px rgba(82,39,28,0.06)',
+            }}>
+              <strong style={{ fontSize: '2rem', letterSpacing: '-0.06em', display: 'block', color: color as string }}>{val}</strong>
+              <span style={{ color: 'var(--muted)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+            </div>
+          ))}
         </section>
 
         {loading && <section className="journal-card"><p>Loading hits…</p></section>}
@@ -93,20 +101,20 @@ export default function HitsPage() {
             {sorted.map(hit => {
               const isExact = hit.match_type === 'exact';
               return (
-                <article key={hit.id} className="journal-card" style={{ display: 'grid', gap: '12px', borderLeft: `3px solid ${isExact ? '#4a7c59' : '#7c6b4a'}` }}>
+                <article key={hit.id} className="journal-card" style={{ display: 'grid', gap: '12px', borderLeft: `3px solid ${isExact ? 'var(--green)' : 'var(--clay)'}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
                     <div>
                       <h2 style={{ margin: 0 }}>
                         <span style={{ fontFamily: 'monospace' }}>{hit.candidate || '—'}</span>
-                        <span style={{ color: 'rgba(255,255,255,0.35)', margin: '0 8px' }}>→</span>
+                        <span style={{ color: 'var(--muted)', margin: '0 8px' }}>→</span>
                         <span style={{ fontFamily: 'monospace' }}>{hit.winning_number || '—'}</span>
-                        <span style={{ marginLeft: '10px', fontSize: '13px', fontWeight: 400, color: isExact ? '#6dbf8a' : '#d4a95a' }}>
+                        <span style={{ marginLeft: '10px', fontSize: '13px', fontWeight: 400, color: isExact ? 'var(--green)' : 'var(--gold)' }}>
                           {isExact ? '⬛ Exact / Straight' : '◻ Box'}
                         </span>
                       </h2>
                       <div style={{ marginTop: '6px', color: 'var(--ink-light)', fontSize: '14px' }}>
                         {hit.state} · {hit.draw_date} · {hit.draw_time} · {hit.game_type}
-                        {hit.is_verified && <span style={{ marginLeft: '8px', color: '#6dbf8a', fontWeight: 600 }}>✓ Verified</span>}
+                        {hit.is_verified && <span style={{ marginLeft: '8px', color: 'var(--green)', fontWeight: 600 }}>✓ Verified</span>}
                       </div>
                     </div>
                     <div className="journal-card-flat" style={{ minWidth: '180px', display: 'grid', gap: '5px', fontSize: '13px' }}>
@@ -121,7 +129,6 @@ export default function HitsPage() {
             })}
           </section>
         )}
-      </section>
-    </main>
+    </div>
   );
 }

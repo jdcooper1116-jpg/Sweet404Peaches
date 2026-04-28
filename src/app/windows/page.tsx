@@ -1,7 +1,6 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 
 type ActiveWindow = {
@@ -106,9 +105,7 @@ export default function ActiveWindowsPage() {
   const expired = grouped.filter(g => g.activeEnd < today);
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr', background: 'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)' }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
             <div className="page-header">
@@ -123,11 +120,22 @@ export default function ActiveWindowsPage() {
           </div>
         </section>
 
-        <section className="journal-card-flat" style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-          <div><div className="journal-label">Dream Windows</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{grouped.length}</div></div>
-          <div><div className="journal-label">Currently Active</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{active.length}</div></div>
-          <div><div className="journal-label">Expired</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{expired.length}</div></div>
-          <div><div className="journal-label">Total Watch Items</div><div style={{ fontSize: '28px', fontWeight: 700 }}>{grouped.reduce((s, g) => s + g.totalWatchItems, 0)}</div></div>
+        <section style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+          {[
+            ['Dream Windows',     grouped.length],
+            ['Currently Active',  active.length],
+            ['Expired',           expired.length],
+            ['Total Watch Items', grouped.reduce((s, g) => s + g.totalWatchItems, 0)],
+          ].map(([label, val]) => (
+            <div key={String(label)} style={{
+              background: 'var(--cream)', border: '1px solid rgba(120,90,85,0.15)',
+              borderRadius: '20px', padding: '15px 18px',
+              boxShadow: '0 4px 14px rgba(82,39,28,0.06)',
+            }}>
+              <strong style={{ fontSize: '2rem', letterSpacing: '-0.06em', display: 'block', color: 'var(--ink)' }}>{val}</strong>
+              <span style={{ color: 'var(--muted)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+            </div>
+          ))}
         </section>
 
         {loading && <section className="journal-card"><p>Loading dream windows…</p></section>}
@@ -143,7 +151,7 @@ export default function ActiveWindowsPage() {
                   <div style={{ display: 'grid', gap: '5px' }}>
                     <h2 style={{ margin: 0 }}>{group.dreamerName}</h2>
                     {group.newHitsSinceLastCheck > 0 && (
-                      <span style={{ display: 'inline-flex', padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 700, background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)', color: '#fbbf24', width: 'fit-content' }}>
+                      <span style={{ display: 'inline-flex', padding: '4px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: 'rgba(216,164,91,0.16)', border: '1px solid rgba(216,164,91,0.35)', color: 'var(--clay)', width: 'fit-content' }}>
                         {group.newHitsSinceLastCheck} new hit{group.newHitsSinceLastCheck !== 1 ? 's' : ''} since last refresh
                       </span>
                     )}
@@ -172,7 +180,7 @@ export default function ActiveWindowsPage() {
                   <strong>Mapped Terms</strong>
                   <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
                     {Object.entries(group.termMap).map(([term, payload]) => (
-                      <div key={term} style={{ border: '1px solid rgba(90,52,74,0.12)', borderRadius: '12px', padding: '10px', background: 'rgba(255,255,255,0.03)', fontSize: '13px' }}>
+                      <div key={term} style={{ border: '1px solid rgba(120,90,85,0.14)', borderRadius: '12px', padding: '10px', background: 'rgba(255,248,242,0.80)', fontSize: '13px' }}>
                         <strong>{term}</strong>
                         <div style={{ marginTop: '4px', color: 'var(--ink-light)' }}>
                           Cash 3: {payload.cash3.join(', ') || 'None'} · Cash 4: {payload.cash4.join(', ') || 'None'}
@@ -199,7 +207,6 @@ export default function ActiveWindowsPage() {
             ))}
           </section>
         )}
-      </section>
-    </main>
+    </div>
   );
 }

@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { BookOpenText, Sparkles, Users } from 'lucide-react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
+import { listDreamers } from '@/lib/firebase/firestore';
 import { parseDreamText } from '@/lib/parser/dreamParser';
 import type { Dreamer, ParseResult } from '@/lib/types';
 
@@ -28,11 +28,7 @@ export default function NewDreamPageClient() {
   useEffect(() => {
     async function load() {
       if (!user) { setDreamersLoading(false); return; }
-      try {
-        const res = await fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`);
-        const data = await res.json();
-        if (data.ok) setDreamers(Array.isArray(data.dreamers) ? data.dreamers : []);
-      }
+      try { setDreamers(await listDreamers(user.uid)); }
       catch (err) { console.error('dreamers load (non-critical):', err); }
       finally { setDreamersLoading(false); }
     }
@@ -106,9 +102,7 @@ export default function NewDreamPageClient() {
   }
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr', background: 'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)' }}>
-      <Sidebar />
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
         <section className="journal-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div className="page-header"><h1>New Dream Entry</h1><p>Capture the dream. Parse it to extract terms and candidates, then save with active 7-day watch windows.</p></div>
@@ -199,7 +193,6 @@ export default function NewDreamPageClient() {
             </div>
           </section>
         )}
-      </section>
-    </main>
+    </div>
   );
 }

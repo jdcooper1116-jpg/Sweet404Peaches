@@ -4,7 +4,6 @@ import EngineStatusBadge from '@/components/ui/EngineStatusBadge';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, BookMarked, Brain, CalendarRange, Flame, Target, Trophy, WandSparkles } from 'lucide-react';
-import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import { summarizeNumberFamilies } from '@/lib/sync/numberFamilies';
 import { buildAutoPinSuggestions, buildDreamerReliabilityStats, buildDuplicateSignals, buildTermStrengthStats } from '@/lib/intelligence/scoring';
@@ -37,14 +36,14 @@ function RefreshNowButton({ ownerUid }: { ownerUid: string }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
       <button onClick={run} disabled={running || !ownerUid} style={{
         padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-        background: running ? 'rgba(255,255,255,0.05)' : 'rgba(108,120,255,0.18)',
-        border: '1px solid rgba(108,120,255,0.35)',
-        color: running ? 'rgba(234,234,242,0.45)' : '#b0b8ff',
+        background: running ? 'rgba(107,90,96,0.08)' : 'rgba(242,138,106,0.14)',
+        border: '1px solid rgba(184,119,98,0.28)',
+        color: running ? 'var(--muted)' : 'var(--plum)',
         cursor: running ? 'default' : 'pointer',
       }}>
         {running ? 'Refreshing…' : 'Refresh Now'}
       </button>
-      {result && <span style={{ fontSize: 12, color: 'rgba(234,234,242,0.6)' }}>{result}</span>}
+      {result && <span style={{ fontSize: 12, color: 'var(--taupe)' }}>{result}</span>}
     </div>
   );
 }
@@ -115,16 +114,7 @@ export default function DashboardPage() {
   [windows, today]);
 
   return (
-    <main style={{
-      minHeight: '100vh', display: 'grid', gridTemplateColumns: '280px 1fr',
-      background:
-        'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-        'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-        'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-    }}>
-      <Sidebar />
-
-      <section style={{ padding: '32px', display: 'grid', gap: '24px' }}>
+    <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
         <section className="journal-card">
           <div className="page-header">
@@ -167,24 +157,28 @@ export default function DashboardPage() {
           <section className="journal-card" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>{error}</section>
         ) : (
           <>
-            {/* Stats strip */}
-            <section className="journal-card-flat">
-              <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
-                {[
-                  ['Dream Entries',   dreams.length],
-                  ['Active Windows',  activeWindowCount],
-                  ['Hit Records',     memory.length],
-                  ['Hot Families',    hotFamilies.length],
-                  ['Pinned',          summary.pinned],
-                  ['Played',          summary.played],
-                  ['Won',             summary.won],
-                ].map(([label, val]) => (
-                  <div key={String(label)}>
-                    <div className="journal-label">{label}</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{val}</div>
-                  </div>
-                ))}
-              </div>
+            {/* Stats strip — preview-style cream tiles */}
+            <section style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+              {[
+                ['Dream Entries',   dreams.length],
+                ['Active Windows',  activeWindowCount],
+                ['Hit Records',     memory.length],
+                ['Hot Families',    hotFamilies.length],
+                ['Pinned',          summary.pinned],
+                ['Played',          summary.played],
+                ['Won',             summary.won],
+              ].map(([label, val]) => (
+                <div key={String(label)} style={{
+                  background: 'var(--cream)',
+                  border: '1px solid rgba(120,90,85,0.15)',
+                  borderRadius: '20px',
+                  padding: '15px 18px',
+                  boxShadow: '0 4px 14px rgba(82,39,28,0.06)',
+                }}>
+                  <strong style={{ fontSize: '2rem', letterSpacing: '-0.06em', display: 'block', color: 'var(--ink)' }}>{val}</strong>
+                  <span style={{ color: 'var(--muted)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+                </div>
+              ))}
             </section>
 
             {/* Quick links */}
@@ -198,10 +192,10 @@ export default function DashboardPage() {
                 ].map(({ href, icon: Icon, label, desc }) => (
                   <Link key={href} href={href} className="journal-card-flat"
                     style={{ textDecoration: 'none', color: 'inherit', minHeight: '110px', display: 'grid', alignContent: 'start' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--deep-plum)', marginBottom: '8px' }}>
-                      <Icon size={18} /><strong>{label}</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--plum)', marginBottom: '8px' }}>
+                      <Icon size={18} /><strong style={{ fontSize: '15px' }}>{label}</strong>
                     </div>
-                    <div style={{ color: 'var(--ink-light)', fontSize: '13px' }}>{desc}</div>
+                    <div style={{ color: 'var(--taupe)', fontSize: '13px', lineHeight: 1.5 }}>{desc}</div>
                   </Link>
                 ))}
               </div>
@@ -303,7 +297,6 @@ export default function DashboardPage() {
             </section>
           </>
         )}
-      </section>
-    </main>
+    </div>
   );
 }
