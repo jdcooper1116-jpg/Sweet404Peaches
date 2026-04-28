@@ -206,6 +206,8 @@ export default function HotFamiliesPage() {
   const [familySearch, setFamilySearch] = useState('');
   const [stateSearch,  setStateSearch]  = useState('');
   const [showAll,      setShowAll]      = useState(false);
+  const [pinningKey,   setPinningKey]   = useState('');
+  const [pinMsg,       setPinMsg]       = useState<Record<string, string>>({});
 
   useEffect(() => {
     async function load() {
@@ -245,7 +247,44 @@ export default function HotFamiliesPage() {
     );
   }, [families, convergent, showAll, familySearch, stateSearch]);
 
-  return (
+  // ── Pin a family candidate ─────────────────────────────────────────────────
+  async function pinFamily(family: BoxedFamily) {
+    if (!user || pinningKey) return;
+    const key = family.boxedKey + '::' + family.gameType;
+    setPinningKey(key);
+    try {
+      const res = await fetch('/api/pinned-plays', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerUid:      user.uid,
+          number:        family.numbers[0] ?? family.boxedKey,
+          gameType:      family.gameType,
+          states:        family.fellStates,
+          sourceTerms:   family.terms,
+          sourceTerm:    family.terms[0] ?? '',
+          source:        'hot-families',
+          reason:        family.terms.length > 1
+            ? `Boxed convergence: ${family.terms.slice(0, 3).join(', ')}`
+            : `Active dream term: ${family.terms[0] ?? ''}`,
+          boxedKey:      family.boxedKey,
+          hitCount:      family.fellHitCount,
+          dreamerName:   family.dreamers[0] ?? '',
+          evidenceBadges: [
+            family.terms.length > 1 ? 'Multi-Term' : 'Active Dream',
+            ...(family.fellBefore ? ['Fell Before'] : []),
+          ],
+          status: 'suggested',
+        }),
+      });
+      const data = await res.json();
+      setPinMsg(m => ({ ...m, [key]: data.duplicate ? 'Already pinned' : '✓ Pinned' }));
+      setTimeout(() => setPinMsg(m => { const n = { ...m }; delete n[key]; return n; }), 3000);
+    } catch {
+      setPinMsg(m => ({ ...m, [key]: 'Pin failed' }));
+    } finally { setPinningKey(''); }
+  }
+
+    return (
     <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
       {/* Header */}
@@ -410,15 +449,19 @@ export default function HotFamiliesPage() {
                   </div>
                 )}
 
-                {/* Suggested pin badge (non-destructive) */}
+                {/* Pin candidate button */}
                 {isStrong && (
                   <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <span style={{ padding: '4px 12px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, background: 'rgba(255,204,80,0.10)', border: '1px solid rgba(255,204,80,0.22)', color: '#ffcc50', fontFamily: 'system-ui,sans-serif', letterSpacing: '0.04em' }}>
-                      ★ Suggested Pin
-                    </span>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
-                      Pin workflow coming in Batch 4
-                    </span>
+                    {(() => {
+                      const key = family.boxedKey + '::' + family.gameType;
+                      const msg = pinMsg[key];
+                      return msg
+                        ? <span style={{ fontSize: '12px', color: '#60e09a', fontWeight: 700 }}>{msg}</span>
+                        : <button type="button" onClick={() => pinFamily(family)} disabled={!!pinningKey}
+                            style={{ padding: '5px 14px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: 'rgba(255,204,80,0.12)', border: '1px solid rgba(255,204,80,0.28)', color: '#ffcc50', cursor: pinningKey ? 'default' : 'pointer', fontFamily: 'system-ui,sans-serif' }}>
+                            {pinningKey === key ? '…' : '★ Suggest Pin'}
+                          </button>;
+                    })()}
                     <Link href="/pinned-plays" style={{ fontSize: '12px', color: '#a090ff', textDecoration: 'none', fontWeight: 600, marginLeft: 'auto' }}>
                       View Pinned Plays →
                     </Link>

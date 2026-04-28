@@ -254,6 +254,8 @@ export default function PlaylistsPage() {
   const [error,       setError]       = useState('');
 
   const [stateSearch, setStateSearch] = useState('');
+  const [pinningKey,  setPinningKey]  = useState('');
+  const [pinMsg,      setPinMsg]      = useState<Record<string, string>>({});
   const [numSearch,   setNumSearch]   = useState('');
   const [termSearch,  setTermSearch]  = useState('');
 
@@ -314,7 +316,45 @@ export default function PlaylistsPage() {
 
   const totalEntries = stateGroups.reduce((s, g) => s + g.entries.length, 0);
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Pin a playlist entry ────────────────────────────────────────────────────
+  async function pinEntry(entry: PlaylistEntry, state: string) {
+    if (!user || pinningKey) return;
+    const key = `${state}::${entry.number}::${entry.gameType}`;
+    setPinningKey(key);
+    try {
+      const res = await fetch('/api/pinned-plays', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerUid:      user.uid,
+          number:        entry.number,
+          gameType:      entry.gameType,
+          state,
+          sourceTerms:   entry.termList,
+          sourceTerm:    entry.sourceTerm,
+          source:        'state-playlists',
+          reason:        entry.fellBefore
+            ? `Fell in ${state} (${entry.stateHitCount} hit${entry.stateHitCount !== 1 ? 's' : ''})`
+            : `Active dream: ${entry.sourceTerm}`,
+          dreamerName:   entry.dreamerName,
+          hitCount:      entry.stateHitCount,
+          states:        [state],
+          evidenceBadges: [
+            'Active Dream',
+            ...(entry.fellBefore ? ['Fell Before'] : []),
+            ...(entry.multiTerm  ? ['Multi-Term']  : []),
+          ],
+          status: 'suggested',
+        }),
+      });
+      const data = await res.json();
+      setPinMsg(m => ({ ...m, [key]: data.duplicate ? 'Already pinned' : '✓ Pinned' }));
+      setTimeout(() => setPinMsg(m => { const n = { ...m }; delete n[key]; return n; }), 3000);
+    } catch {
+      setPinMsg(m => ({ ...m, [key]: 'Pin failed' }));
+    } finally { setPinningKey(''); }
+  }
+
+    // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
@@ -449,6 +489,16 @@ export default function PlaylistsPage() {
                               <span style={{ color: 'rgba(255,255,255,0.35)' }}> · {entry.latestHitDate}</span>
                             )}
                           </div>
+                          {entry.fellBefore && (() => {
+                            const pKey = `${group.state}::${entry.number}::cash3`;
+                            const msg  = pinMsg[pKey];
+                            return msg
+                              ? <span style={{ fontSize: '11px', color: '#60e09a', fontWeight: 700, marginTop: '4px' }}>{msg}</span>
+                              : <button type="button" onClick={() => pinEntry(entry, group.state)} disabled={!!pinningKey}
+                                  style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, background: 'rgba(255,204,80,0.10)', border: '1px solid rgba(255,204,80,0.24)', color: '#ffcc50', cursor: pinningKey ? 'default' : 'pointer', fontFamily: 'system-ui,sans-serif', marginTop: '4px', display: 'inline-block' }}>
+                                  {pinningKey === pKey ? '…' : '★ Pin'}
+                                </button>;
+                          })()}
                         </div>
                       </div>
                     ))}
