@@ -1,17 +1,9 @@
 import type { Metadata } from 'next';
-import { IM_Fell_English, Lora } from 'next/font/google';
+import { Lora } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/contexts/AuthContext';
 import GlobalChatDock from '@/components/chat/GlobalChatDock';
 import PeachLedgerAppShell from '@/components/layout/PeachLedgerAppShell';
-
-const imFell = IM_Fell_English({
-  subsets: ['latin'],
-  weight: ['400'],
-  style: ['normal', 'italic'],
-  variable: '--font-display',
-  display: 'swap',
-});
 
 const lora = Lora({
   subsets: ['latin'],
@@ -23,10 +15,10 @@ const lora = Lora({
 
 export const metadata: Metadata = {
   title: {
-    default: 'Sweet404Peaches',
-    template: '%s — Sweet404Peaches',
+    default: 'Sigil & Slumber',
+    template: '%s — Sigil & Slumber',
   },
-  description: 'Where Dreams Leave Numbers.',
+  description: 'Dreams decoded. Numbers revealed.',
   robots: { index: false, follow: false },
 };
 
@@ -38,7 +30,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${imFell.variable} ${lora.variable}`}
+      className={lora.variable}
       suppressHydrationWarning
     >
       <body className="antialiased">

@@ -166,7 +166,6 @@ export default function DashboardPage() {
   const [dreams,      setDreams]      = useState<any[]>([]);
   const [windows,     setWindows]     = useState<any[]>([]);
   const [memory,      setMemory]      = useState<any[]>([]);
-  const [pins,        setPins]        = useState<any[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [error,       setError]       = useState('');
 
@@ -176,19 +175,17 @@ export default function DashboardPage() {
       setError('');
       try {
         const uid = encodeURIComponent(user.uid);
-        const [dreamsRes, windowsRes, memoryRes, pinsRes] = await Promise.all([
+        const [dreamsRes, windowsRes, memoryRes] = await Promise.all([
           fetch(`/api/dreams/entries?ownerUid=${uid}`),
           fetch(`/api/dreams/windows?ownerUid=${uid}`),
           fetch(`/api/fell-before?ownerUid=${uid}`),
-          fetch(`/api/pinned-plays?ownerUid=${uid}`),
         ]);
-        const [dreamsData, windowsData, memoryData, pinsData] = await Promise.all([
-          dreamsRes.json(), windowsRes.json(), memoryRes.json(), pinsRes.json(),
+        const [dreamsData, windowsData, memoryData] = await Promise.all([
+          dreamsRes.json(), windowsRes.json(), memoryRes.json(),
         ]);
         if (dreamsData.ok)  setDreams(dreamsData.entries   ?? []);
         if (windowsData.ok) setWindows(windowsData.windows ?? []);
         if (memoryData.ok)  setMemory(memoryData.rows       ?? []);
-        if (pinsData.ok)    setPins(pinsData.plays           ?? []);
       } catch (err) { console.error(err); setError('Could not load dashboard data.'); }
       finally { setPageLoading(false); }
     }
@@ -198,21 +195,42 @@ export default function DashboardPage() {
   // ── Intelligence — unchanged ───────────────────────────────────────────────
   const hotFamilies      = useMemo(() => summarizeNumberFamilies(windows, memory), [windows, memory]);
   const termStrengthRows = useMemo(() => buildTermStrengthStats(memory), [memory]);
-  const reliabilityRows  = useMemo(() => buildDreamerReliabilityStats(pins), [pins]);
+  const reliabilityRows: any[] = [];
   const duplicateSignals = useMemo(() => buildDuplicateSignals(dreams, memory), [dreams, memory]);
   const autoPins         = useMemo(() => buildAutoPinSuggestions({
     hotFamilies, filteredMemory: memory, selectedState: 'GA', dreamerScope: 'ALL', reliabilityRows,
   }), [hotFamilies, memory, reliabilityRows]);
-  const summary = useMemo(() => ({
-    pinned: pins.filter(r => r.status === 'pinned').length,
-    played: pins.filter(r => r.status === 'played').length,
-    won:    pins.filter(r => r.status === 'won').length,
-  }), [pins]);
 
-  const today            = new Date().toISOString().slice(0, 10);
-  const activeWindowCount = useMemo(() =>
-    windows.filter(w => (w.activeEnd ?? w.activeWindowEnd ?? '') >= today).length,
-  [windows, today]);
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Group raw window rows by dreamEntryId (same logic as Active Windows page)
+  const groupedWindows = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const row of windows) {
+      const key = row.dreamEntryId || row.id || row.dreamId || Math.random().toString();
+      if (!map.has(key)) {
+        map.set(key, { ...row, cash3Numbers: [], cash4Numbers: [], totalWatchItems: 0 });
+      }
+      const g = map.get(key)!;
+      if (row.cash3Numbers) g.cash3Numbers.push(...row.cash3Numbers);
+      if (row.cash4Numbers) g.cash4Numbers.push(...row.cash4Numbers);
+      g.totalWatchItems = (g.totalWatchItems || 0) + (row.totalWatchItems || 0);
+      // Use latest activeEnd
+      if ((row.activeEnd ?? '') > (g.activeEnd ?? '')) {
+        g.activeEnd   = row.activeEnd;
+        g.activeStart = row.activeStart;
+      }
+    }
+    return Array.from(map.values());
+  }, [windows]);
+
+  const activeGroups     = useMemo(() => groupedWindows.filter(g => (g.activeEnd ?? '') >= today), [groupedWindows, today]);
+  const activeWindowCount = activeGroups.length;
+  const watchItems       = useMemo(() => activeGroups.reduce((s, g) => s + (g.totalWatchItems || 0), 0), [activeGroups]);
+  const cash3Count       = useMemo(() => new Set(activeGroups.flatMap(g => g.cash3Numbers ?? [])).size, [activeGroups]);
+  const cash4Count       = useMemo(() => new Set(activeGroups.flatMap(g => g.cash4Numbers ?? [])).size, [activeGroups]);
+  const newHitsCount     = useMemo(() => activeGroups.reduce((s, g) => s + (g.newHitsSinceLastCheck || 0), 0), [activeGroups]);
+
   const latestDream = dreams[0] ?? null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -324,10 +342,10 @@ export default function DashboardPage() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               {([
-                ['Active Windows', activeWindowCount, T.peach ],
-                ['Hit Records',    memory.length,     T.green ],
-                ['Dream Entries',  dreams.length,     T.plum  ],
-                ['Hot Families',   hotFamilies.length,T.gold  ],
+                ['Active Dreams',  dreams.length,      T.plum  ],
+                ['Active Windows', activeWindowCount,  T.peach ],
+                ['Watch Items',    watchItems,         T.green ],
+                ['Memory Rows',    memory.length,      T.gold  ],
               ] as [string, number, string][]).map(([label, val, color]) => {
                 const s = statTile(color);
                 return (
@@ -346,7 +364,7 @@ export default function DashboardPage() {
               }}>
                 <span style={{ color: T.muted, fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.10em', fontFamily: 'system-ui, sans-serif' }}>Latest Dream</span>
                 <div style={{ color: T.ink, fontWeight: 700, marginTop: '4px', fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
-                  {latestDream.dreamerName || 'Owner'} · {latestDream.dreamDate}
+                  {latestDream.dreamerName || 'Dream Entry'} · {latestDream.dreamDate}
                 </div>
               </div>
             )}
@@ -361,13 +379,15 @@ export default function DashboardPage() {
         `}</style>
       </section>
 
-      {/* ── Play outcome KPIs ─────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px' }}>
+      {/* ── Operational KPIs ─────────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
         {([
-          ['Pinned',     summary.pinned, T.clay  ],
-          ['Played',     summary.played, T.plum  ],
-          ['Won',        summary.won,    T.green ],
-          ['Backtests',  dreams.length,  T.gold  ],
+          ['Active Dreams',   dreams.length,      T.plum  ],
+          ['Active Windows',  activeWindowCount,  T.peach ],
+          ['Watch Items',     watchItems,         T.green ],
+          ['Cash 3 Numbers',  cash3Count,         T.gold  ],
+          ['Cash 4 Numbers',  cash4Count,         '#50b8ff' ],
+          ['New Hits',        newHitsCount,       T.green ],
         ] as [string, number, string][]).map(([label, val, color]) => {
           const s = statTile(color);
           return (
@@ -524,25 +544,34 @@ export default function DashboardPage() {
             </section>
           </div>
 
-          {/* ── Dreamer Reliability + Cleanup Alerts ─────────────────────── */}
+          {/* ── Active Windows Summary + Cleanup Alerts ───────────────────── */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', alignItems: 'start' }}>
             <section style={card}>
-              <div style={sectionHead}><Trophy size={18} />Dreamer Reliability</div>
-              {reliabilityRows.length === 0
-                ? <p style={{ color: T.muted, margin: 0, fontStyle: 'italic', fontSize: '14px' }}>No pinned play outcomes yet.</p>
+              <div style={sectionHead}><CalendarRange size={18} />Active Windows</div>
+              {activeGroups.length === 0
+                ? <p style={{ color: T.muted, margin: 0, fontStyle: 'italic', fontSize: '14px' }}>No active dream windows right now.</p>
                 : <div style={{ display: 'grid', gap: '8px' }}>
-                    {reliabilityRows.slice(0, 5).map((row: any) => (
-                      <div key={row.dreamerScope} style={{
+                    {activeGroups.slice(0, 5).map((g: any) => (
+                      <div key={g.dreamEntryId || g.id} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        padding: '9px 12px', borderRadius: '13px', background: T.cream, border: `1px solid ${T.line}`,
+                        padding: '9px 12px', borderRadius: '13px',
+                        background: 'rgba(255,255,255,0.06)', border: `1px solid ${T.line}`,
                       }}>
-                        <span style={{ fontWeight: 600, fontSize: '13px', color: T.ink }}>{row.dreamerScope}</span>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <span style={{ fontSize: '12px', color: T.muted }}>Won {row.won}</span>
-                          <span style={{ ...pill(), fontSize: '10px', padding: '3px 8px' }}>{(row.winRate * 100).toFixed(0)}%</span>
+                        <div>
+                          <span style={{ fontWeight: 700, fontSize: '13px', color: T.ink }}>{g.dreamerName || 'Dream'}</span>
+                          <div style={{ fontSize: '11px', color: T.muted, marginTop: '2px' }}>{g.activeStart} → {g.activeEnd}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', fontSize: '11px', color: T.muted }}>
+                          <div>C3: {(g.cash3Numbers ?? []).length} · C4: {(g.cash4Numbers ?? []).length}</div>
+                          {(g.newHitsSinceLastCheck > 0) && (
+                            <span style={{ color: T.gold, fontWeight: 700 }}>{g.newHitsSinceLastCheck} new hit{g.newHitsSinceLastCheck !== 1 ? 's' : ''}</span>
+                          )}
                         </div>
                       </div>
                     ))}
+                    <Link href="/windows" style={{ color: T.plum, fontSize: '13px', marginTop: '6px', display: 'inline-block', textDecoration: 'none', fontWeight: 600 }}>
+                      All Active Windows →
+                    </Link>
                   </div>
               }
             </section>

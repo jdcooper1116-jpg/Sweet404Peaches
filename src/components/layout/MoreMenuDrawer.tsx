@@ -81,12 +81,21 @@ export default function MoreMenuDrawer({ isOpen, onClose }: { isOpen: boolean; o
         }}>
           <div aria-hidden="true" style={{ width: '36px', height: '3px', borderRadius: '2px', background: 'rgba(255,255,255,0.15)', margin: '0 auto 12px' }} />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{
-              fontSize: '15px', fontWeight: 900, letterSpacing: '-0.03em',
-              fontFamily: 'system-ui,-apple-system,sans-serif',
-              background: 'linear-gradient(135deg,#ff8a6a,#a090ff)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-            }}>Sweet404Peaches</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+              <img
+                src="/brand/sigil-slumber-logo.png"
+                alt="Sigil & Slumber"
+                width={26} height={26}
+                style={{ borderRadius: '6px' }}
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+              <span style={{
+                fontSize: '15px', fontWeight: 900, letterSpacing: '-0.03em',
+                fontFamily: 'system-ui,-apple-system,sans-serif',
+                background: 'linear-gradient(135deg,#ff8a6a,#a090ff)',
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+              }}>Sigil &amp; Slumber</span>
+            </div>
             <button type="button" aria-label="Close navigation menu" onClick={onClose} style={{
               width: '32px', height: '32px', borderRadius: '50%',
               border: '1px solid rgba(255,255,255,0.12)',

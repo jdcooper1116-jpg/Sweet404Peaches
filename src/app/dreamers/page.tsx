@@ -21,8 +21,8 @@ type DreamerRow = {
 type GameType = 'cash3' | 'cash4';
 const ALL_DRAW_TIMES = ['midday', 'evening', 'night'];
 
-// Synthetic owner-self entry — always shown even if no Firestore doc exists
-const OWNER_SELF: DreamerRow = {
+// Synthetic owner-self entry — display name loaded from /api/owner-profile
+const DEFAULT_OWNER_SELF: DreamerRow = {
   id:              'owner-self',
   displayName:     'Owner / Self',
   preferredStates: [],
@@ -34,11 +34,12 @@ const OWNER_SELF: DreamerRow = {
 export default function DreamersPage() {
   const { user, loading: authLoading } = useAuth();
 
-  const [dreamers,    setDreamers]    = useState<DreamerRow[]>([]);
-  const [pageLoading, setPageLoading] = useState(true);
-  const [saving,      setSaving]      = useState(false);
-  const [error,       setError]       = useState('');
-  const [message,     setMessage]     = useState('');
+  const [dreamers,        setDreamers]        = useState<DreamerRow[]>([]);
+  const [ownerDisplayName,setOwnerDisplayName] = useState('');
+  const [pageLoading,     setPageLoading]      = useState(true);
+  const [saving,          setSaving]           = useState(false);
+  const [error,           setError]            = useState('');
+  const [message,         setMessage]          = useState('');
 
   // Create-dreamer form state
   const [displayName,     setDisplayName]     = useState('');
@@ -52,10 +53,16 @@ export default function DreamersPage() {
     if (!user) { setPageLoading(false); return; }
     try {
       setError('');
-      const res  = await fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`);
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Failed to load dreamers.');
-      setDreamers(Array.isArray(data.dreamers) ? data.dreamers : []);
+      const [dreamerRes, profileRes] = await Promise.all([
+        fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`),
+        fetch(`/api/owner-profile?ownerUid=${encodeURIComponent(user.uid)}`),
+      ]);
+      const [dreamerData, profileData] = await Promise.all([dreamerRes.json(), profileRes.json()]);
+      if (!dreamerData.ok) throw new Error(dreamerData.error || 'Failed to load dreamers.');
+      setDreamers(Array.isArray(dreamerData.dreamers) ? dreamerData.dreamers : []);
+      if (profileData.ok && profileData.profile?.displayName) {
+        setOwnerDisplayName(profileData.profile.displayName);
+      }
     } catch (err) {
       console.error(err);
       setError('Could not load dreamers.');
@@ -73,10 +80,13 @@ export default function DreamersPage() {
     const sorted = [...dreamers].sort((a, b) =>
       a.displayName.localeCompare(b.displayName)
     );
-    // Only prepend OWNER_SELF synthetic card if there's no real dreamer doc with id=owner-self
     const hasOwnerSelfDoc = sorted.some(d => d.id === 'owner-self');
-    return hasOwnerSelfDoc ? sorted : [OWNER_SELF, ...sorted];
-  }, [dreamers]);
+    const ownerRow: DreamerRow = {
+      ...DEFAULT_OWNER_SELF,
+      displayName: ownerDisplayName || 'Owner / Self',
+    };
+    return hasOwnerSelfDoc ? sorted : [ownerRow, ...sorted];
+  }, [dreamers, ownerDisplayName]);
 
   // ── Create dreamer via server route ─────────────────────────────────────────
   function toggleGame(game: GameType) {

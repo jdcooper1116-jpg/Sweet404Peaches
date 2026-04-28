@@ -128,9 +128,9 @@ export default function ActiveWindowsPage() {
             ['Total Watch Items', grouped.reduce((s, g) => s + g.totalWatchItems, 0)],
           ].map(([label, val]) => (
             <div key={String(label)} style={{
-              background: 'var(--cream)', border: '1px solid rgba(120,90,85,0.15)',
+              background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
               borderRadius: '20px', padding: '15px 18px',
-              boxShadow: '0 4px 14px rgba(82,39,28,0.06)',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.22)',
             }}>
               <strong style={{ fontSize: '2rem', letterSpacing: '-0.06em', display: 'block', color: 'var(--ink)' }}>{val}</strong>
               <span style={{ color: 'var(--muted)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
@@ -139,56 +139,114 @@ export default function ActiveWindowsPage() {
         </section>
 
         {loading && <section className="journal-card"><p>Loading dream windows…</p></section>}
-        {error && <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>{error}</section>}
+        {error && <section className="journal-card-flat" style={{ borderColor: 'rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</section>}
         {!loading && !grouped.length && <section className="journal-card"><p>No dream windows yet. <Link href="/dreams/new">Create your first dream entry →</Link></p></section>}
 
         {active.length > 0 && (
           <section style={{ display: 'grid', gap: '16px' }}>
             <div className="page-header"><h1>Currently Active</h1><p>These dreams are inside their 7-day watch period.</p></div>
             {active.map(group => (
-              <section key={group.dreamEntryId} className="journal-card" style={{ display: 'grid', gap: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'grid', gap: '5px' }}>
-                    <h2 style={{ margin: 0 }}>{group.dreamerName}</h2>
+              <section key={group.dreamEntryId} className="journal-card" style={{ display: 'grid', gap: '18px' }}>
+
+                {/* Header row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  <div style={{ display: 'grid', gap: '6px' }}>
+                    <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 900, letterSpacing: '-0.03em', fontFamily: 'system-ui,sans-serif', color: 'var(--aurora-text)' }}>
+                      {group.dreamerName}
+                    </h2>
                     {group.newHitsSinceLastCheck > 0 && (
-                      <span style={{ display: 'inline-flex', padding: '4px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: 'rgba(216,164,91,0.16)', border: '1px solid rgba(216,164,91,0.35)', color: 'var(--clay)', width: 'fit-content' }}>
-                        {group.newHitsSinceLastCheck} new hit{group.newHitsSinceLastCheck !== 1 ? 's' : ''} since last refresh
+                      <span style={{ display: 'inline-flex', padding: '4px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: 'rgba(255,204,80,0.18)', border: '1px solid rgba(255,204,80,0.38)', color: '#ffcc50', width: 'fit-content' }}>
+                        ✦ {group.newHitsSinceLastCheck} new hit{group.newHitsSinceLastCheck !== 1 ? 's' : ''} since last refresh
                       </span>
                     )}
-                    <div style={{ fontSize: '14px', color: 'var(--ink-light)' }}>Window: {group.activeStart} → {group.activeEnd}</div>
-                    {group.lastCheckedAt && <div style={{ fontSize: '12px', color: 'var(--ink-light)', opacity: 0.6 }}>Last checked: {String(group.lastCheckedAt).slice(0, 16).replace('T', ' ')} UTC</div>}
-                    <div style={{ fontSize: '11px', opacity: 0.35 }}>ID: {group.dreamEntryId}</div>
+                    <div style={{ fontSize: '13px', color: 'var(--aurora-text2)', fontFamily: 'monospace' }}>
+                      {group.activeStart} → {group.activeEnd}
+                    </div>
+                    {group.lastCheckedAt && (
+                      <div style={{ fontSize: '11px', color: 'var(--aurora-text3)' }}>
+                        Checked {String(group.lastCheckedAt).slice(0, 16).replace('T', ' ')} UTC
+                      </div>
+                    )}
                   </div>
-                  <div className="journal-card-flat" style={{ minWidth: '180px', display: 'grid', gap: '5px', fontSize: '13px' }}>
-                    <div><strong>Cash 3:</strong> {group.cash3Numbers.length} numbers</div>
-                    <div><strong>Cash 4:</strong> {group.cash4Numbers.length} numbers</div>
-                    <div><strong>Watch Items:</strong> {group.totalWatchItems}</div>
-                    <div><strong>States:</strong> {group.statesTracked.length}</div>
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
-                  <div className="journal-card-flat">
-                    <strong>Cash 3</strong>
-                    <p style={{ marginTop: '8px', color: 'var(--ink-light)', fontFamily: 'monospace', fontSize: '0.84rem' }}>{group.cash3Numbers.length ? group.cash3Numbers.join(', ') : 'None'}</p>
-                  </div>
-                  <div className="journal-card-flat">
-                    <strong>Cash 4</strong>
-                    <p style={{ marginTop: '8px', color: 'var(--ink-light)', fontFamily: 'monospace', fontSize: '0.84rem' }}>{group.cash4Numbers.length ? group.cash4Numbers.join(', ') : 'None'}</p>
-                  </div>
-                </div>
-                <div className="journal-card-flat">
-                  <strong>Mapped Terms</strong>
-                  <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
-                    {Object.entries(group.termMap).map(([term, payload]) => (
-                      <div key={term} style={{ border: '1px solid rgba(120,90,85,0.14)', borderRadius: '12px', padding: '10px', background: 'rgba(255,248,242,0.80)', fontSize: '13px' }}>
-                        <strong>{term}</strong>
-                        <div style={{ marginTop: '4px', color: 'var(--ink-light)' }}>
-                          Cash 3: {payload.cash3.join(', ') || 'None'} · Cash 4: {payload.cash4.join(', ') || 'None'}
-                        </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {[
+                      { label: 'C3', val: group.cash3Numbers.length, color: 'var(--aurora-coral)' },
+                      { label: 'C4', val: group.cash4Numbers.length, color: 'var(--aurora-purple)' },
+                      { label: 'Items', val: group.totalWatchItems, color: 'var(--aurora-green)' },
+                    ].map(s => (
+                      <div key={s.label} style={{ textAlign: 'center', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '14px', padding: '8px 14px', minWidth: '54px' }}>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 900, color: s.color, lineHeight: 1, letterSpacing: '-0.04em', fontFamily: 'system-ui,sans-serif' }}>{s.val}</div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--aurora-text3)', textTransform: 'uppercase', letterSpacing: '0.09em', marginTop: '3px' }}>{s.label}</div>
                       </div>
                     ))}
                   </div>
                 </div>
+
+                {/* Number chips */}
+                <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                  <div>
+                    <div style={{ fontSize: '10px', fontWeight: 800, color: 'var(--aurora-coral)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '8px' }}>
+                      Cash 3 — {group.cash3Numbers.length} numbers
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {group.cash3Numbers.length > 0
+                        ? group.cash3Numbers.map((n: string) => (
+                            <span key={n} style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '14px', background: 'rgba(255,107,74,0.14)', border: '1px solid rgba(255,107,74,0.28)', borderRadius: '8px', padding: '4px 10px', color: 'var(--aurora-coral2)', letterSpacing: '0.06em' }}>{n}</span>
+                          ))
+                        : <span style={{ color: 'var(--aurora-text3)', fontSize: '13px', fontStyle: 'italic' }}>None</span>
+                      }
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '10px', fontWeight: 800, color: 'var(--aurora-purple)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '8px' }}>
+                      Cash 4 — {group.cash4Numbers.length} numbers
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {group.cash4Numbers.length > 0
+                        ? group.cash4Numbers.map((n: string) => (
+                            <span key={n} style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '14px', background: 'rgba(160,144,255,0.14)', border: '1px solid rgba(160,144,255,0.28)', borderRadius: '8px', padding: '4px 10px', color: 'var(--aurora-purple)', letterSpacing: '0.06em' }}>{n}</span>
+                          ))
+                        : <span style={{ color: 'var(--aurora-text3)', fontSize: '13px', fontStyle: 'italic' }}>None</span>
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mapped terms */}
+                <div>
+                  <div style={{ fontSize: '10px', fontWeight: 800, color: 'var(--aurora-gold)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '10px' }}>
+                    Mapped Terms — {Object.keys(group.termMap).length} terms
+                  </div>
+                  <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                    {Object.entries(group.termMap).map(([term, payload]: [string, any]) => (
+                      <div key={term} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '14px', padding: '12px 14px' }}>
+                        <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--aurora-text)', letterSpacing: '-0.02em', marginBottom: '8px', fontFamily: 'system-ui,sans-serif' }}>
+                          {term}
+                        </div>
+                        {payload.cash3?.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--aurora-coral)', textTransform: 'uppercase', letterSpacing: '0.10em', alignSelf: 'center', marginRight: '2px' }}>C3</span>
+                            {payload.cash3.map((n: string) => (
+                              <span key={n} style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '13px', background: 'rgba(255,107,74,0.12)', border: '1px solid rgba(255,107,74,0.24)', borderRadius: '6px', padding: '2px 7px', color: 'var(--aurora-coral2)' }}>{n}</span>
+                            ))}
+                          </div>
+                        )}
+                        {payload.cash4?.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                            <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--aurora-purple)', textTransform: 'uppercase', letterSpacing: '0.10em', alignSelf: 'center', marginRight: '2px' }}>C4</span>
+                            {payload.cash4.map((n: string) => (
+                              <span key={n} style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '13px', background: 'rgba(160,144,255,0.12)', border: '1px solid rgba(160,144,255,0.24)', borderRadius: '6px', padding: '2px 7px', color: 'var(--aurora-purple)' }}>{n}</span>
+                            ))}
+                          </div>
+                        )}
+                        {(!payload.cash3?.length && !payload.cash4?.length) && (
+                          <span style={{ color: 'var(--aurora-text3)', fontSize: '12px', fontStyle: 'italic' }}>No mapped numbers</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
               </section>
             ))}
           </section>
@@ -200,8 +258,8 @@ export default function ActiveWindowsPage() {
             {expired.map(group => (
               <section key={group.dreamEntryId} className="journal-card-flat" style={{ opacity: 0.75 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
-                  <div><strong>{group.dreamerName}</strong><div style={{ fontSize: '13px', color: 'var(--ink-light)' }}>{group.activeStart} → {group.activeEnd}</div></div>
-                  <div style={{ fontSize: '13px', color: 'var(--ink-light)' }}>Cash 3: {group.cash3Numbers.length} · Cash 4: {group.cash4Numbers.length}</div>
+                  <div><strong>{group.dreamerName}</strong><div style={{ fontSize: '13px', color: 'var(--aurora-text2)' }}>{group.activeStart} → {group.activeEnd}</div></div>
+                  <div style={{ fontSize: '13px', color: 'var(--aurora-text2)' }}>Cash 3: {group.cash3Numbers.length} · Cash 4: {group.cash4Numbers.length}</div>
                 </div>
               </section>
             ))}

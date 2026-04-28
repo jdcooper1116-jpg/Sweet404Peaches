@@ -126,15 +126,25 @@ export default function Sidebar() {
     }}>
       {/* Wordmark */}
       <div style={{ padding: '6px 10px 4px' }}>
-        <div style={{
-          fontSize: '17px', fontWeight: 900, letterSpacing: '-0.04em',
-          fontFamily: 'system-ui,-apple-system,sans-serif',
-          background: 'linear-gradient(135deg, #ff8a6a, #a090ff)',
-          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-        }}>Sweet404Peaches</div>
-        <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '10.5px', marginTop: '3px', letterSpacing: '0.02em' }}>
-          Dream intelligence · engine-backed
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+          {/* Logo — renders once public/brand/sigil-slumber-logo.png is added */}
+          <img
+            src="/brand/sigil-slumber-logo.png"
+            alt="Sigil & Slumber"
+            width={32} height={32}
+            style={{ borderRadius: '8px', flexShrink: 0 }}
+            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          />
+          <div style={{
+            fontSize: '17px', fontWeight: 900, letterSpacing: '-0.04em',
+            fontFamily: 'system-ui,-apple-system,sans-serif',
+            background: 'linear-gradient(135deg, #ff8a6a, #a090ff)',
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+          }}>Sigil &amp; Slumber</div>
+        </div>
+        <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '10.5px', marginTop: '2px', letterSpacing: '0.02em' }}>
+          Dreams decoded. Numbers revealed.
         </div>
         <div style={{
           height: '1px', marginTop: '14px',
@@ -157,11 +167,11 @@ export default function Sidebar() {
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <Users size={12} strokeWidth={1.8} color="rgba(255,138,106,0.80)" />
           <strong style={{ fontSize: '11px', fontFamily: 'system-ui,sans-serif', color: 'rgba(255,255,255,0.80)' }}>
-            Peach Ledger Studio
+            Sigil &amp; Slumber
           </strong>
         </div>
         <div style={{ color: 'rgba(255,255,255,0.30)', fontSize: '10.5px' }}>
-          Where dreams leave numbers.
+          Every dream is a sigil.
         </div>
       </section>
     </aside>
