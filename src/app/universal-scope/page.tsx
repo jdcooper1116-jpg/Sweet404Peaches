@@ -9,6 +9,13 @@ import {
   buildFellProof, buildStateFocus, buildFocusRecs, buildScopeStats,
   type FocusTier,
 } from '@/lib/intelligence/universalScope';
+import {
+  groupTermsBySymbolFamily, type SymbolFamilySignal,
+} from '@/lib/intelligence/symbolFamilies';
+import {
+  buildCommunityNameMap, displayDreamerName as displayName,
+  modeSwitchLabel, nextMode, MODE_LABELS, type DisplayMode,
+} from '@/lib/intelligence/communityDisplay';
 
 // ─── Visual helpers ───────────────────────────────────────────────────────────
 
@@ -119,7 +126,7 @@ export default function UniversalScopePage() {
   const [error,       setError]       = useState('');
   const [quotaError,  setQuotaError]  = useState(false);
   const [expanded,    setExpanded]    = useState(false);
-  const [communityMode, setCommunityMode] = useState(false);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('owner');
 
   // ── Load — quota-safe, same limits as previous pass ──────────────────────────
   useEffect(() => {
@@ -177,15 +184,19 @@ export default function UniversalScopePage() {
 
   // Community mode: map dreamer names to Dreamer A, B, C…
   const communityMap = useMemo(() => {
-    const labels = ['A','B','C','D','E','F','G','H'];
     const ids = [...new Set(grouped.map(g => g.dreamerId))];
-    return new Map(ids.map((id, i) => [id, `Dreamer ${labels[i] ?? (i + 1).toString()}`]));
-  }, [grouped]);
+    return buildCommunityNameMap(ids, ownerDisplayName || 'Owner / Self');
+  }, [grouped, ownerDisplayName]);
 
   function dreamerLabel(id: string, name: string): string {
-    if (communityMode) return communityMap.get(id) ?? 'Dreamer ?';
-    return id === 'owner-self' ? (ownerDisplayName || 'Owner / Self') : (name || id);
+    return displayName(id, name, displayMode, communityMap, ownerDisplayName);
   }
+
+  // Symbol family convergence from term signals
+  const symbolFamilySigs: SymbolFamilySignal[] = useMemo(() =>
+    groupTermsBySymbolFamily(termSignals).filter(f => f.terms.length > 0),
+    [termSignals]
+  );
 
   const hasData = grouped.length > 0 || memory.length > 0 || hits.length > 0 || pinned.length > 0;
 
@@ -213,8 +224,8 @@ export default function UniversalScopePage() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <button type="button" className="btn-secondary" onClick={() => setCommunityMode(v => !v)} style={{ fontSize: '12px' }}>
-              {communityMode ? '👥 Community Mode' : '👤 Full Names'}
+            <button type="button" className="btn-secondary" onClick={() => setDisplayMode(m => nextMode(m))} style={{ fontSize: '12px' }}>
+              {MODE_LABELS[displayMode]}
             </button>
             <Link href="/hot-numbers"  className="btn-secondary" style={{ fontSize: '12px' }}>Hot Families</Link>
             <Link href="/playlists"    className="btn-secondary" style={{ fontSize: '12px' }}>State Playlists</Link>
@@ -551,6 +562,34 @@ export default function UniversalScopePage() {
         })()}
 
       </>)}
+
+      {/* Symbol Family Convergence */}
+      {!loading && symbolFamilySigs.filter(f => f.terms.length > 1).length > 0 && (
+        <section className="journal-card">
+          <div style={{ marginBottom:'12px' }}>
+            <h2 style={{ margin:0, fontSize:'1.0rem', fontWeight:900, letterSpacing:'-0.03em', fontFamily:'system-ui,sans-serif', color:'#fff' }}>
+              Symbol Family Convergence
+            </h2>
+            <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', marginTop:'3px' }}>
+              Related symbols active across dreamers — broader theme patterns
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+            {symbolFamilySigs.filter(f => f.terms.length > 1).slice(0, 8).map(f => (
+              <div key={f.familyName} style={{ padding:'9px 13px', borderRadius:'13px',
+                background:`${f.familyColor}14`, border:`1px solid ${f.familyColor}30`,
+                display:'grid', gap:'4px' }}>
+                <span style={{ fontSize:'12px', fontWeight:800, color:f.familyColor,
+                  fontFamily:'system-ui,sans-serif' }}>{f.familyName}</span>
+                <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.50)' }}>
+                  {f.terms.slice(0, 4).join(', ')}
+                  {f.hasFellBefore && <span style={{ color:'#60e09a', marginLeft:'5px' }}>· fell-before</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Quick links */}
       <section style={{ display: 'grid', gap: '8px', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>

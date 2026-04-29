@@ -300,7 +300,13 @@ export default function DreamersPage() {
                         className="btn-secondary"
                         style={{ fontSize: '12px', padding: '5px 12px' }}
                       >
-                        As They Fell Before
+                        As 
+                      <a href={`/dreamers/${idParam}`}
+                        className="btn-primary"
+                        style={{ fontSize: '12px', padding: '5px 12px', textDecoration: 'none' }}
+                      >
+                        View Profile →
+                      </a>They Fell Before
                       </Link>
                       <Link
                         href={`/dictionary?dreamerId=${idParam}`}
