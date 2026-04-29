@@ -168,6 +168,7 @@ export default function DashboardPage() {
   const [memory,      setMemory]      = useState<any[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [error,       setError]       = useState('');
+  const [quotaError,  setQuotaError]  = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -186,7 +187,13 @@ export default function DashboardPage() {
         if (dreamsData.ok)  setDreams(dreamsData.entries   ?? []);
         if (windowsData.ok) setWindows(windowsData.windows ?? []);
         if (memoryData.ok)  setMemory(memoryData.rows       ?? []);
-      } catch (err) { console.error(err); setError('Could not load dashboard data.'); }
+      } catch (err) {
+        console.error(err);
+        const msg = err instanceof Error ? err.message : String(err);
+        const isQuota = msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('429');
+        if (isQuota) setQuotaError(true);
+        setError(isQuota ? 'Firebase quota exhausted. Data may be incomplete. Try again later.' : 'Could not load dashboard data.');
+      }
       finally { setPageLoading(false); }
     }
     if (!authLoading) void load();

@@ -14,19 +14,23 @@ export default function UniversalScopePage() {
   const [dictTerms, setDictTerms] = useState<any[]>([]);
   const [hits,      setHits]      = useState<any[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error,       setError]       = useState('');
+  const [quotaError,  setQuotaError]  = useState(false);
+  const [expanded,    setExpanded]    = useState(false);
 
   useEffect(() => {
     async function load() {
       if (!user) { setPageLoading(false); return; }
       try {
         const uid = encodeURIComponent(user.uid);
+        // Use small limits — this is a summary page, not a full data dump
+        const limit = expanded ? '&limit=200' : '&limit=30';
         const [dr, wr, mr, tr, hr] = await Promise.all([
           fetch(`/api/dreamers?ownerUid=${uid}`),
-          fetch(`/api/dreams/windows?ownerUid=${uid}`),
-          fetch(`/api/fell-before?ownerUid=${uid}`),
-          fetch(`/api/dictionary/terms?ownerUid=${uid}`),
-          fetch(`/api/dreams/hits?ownerUid=${uid}`),
+          fetch(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+          fetch(`/api/fell-before?ownerUid=${uid}&limit=50`),
+          fetch(`/api/dictionary/terms?ownerUid=${uid}&limit=100`),
+          fetch(`/api/dreams/hits?ownerUid=${uid}${limit}`),
         ]);
         const [dd, wd, md, td, hd] = await Promise.all([dr.json(), wr.json(), mr.json(), tr.json(), hr.json()]);
         if (dd.ok) setDreamers(dd.dreamers ?? []);
@@ -34,13 +38,16 @@ export default function UniversalScopePage() {
         if (md.ok) setMemory(md.rows        ?? []);
         if (td.ok) setDictTerms(td.terms    ?? []);
         if (hd.ok) setHits(hd.hits          ?? []);
+        // Check for quota errors in any response
+        const anyQuota = [dd, wd, md, td, hd].some((d: any) => d.quota);
+        if (anyQuota) setQuotaError(true);
       } catch (err) {
         console.error(err);
         setError('Could not load Universal Scope data.');
       } finally { setPageLoading(false); }
     }
     if (!authLoading) void load();
-  }, [user, authLoading]);
+  }, [user, authLoading, expanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const today = new Date().toISOString().slice(0, 10);
   const liveWins = useMemo(() =>
@@ -122,8 +129,26 @@ export default function UniversalScopePage() {
           ))}
         </section>
 
+        {/* Expand for more data */}
+        {!pageLoading && (
+          <div style={{ display:'flex',gap:'10px',alignItems:'center' }}>
+            <button type="button" className="btn-secondary"
+              onClick={() => { setExpanded(true); setPageLoading(true); /* re-trigger useEffect */ }}
+              style={{ fontSize:'12px' }}>
+              {expanded ? 'Showing expanded data' : 'Load more data'}
+            </button>
+            <span style={{ fontSize:'11px',color:'rgba(255,255,255,0.35)' }}>
+              Showing summary limits to protect Firebase quota. Click to expand.
+            </span>
+          </div>
+        )}
         {pageLoading && <section className="journal-card"><p>Loading Universal Scope…</p></section>}
-        {error       && <section className="journal-card-flat" style={{ borderColor:'#e9c2c2',background:'#fff4f4',color:'#8a2f2f' }}>{error}</section>}
+        {quotaError && (
+          <div style={{ padding:'14px 18px',borderRadius:'14px',border:'1px solid rgba(255,204,80,0.28)',background:'rgba(255,204,80,0.08)',color:'#ffcc50',fontSize:'13px',lineHeight:1.7 }}>
+            <strong>⚠ Firebase quota limit reached.</strong> Some data may be incomplete. Wait a moment and refresh, or reduce the dataset size.
+          </div>
+        )}
+        {error && !quotaError && <section className="journal-card-flat" style={{ borderColor:'rgba(255,85,85,0.28)',background:'rgba(255,85,85,0.10)',color:'#ff9090' }}>{error}</section>}
 
         {!pageLoading && !error && (
           <section style={{ display:'grid',gap:'24px',gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))' }}>

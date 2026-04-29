@@ -24,6 +24,12 @@ import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
 
 export const dynamic = 'force-dynamic';
 
+// ── Quota error helper ────────────────────────────────────────────────────────
+function isQuotaError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('429');
+}
+
 // ─── Shape-normalisation helper ───────────────────────────────────────────────
 
 type FlatRow = {
@@ -116,11 +122,14 @@ function expandDoc(docId: string, data: Record<string, any>, ownerUid: string): 
 
 export async function GET(req: NextRequest) {
   try {
-    const params    = req.nextUrl.searchParams;
-    const ownerUid  = resolveOwnerUid(params.get('ownerUid'));
-    const dreamerId = params.get('dreamerId') ?? '';
-    const source    = params.get('source')    ?? '';
-    const maxDocs   = Math.min(Number(params.get('limit') ?? 2000), 5000);
+    const params      = req.nextUrl.searchParams;
+    const ownerUid    = resolveOwnerUid(params.get('ownerUid'));
+    const dreamerId   = params.get('dreamerId')  ?? '';
+    const source      = params.get('source')     ?? '';
+    const maxDocs     = Math.min(Number(params.get('limit') ?? 500), 1000);
+    // includeHits=true joins personalHitMappings — expensive, opt-in only.
+    // The dictionary page needs this; other consumers (playlists, hot-numbers) do not.
+    const includeHits = params.get('includeHits') === 'true';
 
     const db = getAdminDb();
 
@@ -134,32 +143,32 @@ export async function GET(req: NextRequest) {
 
     if (source) tmQuery = tmQuery.where('source', '==', source) as any;
 
-    // personalHitMappings query — dreamer-scoped when dreamerId provided
-    let hitQuery = db
-      .collection('personalHitMappings')
-      .where('ownerUid', '==', ownerUid);
-
-    if (dreamerId) {
-      hitQuery = hitQuery.where('dreamerId', '==', dreamerId) as any;
-    }
-
-    const [tmSnap, hitSnap] = await Promise.all([
-      (tmQuery as any).limit(maxDocs).get(),
-      hitQuery.get(),
-    ]);
-
-    // Hit lookup — key includes dreamerId so hits are never shared across dreamers
-    // key: "dreamerId::termLabel::number::gameType"
+    // personalHitMappings join — only when includeHits=true (saves reads on most calls)
     const hitMap = new Map<string, number>();
-    for (const doc of hitSnap.docs) {
-      const d   = doc.data();
-      const did = String(d.dreamerId || 'owner-self');
-      const num = String(d.number    || '');
-      const gt  = String(d.gameType  || '');
-      const tl  = String(d.termLabel || '');
-      if (!num || !gt || !tl) continue;
-      const key = `${did}::${tl}::${num}::${gt}`;
-      hitMap.set(key, (hitMap.get(key) ?? 0) + (Number(d.hitCount) || 1));
+
+    let tmSnap: any;
+    if (includeHits) {
+      let hitQuery = db.collection('personalHitMappings').where('ownerUid', '==', ownerUid);
+      if (dreamerId) hitQuery = hitQuery.where('dreamerId', '==', dreamerId) as any;
+
+      const [tm, ht] = await Promise.all([
+        (tmQuery as any).limit(maxDocs).get(),
+        (hitQuery as any).limit(500).get(),
+      ]);
+      tmSnap = tm;
+
+      for (const doc of ht.docs) {
+        const d   = doc.data();
+        const did = String(d.dreamerId || 'owner-self');
+        const num = String(d.number    || '');
+        const gt  = String(d.gameType  || '');
+        const tl  = String(d.termLabel || '');
+        if (!num || !gt || !tl) continue;
+        const key = `${did}::${tl}::${num}::${gt}`;
+        hitMap.set(key, (hitMap.get(key) ?? 0) + (Number(d.hitCount) || 1));
+      }
+    } else {
+      tmSnap = await (tmQuery as any).limit(maxDocs).get();
     }
 
     // Expand all documents into flat rows, then apply dreamerId filter in-memory.
@@ -191,12 +200,16 @@ export async function GET(req: NextRequest) {
       return a.number.localeCompare(b.number, undefined, { numeric: true });
     });
 
-    return NextResponse.json({ ok: true, terms, count: terms.length });
+    const res = NextResponse.json({ ok: true, terms, count: terms.length, includeHits, limit: maxDocs });
+    res.headers.set('Cache-Control', 'private, max-age=30');
+    return res;
   } catch (err) {
     console.error('[api/dictionary/terms GET] error:', err);
+    const q = isQuotaError(err);
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : 'Failed to load dictionary terms.' },
-      { status: 500 }
+      { ok: false, quota: q,
+        error: q ? 'Firebase quota exhausted. Try again later.' : err instanceof Error ? err.message : 'Failed to load dictionary terms.' },
+      { status: q ? 429 : 500 }
     );
   }
 }

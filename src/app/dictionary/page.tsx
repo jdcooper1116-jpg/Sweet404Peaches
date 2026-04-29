@@ -86,7 +86,7 @@ type ParsedBatchResult = {
 const HEADING_RE = /^[A-Z](\s*[–\-]\s*[A-Z])?[.\s]*$/;
 
 // A separator in dreambook format: —  or  -  surrounded by optional spaces
-const DB_SEP_RE  = /^(.*?)\s*(?:[—–:]|\s-\s)\s*(.+)$/;
+const DB_SEP_RE  = /^(.*?)\s*[—\-–:]\s*(.+)$/;
 
 function parseBatch(text: string): ParsedBatchResult {
   const seenKeys  = new Set<string>();
@@ -219,12 +219,17 @@ export default function DictionaryPage() {
       const activeDid = did !== undefined ? did : selectedDreamerId;
       const qs = new URLSearchParams({ ownerUid: user.uid });
       if (activeDid) qs.set('dreamerId', activeDid);
+      qs.set('includeHits', 'true');  // dictionary page needs hit enrichment
       const res  = await fetch('/api/dictionary/terms?' + qs.toString());
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Load failed.');
       setRawRows(Array.isArray(data.terms) ? data.terms : []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load dictionary.');
+      const msg = err instanceof Error ? err.message : String(err);
+      const isQuota = msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('429');
+      setError(isQuota
+        ? 'Firebase quota exhausted. Dictionary may be incomplete. Try again later or use a dreamer filter to reduce results.'
+        : msg);
     } finally { setLoading(false); }
   }
 

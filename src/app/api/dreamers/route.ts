@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
     const snap = await db
       .collection('dreamers')
       .where('ownerUid', '==', ownerUid)
+      .limit(100)    // dreamers collections are small; 100 is ample
       .get();
 
     const dreamers = snap.docs.map((doc: any) => {
@@ -41,7 +42,9 @@ export async function GET(req: NextRequest) {
       String(a.displayName ?? '').localeCompare(String(b.displayName ?? ''))
     );
 
-    return NextResponse.json({ ok: true, dreamers, count: dreamers.length });
+    const res = NextResponse.json({ ok: true, dreamers, count: dreamers.length });
+    res.headers.set('Cache-Control', 'private, max-age=60');  // dreamers change infrequently
+    return res;
   } catch (err) {
     console.error('[api/dreamers GET] error:', err);
     return NextResponse.json(
