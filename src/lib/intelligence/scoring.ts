@@ -13,11 +13,10 @@ export type TermStrengthRow = {
 export type DreamerReliabilityRow = {
   dreamerScope: string;
   totalPins: number;
-  played: number;
-  won: number;
+  suggested: number;
+  pinned: number;
   archived: number;
-  resolved: number;
-  winRate: number;
+  active: number;
   score: number;
 };
 
@@ -140,44 +139,43 @@ export function buildDreamerReliabilityStats(pins: any[]): DreamerReliabilityRow
   const map = new Map<string, {
     scope: string;
     totalPins: number;
-    played: number;
-    won: number;
+    suggested: number;
+    pinned: number;
     archived: number;
   }>();
 
   for (const row of pins) {
-    const scope = row.dreamerScope || 'ALL';
+    const scope = row.dreamerScope || row.dreamerName || row.dreamerId || 'ALL';
     if (!map.has(scope)) {
       map.set(scope, {
         scope,
         totalPins: 0,
-        played: 0,
-        won: 0,
+        suggested: 0,
+        pinned: 0,
         archived: 0,
       });
     }
 
     const item = map.get(scope)!;
     item.totalPins += 1;
-    if (row.status === 'played') item.played += 1;
-    if (row.status === 'won') item.won += 1;
-    if (row.status === 'archived') item.archived += 1;
+
+    if (row.status === 'suggested') item.suggested += 1;
+    else if (row.status === 'archived') item.archived += 1;
+    else item.pinned += 1;
   }
 
   return Array.from(map.values())
     .map(item => {
-      const resolved = item.played + item.won;
-      const winRate = resolved ? item.won / resolved : 0;
+      const active = item.suggested + item.pinned;
 
       return {
         dreamerScope: item.scope,
         totalPins: item.totalPins,
-        played: item.played,
-        won: item.won,
+        suggested: item.suggested,
+        pinned: item.pinned,
         archived: item.archived,
-        resolved,
-        winRate,
-        score: item.won * 20 + resolved * 4 + winRate * 100,
+        active,
+        score: item.pinned * 8 + item.suggested * 5 + active * 3,
       };
     })
     .sort((a, b) => {
