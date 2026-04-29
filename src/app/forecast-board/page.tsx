@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import type { PersonalMappingRow } from '@/lib/intelligence/termDictionary';
 import { buildGroupedTermDictionary, flattenDictionary } from '@/lib/intelligence/termDictionary';
@@ -15,6 +15,36 @@ import {
   buildBoxedSignals, buildFellProof, buildFocusRecs,
   type FocusRec,
 } from '@/lib/intelligence/universalScope';
+
+// ── Error banner ─────────────────────────────────────────────────────────────
+function ErrorBanner({ msg }: { msg: string }) {
+  const isIndex = msg.includes('index') || msg.includes('FAILED_PRECONDITION');
+  const isQuota = msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
+  const [open, setOpen] = React.useState(false);
+  const border = isIndex || isQuota ? 'rgba(255,204,80,0.28)' : 'rgba(255,85,85,0.28)';
+  const bg     = isIndex || isQuota ? 'rgba(255,204,80,0.08)' : 'rgba(255,85,85,0.10)';
+  const color  = isIndex || isQuota ? '#ffcc50'                : '#ff9090';
+  return (
+    <div style={{ padding:'14px 16px', borderRadius:'14px', border:`1px solid ${border}`, background:bg, color, fontSize:'13px', lineHeight:1.7 }}>
+      {isIndex && <strong>⚠ Firestore index required</strong>}
+      {isQuota && <strong>⚠ Firebase quota exhausted</strong>}
+      {!isIndex && !isQuota && <strong>⚠ Could not load data</strong>}
+      <br />
+      {isIndex && 'Create the suggested Firebase index, wait until active, then refresh. '}
+      {isQuota && 'Read quota is temporarily exhausted. Try again after reset or reduce testing. '}
+      {!isIndex && !isQuota && msg}
+      {(isIndex || isQuota) && (
+        <span>
+          <button type="button" onClick={() => setOpen(o => !o)}
+            style={{ marginLeft:'8px', fontSize:'11px', opacity:0.7, background:'none', border:'none', cursor:'pointer', color:'inherit', textDecoration:'underline' }}>
+            {open ? 'hide details' : 'details'}
+          </button>
+          {open && <div style={{ marginTop:'6px', fontSize:'11px', opacity:0.75, wordBreak:'break-all', fontFamily:'monospace' }}>{msg}</div>}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export default function ForecastBoardPage() {
   const { user } = useAuth();
@@ -124,7 +154,7 @@ export default function ForecastBoardPage() {
         </section>
 
         {loading && <section className="journal-card"><p>Loading Forecast Board…</p></section>}
-        {error   && <section className="journal-card-flat" style={{ borderColor: 'rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</section>}
+        {error && <ErrorBanner msg={error} />}
 
         {quotaError && (
           <div style={{ padding:'12px 16px',borderRadius:'14px',border:'1px solid rgba(255,204,80,0.28)',background:'rgba(255,204,80,0.08)',color:'#ffcc50',fontSize:'13px' }}>
