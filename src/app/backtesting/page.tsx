@@ -1,665 +1,123 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import Sidebar from '@/components/layout/Sidebar';
-import PageIntro from '@/components/ui/PageIntro';
 
-// ─── Candidate normalization ──────────────────────────────────────────────────
-//
-// Strips decorations (* ( ) . - etc), splits on comma+whitespace,
-// keeps only valid 3- or 4-digit strings, deduplicates.
-// Numbers are ALWAYS kept as strings — leading zeros preserved.
+// Static workflow launcher — no data fetching needed.
+// Heavy data lives in the individual sub-pages (intake, replay, archive, evidence).
 
-function normalizeCandidates(raw: string): string[] {
-  return [...new Set(
-    raw
-      .replace(/[^0-9,\s]/g, ' ')   // strip *, (, ), ., -, etc
-      .split(/[,\s]+/)               // split on comma or any whitespace
-      .map(x => x.trim())
-      .filter(x => /^\d{3,4}$/.test(x))  // keep only 3- or 4-digit strings
-  )];
-}
+const CARDS = [
+  {
+    href:    '/backtesting/intake',
+    icon:    '📖',
+    title:   'Historical Dream Intake',
+    desc:    'Add historical dream records with dreamer identity, mapped terms, and number candidates. Runs a full engine replay across all states automatically.',
+    badge:   'Step 1',
+  },
+  {
+    href:    '/backtesting/replay',
+    icon:    '⚡',
+    title:   'Replay Lab',
+    desc:    'Select a saved historical dream and re-run it through the Lottery Engine. Confirms hits and saves dreamer-scoped evidence.',
+    badge:   'Step 2',
+  },
+  {
+    href:    '/backtesting/archive',
+    icon:    '🗂',
+    title:   'Archive',
+    desc:    'Review all saved historical dream test records, their replay status, hit counts, and dreamer attribution.',
+    badge:   'Review',
+  },
+  {
+    href:    '/backtesting/evidence',
+    icon:    '🔍',
+    title:   'Evidence Tracker',
+    desc:    'Inspect confirmed evidence patterns across historical replays. Identify strong terms, states, and number families.',
+    badge:   'Analytics',
+  },
+];
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type BacktestHit = {
-  candidate:      string;
-  draw_date:      string;
-  draw_time:      string;
-  winning_number: string;
-  match_type:     string;
-  is_verified?:   boolean;
-  source_name?:   string;
-};
-
-type BacktestResponse = {
-  hit_count:      number;
-  hit_dates:      string[];
-  hit_draw_times: string[];
-  summary:        string;
-  hits:           BacktestHit[];
-  all_draws?:     unknown[];
-  coverage_gaps?: unknown[];
-};
-
-type MergedHit = BacktestHit & {
-  state:          string;
-  anchor_date?:   string;
-  lookahead_days?: number;
-  label?:         string;
-};
-
-type AllStatesResponse = {
-  scope:                  'all-states';
-  game_type:              string;
-  anchor_date:            string;
-  lookahead_days:         number;
-  candidates:             string[];
-  label:                  string;
-  overall_hit_count:      number;
-  states_attempted:       number;
-  states_succeeded:       number;
-  states_with_hits:       string[];
-  failed_states:          string[];
-  combined_hits:          MergedHit[];
-  results_by_state:       Record<string, unknown>;
-  coverage_gaps_by_state: Record<string, unknown[]>;
-};
-
-type AnyBacktestResponse = BacktestResponse | AllStatesResponse;
-
-type MatchMode = 'exact' | 'box' | 'both';
-type Scope     = 'single' | 'all-states';
-
-type DebugInfo = {
-  normalized_candidates: string[];
-  candidates_count:      number;
-  mode:                  MatchMode;
-  game_type:             string;
-  anchor_date:           string;
-  lookahead_days:        number;
-  scope:                 Scope;
-  state:                 string;
-  raw_input:             string;
-};
-
-function isAllStatesResponse(
-  r: AnyBacktestResponse | null
-): r is AllStatesResponse {
-  return !!r && 'scope' in r && r.scope === 'all-states';
-}
-
-// ─── Hit card ────────────────────────────────────────────────────────────────
-
-function HitCard({ hit, state }: { hit: BacktestHit; state?: string }) {
-  const isExact = hit.match_type === 'exact';
+export default function BacktestingPortalPage() {
   return (
-    <article
-      className="journal-card-flat"
-      style={{ borderLeft: `3px solid ${isExact ? '#4a7c59' : '#a07c4a'}` }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        {state && (
-          <span style={{
-            padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700,
-            background: 'rgba(108,120,255,0.18)', border: '1px solid rgba(108,120,255,0.35)',
-            color: '#b0b8ff',
-          }}>
-            {state}
-          </span>
-        )}
-        <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '1rem' }}>
-          {hit.candidate}
-        </span>
-        <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>→</span>
-        <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '1rem' }}>
-          {hit.winning_number}
-        </span>
-        <span style={{
-          padding: '2px 8px', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 700,
-          background:  isExact ? 'rgba(74,124,89,0.25)'   : 'rgba(160,124,74,0.25)',
-          color:       isExact ? '#6dbf8a'                : '#d4a95a',
-          border: `1px solid ${isExact ? 'rgba(74,124,89,0.5)' : 'rgba(160,124,74,0.5)'}`,
-        }}>
-          {isExact ? '⬛ Exact / Straight' : '◻ Box'}
-        </span>
-        <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem' }}>
-          {hit.draw_date} · {hit.draw_time}
-          {hit.source_name ? ` · ${hit.source_name}` : ''}
-          {hit.is_verified ? ' ✓' : ''}
-        </span>
-      </div>
-    </article>
-  );
-}
+    <div className="page-shell" style={{ padding:'clamp(18px,3vw,32px)', display:'grid', gap:'24px' }}>
 
-// ─── Inner page ───────────────────────────────────────────────────────────────
-
-function BacktestingPageInner() {
-  const searchParams = useSearchParams();
-
-  const [stateCode,      setStateCode]      = useState('GA');
-  const [gameType,       setGameType]       = useState('pick3');
-  const [anchorDate,     setAnchorDate]     = useState(new Date().toISOString().slice(0, 10));
-  const [lookaheadDays,  setLookaheadDays]  = useState('7');
-  const [candidatesText, setCandidatesText] = useState('');
-  const [label,          setLabel]          = useState('');
-  const [scope,          setScope]          = useState<Scope>('single');
-  const [matchMode,      setMatchMode]      = useState<MatchMode>('both');
-
-  const [working,    setWorking]   = useState(false);
-  const [error,      setError]     = useState('');
-  const [result,     setResult]    = useState<AnyBacktestResponse | null>(null);
-  const [debugInfo,  setDebugInfo] = useState<DebugInfo | null>(null);
-  const [showDebug,  setShowDebug] = useState(false);
-
-  // Prefill from URL params
-  useEffect(() => {
-    const s          = searchParams.get('state');
-    const g          = searchParams.get('game');
-    const anchor     = searchParams.get('anchor');
-    const lookahead  = searchParams.get('lookahead');
-    const candidates = searchParams.get('candidates');
-    const lbl        = searchParams.get('label');
-    const sc         = searchParams.get('scope');
-    const mode       = searchParams.get('mode');
-
-    if (s)          setStateCode(s.toUpperCase());
-    if (g)          setGameType(g.toLowerCase());
-    if (anchor)     setAnchorDate(anchor);
-    if (lookahead)  setLookaheadDays(lookahead);
-    if (candidates) setCandidatesText(candidates);
-    if (lbl)        setLabel(lbl);
-    if (sc === 'all-states')                                  setScope('all-states');
-    if (mode === 'exact' || mode === 'box' || mode === 'both') setMatchMode(mode);
-  }, [searchParams]);
-
-  async function runBacktest() {
-    setWorking(true);
-    setError('');
-    setResult(null);
-    setDebugInfo(null);
-
-    try {
-      // Normalize — this is the only place candidates touch the engine
-      const candidates = normalizeCandidates(candidatesText);
-
-      if (candidates.length === 0) {
-        throw new Error(
-          'No valid 3- or 4-digit candidates found. ' +
-          'Enter numbers separated by commas or spaces. ' +
-          'Decorations like * ( ) are stripped automatically.'
-        );
-      }
-
-      if (scope === 'single' && !stateCode.trim()) {
-        throw new Error('State code is required for single-state mode.');
-      }
-      if (!anchorDate.trim()) throw new Error('Anchor date is required.');
-
-      const payload =
-        scope === 'all-states'
-          ? {
-              scope:          'all-states' as const,
-              game_type:      gameType.trim().toLowerCase(),
-              anchor_date:    anchorDate,
-              lookahead_days: Number(lookaheadDays),
-              candidates,
-              mode:           matchMode,
-              label:          label.trim() || undefined,
-            }
-          : {
-              state:          stateCode.trim().toUpperCase(),
-              game_type:      gameType.trim().toLowerCase(),
-              anchor_date:    anchorDate,
-              lookahead_days: Number(lookaheadDays),
-              candidates,
-              mode:           matchMode,
-              label:          label.trim() || undefined,
-            };
-
-      // Record debug info before the call
-      setDebugInfo({
-        normalized_candidates: candidates,
-        candidates_count:      candidates.length,
-        mode:                  matchMode,
-        game_type:             payload.game_type,
-        anchor_date:           anchorDate,
-        lookahead_days:        Number(lookaheadDays),
-        scope,
-        state:                 scope === 'single' ? stateCode.trim().toUpperCase() : 'all-states',
-        raw_input:             candidatesText,
-      });
-
-      const res  = await fetch('/api/backtest', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(payload),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data?.details?.detail || data?.error || 'Backtest failed.');
-      }
-
-      setResult(data);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Backtest failed.');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  const labelStyle: React.CSSProperties = {
-    display: 'grid',
-    gap: '8px',
-    color: 'var(--ink-light)',
-    fontWeight: 600,
-  };
-
-  const modeBtn = (active: boolean): React.CSSProperties => ({
-    padding: '7px 18px',
-    borderRadius: '6px',
-    border:     active ? '2px solid var(--accent, #6C78FF)' : '2px solid rgba(255,255,255,0.15)',
-    background: active ? 'rgba(108,120,255,0.18)'           : 'rgba(255,255,255,0.05)',
-    color:      active ? '#fff'                              : 'rgba(255,255,255,0.55)',
-    fontWeight: active ? 700 : 500,
-    cursor:     'pointer',
-    fontSize:   '0.875rem',
-    transition: 'all 0.15s',
-  });
-
-  // Hit breakdowns for display
-  const exactCount = isAllStatesResponse(result as AnyBacktestResponse)
-    ? (result as AllStatesResponse).combined_hits.filter(h => h.match_type === 'exact').length
-    : (result as BacktestResponse)?.hits?.filter(h => h.match_type === 'exact').length ?? 0;
-
-  const boxCount = isAllStatesResponse(result as AnyBacktestResponse)
-    ? (result as AllStatesResponse).combined_hits.filter(h => h.match_type === 'box').length
-    : (result as BacktestResponse)?.hits?.filter(h => h.match_type === 'box').length ?? 0;
-
-  return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        gridTemplateColumns: '280px 1fr',
-        background:
-          'radial-gradient(circle at top left, rgba(228,192,123,0.14), transparent 18%), ' +
-          'radial-gradient(circle at top right, rgba(108,120,255,0.12), transparent 22%), ' +
-          'linear-gradient(135deg, #1A1A2E 0%, #16213E 48%, #0F3460 100%)',
-      }}
-    >
-      <Sidebar />
-
-      <section className="panel-grid" style={{ padding: '32px', display: 'grid', gap: '24px' }}>
-        <PageIntro
-          title="Backtesting"
-          description="Run dream candidates against the Railway lottery-engine historical database."
-          actions={[
-            { href: '/forecast-board', label: 'Forecast Board' },
-            { href: '/dreams',         label: 'Dream Journal'  },
-          ]}
-        />
-
-        {/* ── Input form ─────────────────────────────────────────────────── */}
-        <section className="journal-card">
-          <div className="page-header">
-            <h1>Run Backtest</h1>
-            <p>
-              Candidates are normalized before sending — decorations stripped,
-              leading zeros preserved, 3- and 4-digit numbers only.
+      {/* Header */}
+      <section className="journal-card">
+        <div style={{ display:'flex', justifyContent:'space-between', gap:'16px', flexWrap:'wrap', alignItems:'flex-start' }}>
+          <div>
+            <h1 style={{ margin:0, fontSize:'clamp(1.5rem,3vw,2.1rem)', fontWeight:900,
+              letterSpacing:'-0.04em', fontFamily:'system-ui,sans-serif', color:'#ffffff' }}>
+              Backtesting &amp; Replay
+            </h1>
+            <p style={{ margin:'8px 0 0', color:'rgba(255,255,255,0.55)', fontSize:'14px', lineHeight:1.65, maxWidth:'600px' }}>
+              Replay historical dreams through the Lottery Engine and preserve dreamer-specific evidence.
             </p>
           </div>
-
-          {/* Scope selector */}
-          <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ color: 'var(--ink-light)', fontWeight: 600, fontSize: '0.875rem' }}>
-              Scope:
-            </span>
-            <button style={modeBtn(scope === 'single')}     onClick={() => setScope('single')}>
-              Single State
-            </button>
-            <button style={modeBtn(scope === 'all-states')} onClick={() => setScope('all-states')}>
-              All States
-            </button>
+          <div style={{ display:'flex', gap:'10px', flexWrap:'wrap' }}>
+            <Link href="/daily-ops"       className="btn-secondary" style={{ fontSize:'12px' }}>Daily Ops</Link>
+            <Link href="/universal-scope" className="btn-secondary" style={{ fontSize:'12px' }}>Universal Scope</Link>
+            <Link href="/fell-before"     className="btn-secondary" style={{ fontSize:'12px' }}>As They Fell Before</Link>
           </div>
-
-          {/* Match mode selector */}
-          <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ color: 'var(--ink-light)', fontWeight: 600, fontSize: '0.875rem' }}>
-              Match:
-            </span>
-            <button style={modeBtn(matchMode === 'exact')} onClick={() => setMatchMode('exact')}>
-              Exact / Straight
-            </button>
-            <button style={modeBtn(matchMode === 'box')}   onClick={() => setMatchMode('box')}>
-              Box
-            </button>
-            <button style={modeBtn(matchMode === 'both')}  onClick={() => setMatchMode('both')}>
-              Both
-            </button>
-          </div>
-
-          {/* Form fields */}
-          <div
-            style={{
-              marginTop: '20px',
-              display: 'grid',
-              gap: '16px',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            }}
-          >
-            {scope === 'single' && (
-              <label style={labelStyle}>
-                <span>State</span>
-                <input
-                  className="journal-input"
-                  value={stateCode}
-                  onChange={(e) => setStateCode(e.target.value.toUpperCase().slice(0, 2))}
-                  placeholder="GA"
-                  maxLength={2}
-                />
-              </label>
-            )}
-
-            <label style={labelStyle}>
-              <span>Game Type</span>
-              <select
-                className="journal-select"
-                value={gameType}
-                onChange={(e) => setGameType(e.target.value)}
-              >
-                <option value="pick3">Pick 3 / Cash 3</option>
-                <option value="pick4">Pick 4 / Cash 4</option>
-              </select>
-            </label>
-
-            <label style={labelStyle}>
-              <span>Anchor Date</span>
-              <input
-                className="journal-input"
-                type="date"
-                value={anchorDate}
-                onChange={(e) => setAnchorDate(e.target.value)}
-              />
-            </label>
-
-            <label style={labelStyle}>
-              <span>Lookahead Days</span>
-              <input
-                className="journal-input"
-                type="number"
-                min="1"
-                max="30"
-                value={lookaheadDays}
-                onChange={(e) => setLookaheadDays(e.target.value)}
-              />
-            </label>
-
-            <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
-              <span>
-                Candidates
-                {candidatesText && (
-                  <span style={{ marginLeft: '8px', fontWeight: 400, color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>
-                    → {normalizeCandidates(candidatesText).length} valid after normalization:{' '}
-                    {normalizeCandidates(candidatesText).join(', ') || '—'}
-                  </span>
-                )}
-              </span>
-              <input
-                className="journal-input"
-                value={candidatesText}
-                onChange={(e) => setCandidatesText(e.target.value)}
-                placeholder='817 417, 310***, 562, 470, 222,774,991,443,554,195,(109****)'
-              />
-              <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)', marginTop: '4px' }}>
-                Commas, spaces, *, (, ) all handled. Leading zeros preserved. 3- and 4-digit only.
-              </span>
-            </label>
-
-            <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
-              <span>Label <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></span>
-              <input
-                className="journal-input"
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="e.g. Grandma dream 2019-04-21"
-              />
-            </label>
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px', marginTop: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <button className="btn-primary" onClick={runBacktest} disabled={working}>
-              {working
-                ? scope === 'all-states' ? 'Running all states…' : 'Running…'
-                : scope === 'all-states' ? 'Run All-States Backtest' : 'Run Backtest'}
-            </button>
-            <Link href="/dreams" className="btn-secondary">
-              Dream Journal
-            </Link>
-            {debugInfo && (
-              <button
-                onClick={() => setShowDebug(v => !v)}
-                style={{
-                  background: 'transparent', border: '1px solid rgba(108,120,255,0.35)',
-                  color: '#b0b8ff', borderRadius: '6px', padding: '7px 14px',
-                  fontSize: '0.8rem', cursor: 'pointer',
-                }}
-              >
-                {showDebug ? 'Hide' : 'Show'} Payload Debug
-              </button>
-            )}
-          </div>
-        </section>
-
-        {/* ── Debug panel ────────────────────────────────────────────────── */}
-        {debugInfo && showDebug && (
-          <section className="journal-card-flat" style={{ borderColor: 'rgba(108,120,255,0.3)', background: 'rgba(8,14,36,0.8)' }}>
-            <div className="journal-label" style={{ marginBottom: '8px', color: '#b0b8ff' }}>
-              Payload Sent to Engine
-            </div>
-            <pre style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.75)', overflowX: 'auto', margin: 0, lineHeight: 1.7 }}>
-              {JSON.stringify(debugInfo, null, 2)}
-            </pre>
-          </section>
-        )}
-
-        {/* ── Error ──────────────────────────────────────────────────────── */}
-        {error && (
-          <section className="journal-card-flat" style={{ borderColor: '#f2a6a6', background: 'rgba(110,20,20,0.22)', color: '#fff0f0' }}>
-            {error}
-          </section>
-        )}
-
-        {/* ── Results: all-states ────────────────────────────────────────── */}
-        {result && isAllStatesResponse(result) && (
-          <section className="journal-card">
-            <div className="page-header">
-              <h1>All-States Backtest Result</h1>
-              <p>
-                {result.game_type} · anchor {result.anchor_date} · {result.lookahead_days}-day window
-                {result.label ? ` · ${result.label}` : ''}
-              </p>
-            </div>
-
-            {/* Summary stats */}
-            <div
-              style={{
-                marginTop: '16px',
-                display: 'grid',
-                gap: '12px',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-              }}
-            >
-              <div className="journal-card-flat">
-                <div className="journal-label">Total Hits</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{result.overall_hit_count}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">Exact / Straight</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#6dbf8a' }}>{exactCount}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">Box</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#d4a95a' }}>{boxCount}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">States Attempted</div>
-                <div>{result.states_attempted}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">States Succeeded</div>
-                <div>{result.states_succeeded}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">States With Hits</div>
-                <div>{result.states_with_hits.length}</div>
-              </div>
-            </div>
-
-            {/* Candidates sent */}
-            {result.candidates?.length > 0 && (
-              <div style={{ marginTop: '14px' }}>
-                <div className="journal-label" style={{ marginBottom: '6px' }}>Candidates Sent</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {result.candidates.map(c => (
-                    <span key={c} style={{ fontFamily: 'monospace', fontSize: '0.8rem', padding: '2px 8px', borderRadius: '6px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}>
-                      {c}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* States with hits */}
-            {result.states_with_hits.length > 0 && (
-              <div style={{ marginTop: '14px' }}>
-                <div className="journal-label" style={{ marginBottom: '8px' }}>Hit States</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                  {result.states_with_hits.map(s => (
-                    <span key={s} style={{
-                      padding: '4px 12px', borderRadius: '20px',
-                      background: 'rgba(108,120,255,0.18)', border: '1px solid rgba(108,120,255,0.4)',
-                      color: '#b0b8ff', fontSize: '0.8rem', fontWeight: 700,
-                    }}>
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Failed states */}
-            {result.failed_states.length > 0 && (
-              <div style={{ marginTop: '12px' }}>
-                <div className="journal-label" style={{ marginBottom: '8px' }}>
-                  Failed States ({result.failed_states.length})
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {result.failed_states.map(s => (
-                    <span key={s} style={{
-                      padding: '3px 10px', borderRadius: '20px',
-                      background: 'rgba(242,166,166,0.1)', border: '1px solid rgba(242,166,166,0.3)',
-                      color: '#f2a6a6', fontSize: '0.75rem',
-                    }}>
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Hit cards */}
-            <div style={{ marginTop: '20px', display: 'grid', gap: '10px' }}>
-              {result.combined_hits.length > 0 ? (
-                result.combined_hits.map((hit, idx) => (
-                  <HitCard
-                    key={`${hit.state}-${hit.candidate}-${hit.draw_date}-${idx}`}
-                    hit={hit}
-                    state={hit.state}
-                  />
-                ))
-              ) : (
-                <div className="journal-card-flat">No hits found across all states for this window.</div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* ── Results: single-state ──────────────────────────────────────── */}
-        {result && !isAllStatesResponse(result) && (
-          <section className="journal-card">
-            <div className="page-header">
-              <h1>Backtest Result</h1>
-              <p>{(result as BacktestResponse).summary}</p>
-            </div>
-
-            <div
-              style={{
-                marginTop: '16px',
-                display: 'grid',
-                gap: '12px',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              }}
-            >
-              <div className="journal-card-flat">
-                <div className="journal-label">Total Hits</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>
-                  {(result as BacktestResponse).hit_count}
-                </div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">Exact / Straight</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#6dbf8a' }}>{exactCount}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">Box</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#d4a95a' }}>{boxCount}</div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">Hit Dates</div>
-                <div style={{ fontSize: '0.85rem' }}>
-                  {(result as BacktestResponse).hit_dates?.length
-                    ? (result as BacktestResponse).hit_dates.join(', ')
-                    : '—'}
-                </div>
-              </div>
-              <div className="journal-card-flat">
-                <div className="journal-label">Draw Times</div>
-                <div style={{ fontSize: '0.85rem' }}>
-                  {(result as BacktestResponse).hit_draw_times?.length
-                    ? (result as BacktestResponse).hit_draw_times.join(', ')
-                    : '—'}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: '20px', display: 'grid', gap: '10px' }}>
-              {(result as BacktestResponse).hits?.length ? (
-                (result as BacktestResponse).hits.map((hit, idx) => (
-                  <HitCard
-                    key={`${hit.candidate}-${hit.draw_date}-${idx}`}
-                    hit={hit}
-                  />
-                ))
-              ) : (
-                <div className="journal-card-flat">No hits returned for this window.</div>
-              )}
-            </div>
-          </section>
-        )}
+        </div>
       </section>
-    </main>
-  );
-}
 
-export default function BacktestingPage() {
-  return (
-    <Suspense fallback={<main style={{ minHeight: '100vh', background: '#1A1A2E' }} />}>
-      <BacktestingPageInner />
-    </Suspense>
+      {/* How backtesting evidence flows */}
+      <section style={{ padding:'16px 20px', borderRadius:'16px',
+        border:'1px solid rgba(160,144,255,0.22)', background:'rgba(160,144,255,0.07)' }}>
+        <div style={{ display:'flex', gap:'12px', alignItems:'flex-start' }}>
+          <span style={{ fontSize:'20px', lineHeight:1 }}>💡</span>
+          <div>
+            <strong style={{ color:'#a090ff', fontFamily:'system-ui,sans-serif', fontSize:'13px' }}>
+              How backtesting evidence feeds the system
+            </strong>
+            <p style={{ margin:'6px 0 0', fontSize:'13px', color:'rgba(255,255,255,0.60)', lineHeight:1.7 }}>
+              Backtesting evidence feeds both the <strong style={{ color:'#fff' }}>Universal Dream Dictionary</strong> (every mapped term-number pair)
+              and each dreamer&apos;s <strong style={{ color:'#fff' }}>As They Fell Before memory</strong> (confirmed hits scoped to the correct dreamer).
+              This strengthens State Playlists, Hot Families, Universal Scope, Forecast Board, and Chat recommendations.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Workflow cards */}
+      <section style={{ display:'grid', gap:'14px', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))' }}>
+        {CARDS.map(card => (
+          <Link key={card.href} href={card.href} style={{ textDecoration:'none' }}>
+            <div style={{ padding:'22px 20px', borderRadius:'20px',
+              background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.11)',
+              cursor:'pointer', height:'100%', display:'grid', gap:'10px',
+              transition:'border-color 0.15s', gridTemplateRows:'auto auto 1fr auto' }}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(160,144,255,0.35)')}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.11)')}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                <span style={{ fontSize:'28px', lineHeight:1 }}>{card.icon}</span>
+                <span style={{ padding:'3px 10px', borderRadius:'999px', fontSize:'10px', fontWeight:700,
+                  background:'rgba(160,144,255,0.14)', border:'1px solid rgba(160,144,255,0.28)',
+                  color:'#a090ff', fontFamily:'system-ui,sans-serif', letterSpacing:'0.05em' }}>
+                  {card.badge}
+                </span>
+              </div>
+              <h2 style={{ margin:0, fontSize:'15px', fontWeight:800, color:'#ffffff',
+                fontFamily:'system-ui,sans-serif', letterSpacing:'-0.02em' }}>
+                {card.title}
+              </h2>
+              <p style={{ margin:0, fontSize:'13px', color:'rgba(255,255,255,0.50)', lineHeight:1.65 }}>
+                {card.desc}
+              </p>
+              <div style={{ fontSize:'12px', color:'#a090ff', fontWeight:600, marginTop:'4px' }}>
+                Go to {card.title} →
+              </div>
+            </div>
+          </Link>
+        ))}
+      </section>
+
+      {/* Quick status note */}
+      <section className="journal-card-flat" style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', lineHeight:1.7 }}>
+        <strong style={{ color:'rgba(255,255,255,0.60)' }}>Dreamer scope:</strong> Each historical dream is saved with a selected dreamer.
+        Engine replay evidence is credited to that dreamer — not globally to owner-self.
+        Re-running the same replay is safe: the system prevents double-counting via idempotency keys.
+      </section>
+
+    </div>
   );
 }
