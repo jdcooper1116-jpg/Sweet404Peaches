@@ -1,44 +1,62 @@
+/**
+ * POST /api/backtest/save-engine-replay-hits
+ *
+ * Saves confirmed engine-replay hits to:
+ *   1. backtestHits         — one doc per hit (deterministic ID, safe to re-run)
+ *   2. personalHitEvents    — idempotency registry (seen-set per backtestDreamId)
+ *   3. personalHitMappings  — As They Fell Before running totals (incremented only
+ *                             for hits NOT already in personalHitEvents)
+ *   4. backtestSummaries    — per-dream summary stats
+ *   5. backtestDreams + backtestWindows — status update
+ *
+ * Dreamer scope (Batch 9A):
+ *   dreamerId / dreamerName resolved in this order:
+ *     1. From request body (intake page and replay page pass these)
+ *     2. Looked up from backtestDreams doc (for callers that don't pass them)
+ *     3. Final fallback: dreamerId = 'owner-self', dreamerName = ''
+ *
+ *   'owner-self' is only used when the actual selected dreamer IS owner-self
+ *   or when lookup fails. It is never hardcoded for all replay evidence.
+ *
+ * Idempotency (v2.1 pattern):
+ *   personalHitEvents uses makeHitEventId() as a deterministic seen-key.
+ *   Re-running the same backtestDreamId does NOT inflate hitCount/straightCount/
+ *   boxedCount/stateStrengthScore in personalHitMappings.
+ *
+ * Leading-zero preservation:
+ *   All numbers stored as strings. Never coerced to int.
+ */
 import { NextRequest, NextResponse } from 'next/server';
-import { getApps, initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { Timestamp, FieldValue } from 'firebase-admin/firestore';
+import { getAdminDb } from '@/lib/firebase/admin';
 
+export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
-
-// ─── Firebase Admin singleton ─────────────────────────────────────────────────
-// Uses a module-level flag to avoid re-initializing on hot reload.
-let adminDbInstance: ReturnType<typeof getFirestore> | null = null;
-
-function adminDb(): ReturnType<typeof getFirestore> {
-  if (adminDbInstance) return adminDbInstance;
-
-  if (!getApps().length) {
-    const projectId   = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey  = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-    if (!projectId) {
-      throw new Error('Firebase projectId missing. Set FIREBASE_PROJECT_ID in env.');
-    }
-
-    if (clientEmail && privateKey) {
-      initializeApp({
-        credential: cert({ projectId, clientEmail, privateKey }),
-        projectId,   // ← required — cert() alone does not set projectId
-      });
-    } else {
-      // Dev fallback: relies on Application Default Credentials (gcloud auth).
-      initializeApp({ projectId });
-    }
-  }
-
-  adminDbInstance = getFirestore();
-  return adminDbInstance;
-}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function safeId(value: unknown): string {
   return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Deterministic event ID for one hit within a specific replay run.
+ * Used as:
+ *   1. backtestHits doc ID (merge:true = idempotent re-run)
+ *   2. personalHitEvents doc ID (seen-registry for FieldValue.increment guard)
+ */
+function makeHitEventId(backtestDreamId: string, hit: EngineReplayHit): string {
+  return [
+    backtestDreamId,
+    hit.termLabel,
+    hit.number,
+    hit.state,
+    hit.gameType,
+    hit.drawDate,
+    hit.drawTime,
+    hit.hitType,
+    hit.normalizedResult,
+  ].map(safeId).join('__');
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -58,6 +76,7 @@ type EngineReplayHit = {
   sameDay:          boolean;
   is_verified?:     boolean;
   source_name?:     string;
+  canonical_key?:   string;
 };
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -71,9 +90,7 @@ export async function POST(req: NextRequest) {
     const dreamDate       = String(body.dreamDate       || '');
     const hits: EngineReplayHit[] = Array.isArray(body.hits) ? body.hits : [];
 
-    // Callers may pass dreamerId/dreamerName directly.
-    // If not, we look them up from the backtestDreams document.
-    // This replaces the previous hardcoded values.
+    // Dreamer scope — callers may pass directly; otherwise look up from Firestore.
     let dreamerId   = String(body.dreamerId   || '');
     let dreamerName = String(body.dreamerName || '');
 
@@ -81,10 +98,13 @@ export async function POST(req: NextRequest) {
     if (!backtestDreamId) return NextResponse.json({ ok: false, error: 'backtestDreamId is required.' }, { status: 400 });
     if (!dreamDate)       return NextResponse.json({ ok: false, error: 'dreamDate is required.'       }, { status: 400 });
 
-    const db  = adminDb();
+    const db  = getAdminDb();
     const now = Timestamp.now();
+    const BATCH = 400;
 
-    // Look up dreamer from backtestDreams if not supplied by caller
+    // ── 0. Resolve dreamerId/dreamerName ─────────────────────────────────────
+    // If caller did not supply dreamerId, look it up from the backtestDreams doc.
+    // This handles callers (like Replay Lab) that only pass backtestDreamId.
     if (!dreamerId) {
       try {
         const dreamDoc = await db.collection('backtestDreams').doc(backtestDreamId).get();
@@ -93,36 +113,28 @@ export async function POST(req: NextRequest) {
           if (dd.dreamerId)   dreamerId   = String(dd.dreamerId);
           if (dd.dreamerName) dreamerName = String(dd.dreamerName);
         }
-      } catch { /* non-fatal */ }
+      } catch {
+        // Non-fatal — fall back below
+      }
+      // Final fallback: owner-self (not a hardcode — only reached when lookup fails
+      // or the selected dreamer IS owner-self)
       if (!dreamerId) dreamerId = 'owner-self';
     }
 
-    // ── 1. Write backtestHits (one doc per hit, deterministic ID = safe dedup) ──
-    const BATCH_SIZE = 400;
-    for (let i = 0; i < hits.length; i += BATCH_SIZE) {
+    // ── 1. Write backtestHits ─────────────────────────────────────────────────
+    // Deterministic doc IDs + merge:true → safe to re-run with no double-writes.
+    for (let i = 0; i < hits.length; i += BATCH) {
       const batch = db.batch();
-      const chunk = hits.slice(i, i + BATCH_SIZE);
-
-      for (const hit of chunk) {
-        const hitId = [
-          backtestDreamId,
-          hit.termLabel,
-          hit.number,
-          hit.state,
-          hit.drawDate,
-          hit.drawTime,
-          hit.hitType,
-          hit.normalizedResult,
-        ].map(safeId).join('__');
-
+      for (const hit of hits.slice(i, i + BATCH)) {
+        const hitId = makeHitEventId(backtestDreamId, hit);
         batch.set(
           db.collection('backtestHits').doc(hitId),
           {
             ownerUid,
             backtestDreamId,
-            dreamDate,
             dreamerId,
             dreamerName,
+            dreamDate,
             termLabel:        hit.termLabel,
             number:           hit.number,
             gameType:         hit.gameType,
@@ -135,8 +147,9 @@ export async function POST(req: NextRequest) {
             hitType:          hit.hitType,
             daysFromDream:    hit.daysFromDream,
             sameDay:          hit.sameDay,
-            is_verified:      hit.is_verified  ?? false,
-            source_name:      hit.source_name  ?? '',
+            is_verified:      hit.is_verified   ?? false,
+            source_name:      hit.source_name   ?? '',
+            canonical_key:    hit.canonical_key ?? '',
             replaySource:     'lottery-engine',
             createdAt:        now,
             updatedAt:        now,
@@ -144,85 +157,138 @@ export async function POST(req: NextRequest) {
           { merge: true }
         );
       }
-
       await batch.commit();
     }
 
-    // ── 2. Write personalHitMappings (powers "As They Fell Before") ────────────
+    // ── 2. Idempotent personalHitMappings (As They Fell Before) ──────────────
     //
-    // personalHitMappings is what fell-before/page.tsx reads via
-    // listPersonalHitMappings(). Each document represents a
-    // (term, number, state, gameType, drawTime) combination and accumulates
-    // hit counts over time. We upsert: if the doc exists, increment counts.
+    // STRATEGY:
+    //   a. Pre-fetch all personalHitEvents already recorded for this backtestDreamId.
+    //   b. Filter hits down to only those NOT already in personalHitEvents.
+    //   c. Write personalHitEvents docs for the new hits (marks them as seen).
+    //   d. Increment personalHitMappings ONLY for new hits.
     //
-    // Doc ID: ownerUid__termLabel__number__state__gameType__drawTime
-    // This matches the query shape in buildDictionary() in fell-before/page.tsx.
+    // Re-running the same replay is completely safe — hitCount/straightCount/
+    // boxedCount/stateStrengthScore are never inflated.
 
-    for (let i = 0; i < hits.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      const chunk = hits.slice(i, i + BATCH_SIZE);
+    if (hits.length > 0) {
+      // a. Pre-fetch existing events (one Firestore read, returns only IDs)
+      const existingSnap = await db
+        .collection('personalHitEvents')
+        .where('ownerUid',        '==', ownerUid)
+        .where('backtestDreamId', '==', backtestDreamId)
+        .get();
 
-      for (const hit of chunk) {
-        const mappingId = [
-          ownerUid,
-          hit.termLabel,
-          hit.number,
-          hit.state,
-          hit.gameType,
-          hit.drawTime,
-        ].map(safeId).join('__');
+      const existingIds = new Set<string>(existingSnap.docs.map(d => d.id));
 
-        const straightDelta       = hit.hitType === 'straight' ? 1 : 0;
-        const boxedDelta          = hit.hitType === 'boxed'    ? 1 : 0;
-        const stateStrengthDelta  = hit.hitType === 'straight' ? 3 : 1;
+      // b. New hits only
+      const newHits = hits.filter(hit => !existingIds.has(makeHitEventId(backtestDreamId, hit)));
 
-        // Firestore Admin: use FieldValue.increment for safe concurrent upserts.
-        const { FieldValue } = await import('firebase-admin/firestore');
-
-        batch.set(
-          db.collection('personalHitMappings').doc(mappingId),
-          {
-            ownerUid,
-            // dreamerId/dreamerName from backtestDreams doc (or passed by caller)
-            dreamerId,
-            dreamerName,
-            termLabel:          hit.termLabel,
-            number:             hit.number,
-            gameType:           hit.gameType,
-            state:              hit.state,
-            drawTime:           hit.drawTime,
-            drawDate:           hit.drawDate,
-            hitType:            hit.hitType,
-            sourceDreamEntryId: `backtest:${backtestDreamId}`,
-            daysFromDream:      hit.daysFromDream,
-            sameDay:            hit.sameDay,
-            lastHitDate:        hit.drawDate,
-            // Increment counters safely — these accumulate across replays.
-            hitCount:           FieldValue.increment(1),
-            straightCount:      FieldValue.increment(straightDelta),
-            boxedCount:         FieldValue.increment(boxedDelta),
-            stateStrengthScore: FieldValue.increment(stateStrengthDelta),
-            replaySource:       'lottery-engine',
-            backtestDreamId,
-            updatedAt:          now,
-            // createdAt only written if doc doesn't exist.
-            createdAt:          now,
-          },
-          { merge: true }
+      if (newHits.length < hits.length) {
+        console.log(
+          `[save-engine-replay-hits] ${hits.length - newHits.length} hit(s) already counted ` +
+          `for backtestDreamId=${backtestDreamId} — skipping to prevent double-counting.`
         );
       }
 
-      await batch.commit();
+      if (newHits.length > 0) {
+        // c. Write personalHitEvents for new hits (seen-registry)
+        for (let i = 0; i < newHits.length; i += BATCH) {
+          const batch = db.batch();
+          for (const hit of newHits.slice(i, i + BATCH)) {
+            const eventId = makeHitEventId(backtestDreamId, hit);
+            batch.set(
+              db.collection('personalHitEvents').doc(eventId),
+              {
+                ownerUid,
+                backtestDreamId,
+                dreamerId,
+                dreamerName,
+                dreamDate,
+                termLabel:       hit.termLabel,
+                number:          hit.number,
+                gameType:        hit.gameType,
+                state:           hit.state,
+                drawDate:        hit.drawDate,
+                drawTime:        hit.drawTime,
+                hitType:         hit.hitType,
+                normalizedResult: hit.normalizedResult,
+                replaySource:    'lottery-engine',
+                createdAt:       now,
+              }
+              // No merge — doc should not exist (we pre-filtered existingIds above)
+            );
+          }
+          await batch.commit();
+        }
+
+        // d. Increment personalHitMappings for new hits only
+        //
+        // Doc ID: ownerUid__dreamerId__termLabel__number__state__gameType
+        // Groups all historical hits for the same (term, number, state, game, dreamer)
+        // into one doc with running totals — what /api/fell-before reads.
+        //
+        // dreamerId is included in the doc ID so two dreamers can independently
+        // build their own hit memory for the same term/number.
+        for (let i = 0; i < newHits.length; i += BATCH) {
+          const batch = db.batch();
+          for (const hit of newHits.slice(i, i + BATCH)) {
+            const mappingId = [
+              ownerUid,
+              dreamerId,
+              hit.termLabel,
+              hit.number,
+              hit.state,
+              hit.gameType,
+            ].map(safeId).join('__');
+
+            const straightDelta = hit.hitType === 'straight' ? 1 : 0;
+            const boxedDelta    = hit.hitType === 'boxed'    ? 1 : 0;
+            const strengthDelta = hit.hitType === 'straight' ? 3 : 1;
+
+            batch.set(
+              db.collection('personalHitMappings').doc(mappingId),
+              {
+                ownerUid,
+                dreamerId,
+                dreamerName,
+                termLabel:          hit.termLabel,
+                number:             hit.number,
+                gameType:           hit.gameType,
+                state:              hit.state,
+                drawTime:           hit.drawTime,
+                drawDate:           hit.drawDate,
+                hitType:            hit.hitType,
+                sourceDreamEntryId: `backtest:${backtestDreamId}`,
+                backtestDreamId,
+                daysFromDream:      hit.daysFromDream,
+                sameDay:            hit.sameDay,
+                lastHitDate:        hit.drawDate,
+                replaySource:       'lottery-engine',
+                // FieldValue.increment is safe — we only call this for new events
+                hitCount:           FieldValue.increment(1),
+                straightCount:      FieldValue.increment(straightDelta),
+                boxedCount:         FieldValue.increment(boxedDelta),
+                stateStrengthScore: FieldValue.increment(strengthDelta),
+                updatedAt:          now,
+                createdAt:          now,
+              },
+              { merge: true }
+            );
+          }
+          await batch.commit();
+        }
+      }
     }
 
-    // ── 3. Write backtestSummaries ─────────────────────────────────────────────
+    // ── 3. Write backtestSummaries ────────────────────────────────────────────
     const straightHits = hits.filter(h => h.hitType === 'straight').length;
     const boxedHits    = hits.filter(h => h.hitType === 'boxed').length;
 
     const stateCounts = new Map<string, number>();
     const termCounts  = new Map<string, number>();
     for (const hit of hits) {
-      stateCounts.set(hit.state,    (stateCounts.get(hit.state)    ?? 0) + 1);
+      if (hit.state) stateCounts.set(hit.state, (stateCounts.get(hit.state) ?? 0) + 1);
       termCounts.set(hit.termLabel, (termCounts.get(hit.termLabel) ?? 0) + 1);
     }
 
@@ -230,28 +296,28 @@ export async function POST(req: NextRequest) {
     const bestState    = [...stateCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
     const bestTerm     = [...termCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
 
-    const summary = {
-      ownerUid,
-      backtestDreamId,
-      dreamDate,
-      dreamerId,
-      dreamerName,
-      totalHits: hits.length,
-      straightHits,
-      boxedHits,
-      uniqueStates,
-      bestState,
-      bestTerm,
-      replaySource: 'lottery-engine',
-      status:       'engine-replay-complete',
-      updatedAt:    now,
-      createdAt:    now,
-    };
-
-    await db.collection('backtestSummaries').doc(backtestDreamId).set(summary, { merge: true });
-
-    // ── 4. Update parent dream and window status ───────────────────────────────
+    // ── 4. Update parent docs + summary ──────────────────────────────────────
     await Promise.all([
+      db.collection('backtestSummaries').doc(backtestDreamId).set(
+        {
+          ownerUid,
+          backtestDreamId,
+          dreamerId,
+          dreamerName,
+          dreamDate,
+          totalHits:    hits.length,
+          straightHits,
+          boxedHits,
+          uniqueStates,
+          bestState,
+          bestTerm,
+          replaySource: 'lottery-engine',
+          status:       'engine-replay-complete',
+          updatedAt:    now,
+          createdAt:    now,
+        },
+        { merge: true }
+      ),
       db.collection('backtestDreams').doc(backtestDreamId).set(
         { ownerUid, status: 'engine-replay-complete', replaySource: 'lottery-engine', updatedAt: now },
         { merge: true }
@@ -263,21 +329,19 @@ export async function POST(req: NextRequest) {
     ]);
 
     return NextResponse.json({
-      ok: true,
-      totalHits: hits.length,
+      ok:           true,
+      totalHits:    hits.length,
       straightHits,
       boxedHits,
       uniqueStates,
       bestState,
       bestTerm,
+      dreamerId,
     });
   } catch (err) {
-    console.error('save-engine-replay-hits failed:', err);
+    console.error('[save-engine-replay-hits] error:', err);
     return NextResponse.json(
-      {
-        ok:    false,
-        error: err instanceof Error ? err.message : 'Failed to save engine replay hits.',
-      },
+      { ok: false, error: err instanceof Error ? err.message : 'Failed to save engine replay hits.' },
       { status: 500 }
     );
   }
