@@ -28,9 +28,9 @@ export default function PerformancePage() {
       try {
         const uid = encodeURIComponent(user.uid);
         const [winRes, hitRes, memRes, dreamRes] = await Promise.all([
-          fetch(`/api/dreams/windows?ownerUid=${uid}`),
-          fetch(`/api/dreams/hits?ownerUid=${uid}`),
-          fetch(`/api/fell-before?ownerUid=${uid}`),
+          fetch(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+          fetch(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
+          fetch(`/api/fell-before?ownerUid=${uid}&limit=250`),
           fetch(`/api/backtest/list-dreams?ownerUid=${uid}`),
         ]);
         const [winData, hitData, memData, dreamData] = await Promise.all([
@@ -73,6 +73,37 @@ export default function PerformancePage() {
     [dreamHits, mappingRows, backtestSummaries]
   );
 
+  // By-dreamer hit breakdown
+  const dreamerBreakdown = useMemo(() => {
+    const map = new Map<string, { name: string; hits: number; straight: number; boxed: number }>();
+    for (const h of dreamHits) {
+      const did  = String(h.dreamerId   || 'owner-self');
+      const name = String(h.dreamerName || did);
+      const prev = map.get(did);
+      if (!prev) map.set(did, { name, hits: 0, straight: 0, boxed: 0 });
+      const e = map.get(did)!;
+      e.hits++;
+      if (h.match_type === 'exact' || h.hitType === 'straight') e.straight++;
+      else e.boxed++;
+    }
+    return Array.from(map.values()).sort((a, b) => b.hits - a.hits);
+  }, [dreamHits]);
+
+  // By-state hit breakdown
+  const stateBreakdown = useMemo(() => {
+    const map = new Map<string, { hits: number; straight: number }>();
+    for (const h of dreamHits) {
+      const st = String(h.state || '');
+      if (!st) continue;
+      const prev = map.get(st);
+      if (!prev) map.set(st, { hits: 0, straight: 0 });
+      const e = map.get(st)!;
+      e.hits++;
+      if (h.match_type === 'exact') e.straight++;
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1].hits - a[1].hits).slice(0, 10);
+  }, [dreamHits]);
+
   return (
     <div className="page-shell" style={{ padding: 'clamp(18px, 3vw, 32px)', display: 'grid', gap: '24px' }}>
 
@@ -90,7 +121,7 @@ export default function PerformancePage() {
         </section>
 
         {loading && <section className="journal-card"><p>Loading performance data…</p></section>}
-        {error   && <section className="journal-card-flat" style={{ borderColor: '#e9c2c2', background: '#fff4f4', color: '#8a2f2f' }}>{error}</section>}
+        {error   && <section className="journal-card-flat" style={{ borderColor: 'rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</section>}
 
         {/* Live metrics */}
         <section className="journal-card">
@@ -168,6 +199,45 @@ export default function PerformancePage() {
               </div>
             ))}
           </div>
+        </section>
+
+        {/* By-Dreamer Breakdown */}
+        {dreamerBreakdown.length > 0 && (
+          <section className="journal-card">
+            <h2 style={{ margin:'0 0 14px', fontSize:'1.05rem', fontWeight:900, fontFamily:'system-ui,sans-serif', color:'#fff' }}>Hits by Dreamer</h2>
+            <div style={{ display:'grid', gap:'6px' }}>
+              {dreamerBreakdown.map((d: any) => (
+                <div key={d.name} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'9px 12px', borderRadius:'12px', background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.09)', fontSize:'13px' }}>
+                  <strong style={{ color:'#fff' }}>{d.name}</strong>
+                  <div style={{ display:'flex', gap:'12px', color:'rgba(255,255,255,0.55)' }}>
+                    <span>{d.hits} hits</span>
+                    <span style={{ color:'#60e09a' }}>{d.straight} straight</span>
+                    <span style={{ color:'#ffcc50' }}>{d.boxed} boxed</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* By-State Breakdown */}
+        {stateBreakdown.length > 0 && (
+          <section className="journal-card">
+            <h2 style={{ margin:'0 0 14px', fontSize:'1.05rem', fontWeight:900, fontFamily:'system-ui,sans-serif', color:'#fff' }}>Hits by State</h2>
+            <div style={{ display:'grid', gap:'6px' }}>
+              {stateBreakdown.map(([state, data]: [string, any]) => (
+                <div key={state} style={{ display:'flex', justifyContent:'space-between', padding:'9px 12px', borderRadius:'12px', background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.09)', fontSize:'13px' }}>
+                  <strong style={{ color:'#a090ff' }}>{state}</strong>
+                  <span style={{ color:'rgba(255,255,255,0.55)' }}>{data.hits} hit{data.hits!==1?'s':''} · {data.straight} straight</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* No Played/Won disclaimer */}
+        <section className="journal-card-flat" style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', lineHeight:1.7 }}>
+          <strong style={{ color:'rgba(255,255,255,0.60)' }}>About this report:</strong> Live results are based on detected dream hits (engine-confirmed matches between active candidate numbers and real draw results), not manual played-number tracking. Played/Won outcome tracking is not yet available — current statuses are <em>suggested</em>, <em>pinned</em>, and <em>archived</em> only.
         </section>
 
     </div>

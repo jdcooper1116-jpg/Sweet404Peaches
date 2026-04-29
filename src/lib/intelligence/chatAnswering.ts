@@ -1,7 +1,7 @@
 /**
  * src/lib/intelligence/chatAnswering.ts
  *
- * Sweet404Peaches Intelligence Assistant — local inference engine.
+ * Sigil & Slumber Intelligence Assistant — local inference engine.
  * Detects intent, scores system convergence, and generates evidence-backed answers.
  *
  * Convergence scoring (per candidate number + gameType):
@@ -56,8 +56,8 @@ function isRecentHit(h: any, cutoff: string): boolean {
 }
 
 function confidenceLabel(score: number): string {
-  if (score >= 8) return 'Strong convergence';
-  if (score >= 5) return 'Moderate convergence';
+  if (score >= 8) return 'Strong Focus';
+  if (score >= 5) return 'Moderate Focus';
   if (score >= 3) return 'Watchlist';
   return 'Weak / informational';
 }
@@ -76,7 +76,10 @@ type Intent =
   | 'dreamer-question'
   | 'diagnostic'
   | 'results-question'
-  | 'help';
+  | 'help'
+  | 'convergence-question'
+  | 'pinned-question'
+  | 'proof-question';
 
 const US_STATES: Record<string, string> = {
   'georgia': 'GA', 'ga': 'GA', 'florida': 'FL', 'fl': 'FL',
@@ -139,6 +142,21 @@ export function detectIntent(q: string): Intent {
   // Term question
   if (/what does .+ mean|show me .+ numbers|what has .+ done|numbers for|term |the word |dream term|mapped numbers|dictionary for/.test(lq)) {
     return 'term-question';
+  }
+
+  // Convergence — what's overlapping
+  if (/converging|convergence|overlap|cross-dreamer|multiple terms|repeated|what is strong|what.s converging|what overlap/.test(lq)) {
+    return 'convergence-question';
+  }
+
+  // Pinned/suggested plays
+  if (/pinned|suggested|watchlist|what is pinned|what.s pinned|what should i pin|what to pin|promote/.test(lq)) {
+    return 'pinned-question';
+  }
+
+  // Fell-before proof
+  if (/proof|evidence|fell before|has fallen|fell in|confirmed|what has proven|what has hit|what numbers have proof/.test(lq)) {
+    return 'proof-question';
   }
 
   // Help
@@ -383,7 +401,7 @@ function answerSystemOverview(ctx: ChatContext): string {
   const activeDreamers = [...new Set(liveWin.map(w => w.dreamerName || w.dreamerId).filter(Boolean))];
 
   const lines: string[] = [
-    `**Sweet404Peaches System Status — ${today}**`,
+    `**Sigil & Slumber System Status — ${today}**`,
     '',
     `Active dream windows: **${liveWin.length}**`,
     `Recent hits (last 7 days): **${recentH.length}**`,
@@ -702,7 +720,7 @@ function answerDiagnostic(ctx: ChatContext): string {
 }
 
 function answerHelp(): string {
-  return `**Sweet404Peaches Intelligence Chat**
+  return `**Sigil & Slumber Intelligence Chat**
 
 I can answer questions about your dream intelligence system using live data from your active windows, hit memory, and personal dictionary.
 
@@ -741,6 +759,86 @@ I can answer questions about your dream intelligence system using live data from
 *Important:* I never claim guaranteed wins. Confidence labels reflect system convergence across dreams, memory, and hits — not lottery probability.`;
 }
 
+// ─── Convergence, pinned, proof answer functions ──────────────────────────────
+
+function answerConvergence(ctx: ChatContext): string {
+  const sb = ctx.scopeBundle;
+  if (!sb) return 'No active signals yet. Write a dream and run a refresh to see convergence.';
+
+  const lines: string[] = ['**Cross-Dreamer Convergence Summary**', ''];
+  lines.push(`Active dreamers: ${sb.activeDreamers} · Active windows: ${sb.activeWindows}`);
+  lines.push(`Watch items: ${sb.watchItems}`);
+  lines.push('');
+  if (sb.repeatedTerms.length > 0) {
+    lines.push(`**Terms appearing across multiple windows:** ${sb.repeatedTerms.join(', ')}`);
+  }
+  if (sb.topNumbers.length > 0) {
+    lines.push(`**Numbers with fell-before evidence:** ${sb.topNumbers.join(', ')}`);
+  }
+  if (sb.topStates.length > 0) {
+    lines.push(`**Top states with evidence:** ${sb.topStates.join(', ')}`);
+  }
+  lines.push('');
+  lines.push(`Top signal tier: **${sb.topFocusTier}**`);
+  lines.push('');
+  lines.push('See /universal-scope for full convergence details or /playlists for state-specific candidates.');
+  return lines.join('\n');
+}
+
+function answerPinned(ctx: ChatContext): string {
+  const active = ctx.pinnedPlays.filter((p: any) => p.status === 'pinned' || p.status === 'suggested');
+  if (active.length === 0) return 'No pinned or suggested plays yet. Visit Hot Families or State Playlists to promote candidates.';
+
+  const lines: string[] = ['**Pinned & Suggested Plays**', ''];
+  const pinned    = active.filter((p: any) => p.status === 'pinned');
+  const suggested = active.filter((p: any) => p.status === 'suggested');
+
+  if (pinned.length > 0) {
+    lines.push(`**Pinned (${pinned.length}):**`);
+    for (const p of pinned.slice(0, 6)) {
+      const terms = [...new Set([p.sourceTerm, ...(p.sourceTerms ?? [])].filter(Boolean))].join(', ') || '—';
+      lines.push(`  • ${p.number ?? '—'} (${p.gameType ?? '—'})${p.state ? ` · ${p.state}` : ''} — ${terms}`);
+    }
+    lines.push('');
+  }
+  if (suggested.length > 0) {
+    lines.push(`**Suggested (${suggested.length}):**`);
+    for (const p of suggested.slice(0, 6)) {
+      lines.push(`  • ${p.number ?? '—'} (${p.gameType ?? '—'})${p.state ? ` · ${p.state}` : ''}`);
+    }
+  }
+  lines.push('');
+  lines.push('Manage at /pinned-plays.');
+  return lines.join('\n');
+}
+
+function answerProof(ctx: ChatContext): string {
+  const byTerm = new Map<string, { states: string[]; hitCount: number }>();
+  for (const m of ctx.mappings) {
+    const k = String(m.termLabel ?? '').trim().toLowerCase();
+    if (!k) continue;
+    if (!byTerm.has(k)) byTerm.set(k, { states: [], hitCount: 0 });
+    const ev = byTerm.get(k)!;
+    const st = String(m.state ?? '');
+    if (st && !ev.states.includes(st)) ev.states.push(st);
+    ev.hitCount += Number(m.hitCount ?? 1);
+  }
+
+  if (byTerm.size === 0) return 'No fell-before proof memory yet. Run a refresh or engine backtest to build evidence.';
+
+  const sorted = Array.from(byTerm.entries())
+    .sort((a, b) => b[1].hitCount - a[1].hitCount)
+    .slice(0, 12);
+
+  const lines = ['**Fell-Before Proof — Terms with Evidence**', ''];
+  for (const [term, ev] of sorted) {
+    lines.push(`**${term}** — ${ev.hitCount} hit${ev.hitCount !== 1 ? 's' : ''} · States: ${ev.states.slice(0, 6).join(', ')}`);
+  }
+  lines.push('');
+  lines.push('Full state-level evidence at /fell-before.');
+  return lines.join('\n');
+}
+
 // ─── Main answer dispatcher ───────────────────────────────────────────────────
 
 export function answerQuestion(question: string, ctx: ChatContext): string {
@@ -757,6 +855,9 @@ export function answerQuestion(question: string, ctx: ChatContext): string {
     case 'state-question':         return answerStateQuestion(question, ctx);
     case 'dreamer-question':       return answerDreamerQuestion(question, ctx);
     case 'diagnostic':             return answerDiagnostic(ctx);
+    case 'convergence-question':   return answerConvergence(ctx);
+    case 'pinned-question':        return answerPinned(ctx);
+    case 'proof-question':         return answerProof(ctx);
     case 'results-question':
       return 'Results are engine-backed in the Results Log (`/results`). This chat summarizes your saved dreams, hits, and personal hit memory — not raw lottery draws. Head to Results Log to browse draws by state and date.';
     case 'help':

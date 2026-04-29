@@ -53,11 +53,11 @@ function promptsForPath(pathname: string): string[] {
   }
   // Default
   return [
-    "What's active now?",
-    "Show strongest numbers.",
-    "Which terms are hot?",
-    "What should I watch today?",
-    "Check my active windows.",
+    "What's converging right now?",
+    "Show fell-before proof.",
+    "What are pinned plays?",
+    "Which dreamers overlap?",
+    "What should I focus on today?",
     "Explain my latest hits.",
     "Build a state playlist.",
   ];

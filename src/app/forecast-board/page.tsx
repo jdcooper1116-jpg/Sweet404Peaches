@@ -10,6 +10,11 @@ import { buildLatestDreamForecast } from '@/lib/intelligence/liveForecast';
 import { buildFamilyAnalytics } from '@/lib/intelligence/familyLogic';
 import { applyBacktestLearningBoost } from '@/lib/intelligence/evidencePromotion';
 import PageIntro from '@/components/ui/PageIntro';
+import {
+  buildGroupedWindows, buildFellIndex, buildNumberConvergence,
+  buildBoxedSignals, buildFellProof, buildFocusRecs,
+  type FocusRec,
+} from '@/lib/intelligence/universalScope';
 
 export default function ForecastBoardPage() {
   const { user } = useAuth();
@@ -22,6 +27,8 @@ export default function ForecastBoardPage() {
   const [latestDream,       setLatestDream]        = useState<any | null>(null);
   const [loading,           setLoading]            = useState(true);
   const [error,             setError]              = useState('');
+  const [quotaError,        setQuotaError]         = useState(false);
+  const [pinned,            setPinned]             = useState<any[]>([]);
   const [stateSearch,       setStateSearch]        = useState('');
 
   useEffect(() => {
@@ -29,25 +36,26 @@ export default function ForecastBoardPage() {
       if (!user) { setLoading(false); return; }
       try {
         const uid = encodeURIComponent(user.uid);
-        const [memRes, winRes, hitRes, dreamRes, latestRes] = await Promise.all([
-          fetch(`/api/fell-before?ownerUid=${uid}`),
-          fetch(`/api/dreams/windows?ownerUid=${uid}`),
-          fetch(`/api/dreams/hits?ownerUid=${uid}`),
+        const [memRes, winRes, hitRes, dreamRes, latestRes, pinRes] = await Promise.all([
+          fetch(`/api/fell-before?ownerUid=${uid}&limit=100`),
+          fetch(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+          fetch(`/api/dreams/hits?ownerUid=${uid}&limit=30`),
           fetch(`/api/backtest/list-dreams?ownerUid=${uid}`),
           fetch(`/api/dreams/latest?ownerUid=${uid}&n=1`),
+          fetch(`/api/pinned-plays?ownerUid=${uid}`),
         ]);
 
-        const [memData, winData, hitData, dreamData, latestData] = await Promise.all([
-          memRes.json(), winRes.json(), hitRes.json(), dreamRes.json(), latestRes.json(),
+        const [memData, winData, hitData, dreamData, latestData, pinData] = await Promise.all([
+          memRes.json(), winRes.json(), hitRes.json(), dreamRes.json(), latestRes.json(), pinRes.json(),
         ]);
 
         if (memData.ok)    setMappingRows(memData.rows            ?? []);
         if (winData.ok)    setActiveWindows(winData.windows       ?? []);
         if (hitData.ok)    setDreamHits(hitData.hits              ?? []);
-        // list-dreams returns enriched dream objects that include summary fields
-        // (totalHits, straightHits, boxedHits, bestState, bestTerm) — safe to use as backtestSummaries
         if (dreamData.ok)  setBacktestSummaries(dreamData.dreams  ?? []);
         if (latestData.ok) setLatestDream(latestData.entry        ?? null);
+        if (pinData.ok)    setPinned(pinData.plays                ?? []);
+        if ([memData, winData, hitData].some((d: any) => d.quota)) setQuotaError(true);
       } catch (err) {
         console.error(err);
         setError('Could not load Forecast Board.');
@@ -67,6 +75,15 @@ export default function ForecastBoardPage() {
     applyBacktestLearningBoost({ recommendationRows: forecast.recommendationRows, backtestSummaries, familyAnalytics }),
     [forecast.recommendationRows, backtestSummaries, familyAnalytics]
   );
+
+  // Universal Scope convergence pipeline (active windows only)
+  const today2       = new Date().toISOString().slice(0, 10);
+  const grouped      = useMemo(() => buildGroupedWindows(activeWindows, today2),          [activeWindows, today2]);
+  const fellIdx      = useMemo(() => buildFellIndex(mappingRows),                         [mappingRows]);
+  const numSignals   = useMemo(() => buildNumberConvergence(grouped, fellIdx, pinned),    [grouped, fellIdx, pinned]);
+  const boxedSignals = useMemo(() => buildBoxedSignals(grouped, fellIdx),                 [grouped, fellIdx]);
+  const fellProof    = useMemo(() => buildFellProof(grouped, fellIdx),                    [grouped, fellIdx]);
+  const focusRecs    = useMemo(() => buildFocusRecs(numSignals, boxedSignals, fellProof, dreamHits), [numSignals, boxedSignals, fellProof, dreamHits]);
 
   const filteredStateGroups = useMemo(() => {
     const q = stateSearch.trim().toLowerCase();
@@ -108,6 +125,47 @@ export default function ForecastBoardPage() {
 
         {loading && <section className="journal-card"><p>Loading Forecast Board…</p></section>}
         {error   && <section className="journal-card-flat" style={{ borderColor: 'rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</section>}
+
+        {quotaError && (
+          <div style={{ padding:'12px 16px',borderRadius:'14px',border:'1px solid rgba(255,204,80,0.28)',background:'rgba(255,204,80,0.08)',color:'#ffcc50',fontSize:'13px' }}>
+            ⚠ Firebase quota limit reached. Some signals may be incomplete.
+          </div>
+        )}
+
+        {/* Universal Scope Focus Recommendations */}
+        {!loading && focusRecs.length > 0 && (
+          <section className="journal-card">
+            <div style={{ marginBottom:'14px' }}>
+              <h2 style={{ margin:0, fontSize:'1.05rem', fontWeight:900, fontFamily:'system-ui,sans-serif', color:'#fff' }}>Today's Focus — Active Dream Convergence</h2>
+              <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', marginTop:'3px' }}>Evidence-based. Not guaranteed. Use confidence tiers as signal strength indicators.</div>
+            </div>
+            <div style={{ display:'grid', gap:'8px' }}>
+              {(focusRecs as FocusRec[]).slice(0,8).map(rec => (
+                <div key={rec.id} style={{
+                  padding:'11px 14px', borderRadius:'14px', display:'flex', gap:'12px', flexWrap:'wrap', alignItems:'flex-start',
+                  background: rec.tier==='Strong Focus' ? 'rgba(96,224,154,0.08)' : rec.tier==='Moderate Focus' ? 'rgba(255,204,80,0.07)' : 'rgba(255,255,255,0.05)',
+                  borderLeft: `3px solid ${rec.tier==='Strong Focus' ? '#60e09a' : rec.tier==='Moderate Focus' ? '#ffcc50' : '#a090ff'}`,
+                  border: '1px solid rgba(255,255,255,0.09)',
+                }}>
+                  <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'1.1rem', color: rec.gameType==='cash4' ? '#a090ff' : '#ff8a6a' }}>{rec.number}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ display:'flex', gap:'5px', flexWrap:'wrap', marginBottom:'4px' }}>
+                      <span style={{ padding:'2px 9px', borderRadius:'999px', fontSize:'10px', fontWeight:700, color: rec.tier==='Strong Focus' ? '#60e09a' : rec.tier==='Moderate Focus' ? '#ffcc50' : '#a090ff', border:'1px solid currentColor', opacity:0.85 }}>{rec.tier}</span>
+                      {(rec.evidenceBadges??[]).slice(0,3).map((b:string) => (
+                        <span key={b} style={{ padding:'2px 7px', borderRadius:'999px', fontSize:'10px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.13)', color:'rgba(255,255,255,0.60)' }}>{b}</span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.55)', fontStyle:'italic' }}>{rec.reason}</div>
+                  </div>
+                  <div style={{ textAlign:'right', fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>
+                    <div>Score {rec.score}</div>
+                    {rec.states.slice(0,3).map((s:string) => <span key={s} style={{ padding:'1px 6px', borderRadius:'5px', fontSize:'10px', background:'rgba(96,224,154,0.10)', color:'#60e09a', marginLeft:'4px' }}>{s}</span>)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <section className="journal-card">
           <div className="page-header">

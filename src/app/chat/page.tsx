@@ -10,20 +10,20 @@ type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 const QUICK_PROMPTS = [
   "What's converging right now?",
-  "Give me today's strongest plays.",
+  "Show cross-dreamer overlaps.",
+  "What numbers have fell-before proof?",
+  "What are the pinned plays?",
+  "Give me today's strongest focus.",
   "Which states are hottest?",
   "What should I watch in Georgia?",
-  "Show me fear numbers.",
+  "Which dreamers have active windows?",
   "Diagnose my system.",
-  "Compare term dancing vs sister.",
-  "What is active for me?",
-  "Which states should I watch next?",
-  "What does mountain mean in my dictionary?",
+  "Show me state-supported plays.",
 ];
 
 const WELCOME: ChatMessage = {
   role: 'assistant',
-  content: `Welcome to the Sweet404Peaches Intelligence Chat.\n\nI'm loaded with your live dream data — active windows, hit memory, universal dictionary, and backtest summaries. Ask me about converging numbers, term histories, state playlists, or system diagnostics.\n\nType **help** to see all available questions.`,
+  content: `Welcome to the Sigil & Slumber Intelligence Chat.\n\nI analyze your live dream data — active windows, fell-before evidence, convergence signals, and pinned plays. Ask about converging numbers, dreamer signals, state focus, or today's recommendations.\n\nType **help** to see available questions.`,
 };
 
 export default function ChatPage() {
@@ -86,7 +86,7 @@ export default function ChatPage() {
         <section className="journal-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div className="page-header">
-              <h1>Sweet404Peaches Intelligence Chat</h1>
+              <h1>Sigil & Slumber Intelligence Chat</h1>
               <p>Evidence-based assistant using your live dream windows, hit memory, dictionary, and backtest data. No hallucination — every recommendation shows its source.</p>
             </div>
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
