@@ -21,6 +21,7 @@ export default function PerformancePage() {
   const [backtestSummaries, setBacktestSummaries]  = useState<any[]>([]);
   const [loading,           setLoading]            = useState(true);
   const [error,             setError]              = useState('');
+  const [quotaError,        setQuotaError]         = useState(false);
 
   useEffect(() => {
     async function load() {
