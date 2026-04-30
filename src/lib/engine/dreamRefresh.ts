@@ -1,5 +1,5 @@
 /**
- * Sweet404Peaches — Active Dream Refresh  (v2.3)
+ * Sigil & Slumber — Active Dream Refresh  (v2.3)
  *
  * v2.3 changes:
  * - match_mode: "both" + filters: { match_mode: "both" } added to engine calls
@@ -29,7 +29,7 @@ interface ActiveDreamWindowDoc {
   dreamerName: string;
   termLabel: string;
   number: string;
-  gameType: 'pick3' | 'pick4';
+  gameType: 'cash3' | 'cash4' | 'pick3' | 'pick4';  // save-entry writes cash3/cash4
   activeStart: string;
   activeEnd: string;
   isActive: boolean;
@@ -41,24 +41,45 @@ interface ActiveDreamWindowDoc {
 }
 
 interface DreamHitDoc {
-  ownerUid: string;
-  dreamWindowId: string;
-  dreamEntryId: string;
-  dreamerId: string;
-  candidate: string;
-  state: string;
-  draw_date: string;
-  draw_time: string;
-  winning_number: string;
-  match_type: string;
-  is_verified: boolean;
-  source_name: string;
-  game_type: 'pick3' | 'pick4';
-  termLabel: string;
-  anchor_date: string;
-  lookahead_days: number;
-  lastRefreshSource: string;
-  detectedAt: AdminTimestamp;
+  ownerUid:           string;
+  dreamWindowId:      string;
+  activeWindowId:     string;   // alias for dreamWindowId
+  dreamEntryId:       string;
+  dreamerId:          string;
+  dreamerName:        string;   // propagated from activeDreamWindow
+  termLabel:          string;
+  normalizedTerm:     string;
+  // Raw fields (snake_case — preserved for backward compat)
+  candidate:          string;
+  winning_number:     string;
+  game_type:          string;   // stored as cash3/cash4
+  draw_date:          string;
+  draw_time:          string;
+  match_type:         string;
+  // Normalized aliases (camelCase — for UI consumers)
+  number:             string;
+  candidateNumber:    string;
+  winningNumber:      string;
+  gameType:           string;
+  drawDate:           string;
+  drawTime:           string;
+  hitType:            string;
+  matchMode:          string;
+  state:              string;
+  is_verified:        boolean;
+  source_name:        string;
+  anchor_date:        string;
+  lookahead_days:     number;
+  lastRefreshSource:  string;
+  detectedAt:         AdminTimestamp;
+}
+
+function normalizeTerm(term: string): string {
+  return String(term ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+}
+
+function safeId(value: unknown): string {
+  return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 // Dedup key — match_type intentionally excluded (see v2.3 change notes).
@@ -139,9 +160,9 @@ export async function refreshAllActiveWindows(
   const hitsToWrite: Array<{ docId: string; data: DreamHitDoc }> = [];
 
   for (const [groupKey, groupWindows] of groups.entries()) {
-    const [gameType, activeStart, activeEnd] = groupKey.split('::') as ['pick3'|'pick4', string, string];
+    const [gameType, activeStart, activeEnd] = groupKey.split('::') as ['cash3'|'cash4'|'pick3'|'pick4', string, string];
     const lookahead_days = calcLookahead(activeStart, activeEnd);
-    const states = gameType === 'pick3' ? PICK3_STATES : PICK4_STATES;
+    const states = (gameType === 'cash3' || gameType === 'pick3') ? PICK3_STATES : PICK4_STATES;
 
     const candidateSet = new Set(groupWindows.map(w => w.number));
     const candidates   = Array.from(candidateSet);
@@ -180,21 +201,36 @@ export async function refreshAllActiveWindows(
             const existingKeys = existingHitsByWindow.get(w.id) ?? new Set();
             if (existingKeys.has(key)) continue;
 
+            const normalizedTerm = normalizeTerm(w.termLabel);
+            const hitType        = actualMatchType === 'exact' ? 'straight' : 'boxed';
             const hitDoc: DreamHitDoc = {
               ownerUid,
               dreamWindowId:    w.id,
+              activeWindowId:   w.id,
               dreamEntryId:     w.dreamEntryId,
               dreamerId:        w.dreamerId,
+              dreamerName:      w.dreamerName,   // copied from active window
+              termLabel:        w.termLabel,
+              normalizedTerm,
+              // Raw fields — preserved for backward compat
               candidate:        hit.candidate,
-              state,
+              winning_number:   hit.winning_number,
+              game_type:        gameType,            // app-facing: cash3/cash4
               draw_date:        hit.draw_date,
               draw_time:        hit.draw_time,
-              winning_number:   hit.winning_number,
               match_type:       actualMatchType,
+              // Normalized aliases — added for UI consumers
+              number:           hit.candidate,
+              candidateNumber:  hit.candidate,
+              winningNumber:    hit.winning_number,
+              gameType,
+              drawDate:         hit.draw_date,
+              drawTime:         hit.draw_time,
+              hitType,
+              matchMode:        hitType,
+              state,
               is_verified:      hit.is_verified ?? false,
               source_name:      hit.source_name ?? '',
-              game_type:        gameType,
-              termLabel:        w.termLabel,
               anchor_date:      activeStart,
               lookahead_days,
               lastRefreshSource: 'lottery-engine',

@@ -1,190 +1,200 @@
 /**
  * POST /api/admin/promote-hits
  *
- * Promotes dreamHits into personalHitMappings (As They Fell Before).
+ * Promotes dreamHits → personalHitMappings (As They Fell Before).
  *
- * v2.3: Made idempotent using dreamHitPromotions registry.
- * - Pre-fetches which dreamHit docIds have already been promoted.
- * - Only processes new (not yet promoted) hits.
- * - Writes a promotion record for each newly processed hit.
- * - Re-running this route NEVER inflates hitCount, straightCount,
- *   boxedCount, or stateStrengthScore for already-promoted hits.
+ * v2.4 changes vs v2.3:
+ * - Handles both old snake_case dreamHit fields (candidate, game_type, draw_date,
+ *   match_type) AND new camelCase aliases (number, gameType, drawDate, hitType).
+ * - Resolves dreamerName: h.dreamerName → dreamers/{dreamerId} → ownerProfiles → dreamerId
+ * - Writes normalizedTerm, candidateNumber, winningNumber, drawDate, drawTime
+ *   to personalHitMappings (was missing before).
+ * - Uses DETERMINISTIC personalHitMappings doc ID:
+ *     ownerUid__dreamerId__normalizedTerm__number__gameType__state
+ *   so re-runs find the same doc and update it rather than creating duplicates.
+ * - Idempotency still via dreamHitPromotions (per-dreamHit docId registry).
+ *
+ * Architecture note:
+ * /api/dreams/refresh calls this route after refreshAllActiveWindows().
+ * dreamRefresh.ts writes dreamHits with normalized aliases.
+ * This route is the single authority for personalHitMappings writes.
  */
-import { NextRequest, NextResponse }    from 'next/server';
-import { getAdminDb }                   from '@/lib/firebase/admin';
-import { Timestamp }                     from 'firebase-admin/firestore';
+import { NextRequest, NextResponse } from 'next/server';
+import { getAdminDb }                from '@/lib/firebase/admin';
+import { Timestamp, FieldValue }     from 'firebase-admin/firestore';
 
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
 
-function toHitType(matchType: string): 'straight' | 'boxed' {
-  // "exact" → straight. Anything else ("box", "boxed") → boxed.
-  // "both" should no longer appear in dreamHits (fixed in dreamRefresh v2.3),
-  // but if old docs have it, treat as boxed.
-  return matchType === 'exact' ? 'straight' : 'boxed';
+function normalizeTerm(term: string): string {
+  return String(term ?? '').trim().toLowerCase().replace(/\\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
 }
 
-function toGameType(g: string): string {
-  if (g === 'pick3') return 'cash3';
-  if (g === 'pick4') return 'cash4';
-  return g;
+function safeId(value: unknown): string {
+  return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function resolveHitType(h: Record<string, any>): 'straight' | 'boxed' {
+  const raw = String(h.hitType ?? h.match_type ?? h.matchMode ?? '');
+  return raw === 'exact' || raw === 'straight' ? 'straight' : 'boxed';
+}
+
+function resolveGameType(h: Record<string, any>): string {
+  const raw = String(h.gameType ?? h.game_type ?? '');
+  if (raw === 'pick3') return 'cash3';
+  if (raw === 'pick4') return 'cash4';
+  return raw;
+}
+
+function resolveNumber(h: Record<string, any>): string {
+  return String(h.number ?? h.candidateNumber ?? h.candidate ?? '').trim();
+}
+
+function resolveWinningNumber(h: Record<string, any>): string {
+  return String(h.winningNumber ?? h.winning_number ?? '').trim();
+}
+
+function resolveDrawDate(h: Record<string, any>): string {
+  return String(h.drawDate ?? h.draw_date ?? '').trim();
+}
+
+function resolveDrawTime(h: Record<string, any>): string {
+  return String(h.drawTime ?? h.draw_time ?? '').trim();
+}
+
+function h_hasName(docs: Array<{data: FirebaseFirestore.DocumentData}>, dreamerId: string): boolean {
+  return docs.some(({ data: h }) => h.dreamerId === dreamerId && Boolean(h.dreamerName));
 }
 
 function calcDays(anchor: string, drawDate: string): number {
-  return Math.round(
-    (new Date(drawDate).getTime() - new Date(anchor).getTime()) / 86_400_000
-  );
+  try {
+    return Math.round((new Date(drawDate).getTime() - new Date(anchor).getTime()) / 86_400_000);
+  } catch { return 0; }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body     = await req.json().catch(() => ({}));
-    const ownerUid = body?.ownerUid ?? process.env.SWEET404_OWNER_UID;
-    if (!ownerUid) return NextResponse.json({ error: 'ownerUid required.' }, { status: 400 });
+    const ownerUid = String(body?.ownerUid ?? process.env.SWEET404_OWNER_UID ?? '').trim();
+    if (!ownerUid) {
+      return NextResponse.json({ error: 'ownerUid required.' }, { status: 400 });
+    }
 
     const db  = getAdminDb();
     const now = Timestamp.now();
 
-    // ── 1. Load all dreamHits for this owner ──────────────────────────────────
     const hitsSnap = await db.collection('dreamHits').where('ownerUid', '==', ownerUid).get();
     if (hitsSnap.empty) {
       return NextResponse.json({ ok: true, promoted: 0, skipped: 0, message: 'No dreamHits.' });
     }
 
-    // ── 2. Load already-promoted hit IDs (idempotency registry) ──────────────
-    // dreamHitPromotions: one doc per dreamHit docId that has been promoted.
-    // Single-field query on dreamHitId — no composite index needed.
     const promotionsSnap = await db
-      .collection('dreamHitPromotions')
-      .where('ownerUid', '==', ownerUid)
-      .get();
-
+      .collection('dreamHitPromotions').where('ownerUid', '==', ownerUid).get();
     const promotedIds = new Set<string>(promotionsSnap.docs.map(d => d.id));
 
-    // ── 3. Split into new vs already-promoted ─────────────────────────────────
-    const newHitDocs: Array<{ id: string; data: FirebaseFirestore.DocumentData }> = [];
+    const newHitDocs: Array<{ id: string; data: Record<string, any> }> = [];
     let skipped = 0;
-
     hitsSnap.forEach(d => {
-      if (promotedIds.has(d.id)) {
-        skipped++;
-      } else {
-        newHitDocs.push({ id: d.id, data: d.data() });
-      }
+      if (promotedIds.has(d.id)) { skipped++; }
+      else { newHitDocs.push({ id: d.id, data: d.data() as Record<string, any> }); }
     });
 
     if (newHitDocs.length === 0) {
       return NextResponse.json({ ok: true, promoted: 0, skipped, message: 'All hits already promoted.' });
     }
 
-    // ── 4. Load existing personalHitMappings to decide upsert vs create ───────
-    const mappingsSnap = await db
-      .collection('personalHitMappings')
-      .where('ownerUid', '==', ownerUid)
-      .get();
+    // Pre-fetch dreamer display names
+    const dreamerIdsMissing = new Set<string>();
+    for (const { data: h } of newHitDocs) {
+      if (!h.dreamerName && h.dreamerId && h.dreamerId !== 'owner-self') {
+        dreamerIdsMissing.add(h.dreamerId);
+      }
+    }
+    const dreamerNameCache = new Map<string, string>();
+    for (const did of dreamerIdsMissing) {
+      try {
+        const doc = await db.collection('dreamers').doc(did).get();
+        if (doc.exists) dreamerNameCache.set(did, String(doc.data()?.displayName ?? ''));
+      } catch { /* non-fatal */ }
+    }
+    let ownerDisplayName = '';
+    if (newHitDocs.some(({ data: h }) => !h.dreamerName && (!h.dreamerId || h.dreamerId === 'owner-self'))) {
+      try {
+        const ownerDoc = await db.collection('ownerProfiles').doc(ownerUid).get();
+        ownerDisplayName = String(ownerDoc.data()?.displayName ?? '');
+      } catch { /* non-fatal */ }
+    }
 
-    const existing = new Map<string, { id: string; hitCount: number; straightCount: number; boxedCount: number }>();
-    mappingsSnap.forEach(d => {
-      const data = d.data();
-      const key  = [data.dreamerId, data.termLabel, data.number, data.gameType, data.state].join('::');
-      existing.set(key, {
-        id: d.id,
-        hitCount:      data.hitCount      ?? 0,
-        straightCount: data.straightCount ?? 0,
-        boxedCount:    data.boxedCount    ?? 0,
-      });
-    });
+    function resolveDreamerName(h: Record<string, any>): string {
+      if (h.dreamerName) return String(h.dreamerName);
+      const did = h.dreamerId ?? 'owner-self';
+      if (did === 'owner-self') return ownerDisplayName;
+      return dreamerNameCache.get(did) ?? did;
+    }
 
-    // ── 5. Process new hits in batches ────────────────────────────────────────
-    const BATCH_SIZE = 200; // smaller batch because we write 2 collections per hit
+    const BATCH_SIZE = 200;
     let promoted = 0;
-    let updated  = 0;
-
-    // Track newly created mappings within this run to avoid duplicate creates
-    const newlyCreated = new Map<string, { id: string; hitCount: number; straightCount: number; boxedCount: number }>();
 
     for (let i = 0; i < newHitDocs.length; i += BATCH_SIZE) {
       const batch = db.batch();
       const chunk = newHitDocs.slice(i, i + BATCH_SIZE);
 
       for (const { id: hitDocId, data: h } of chunk) {
-        const gameType  = toGameType(h.game_type as string);
-        const hitType   = toHitType(h.match_type  as string);
-        const drawDate  = h.draw_date  as string;
-        const anchor    = (h.anchor_date as string) ?? drawDate;
-        const daysFromDream = calcDays(anchor, drawDate);
-        const sDelta    = hitType === 'straight' ? 1 : 0;
-        const bDelta    = hitType === 'boxed'    ? 1 : 0;
-        const mappingKey = [h.dreamerId, h.termLabel, h.candidate, gameType, h.state].join('::');
+        const dreamerId      = String(h.dreamerId ?? 'owner-self');
+        const dreamerName    = resolveDreamerName(h);
+        const termLabel      = String(h.termLabel ?? '').trim();
+        const normalizedTerm = normalizeTerm(termLabel);
+        const number         = resolveNumber(h);
+        const winningNumber  = resolveWinningNumber(h);
+        const gameType       = resolveGameType(h);
+        const drawDate       = resolveDrawDate(h);
+        const drawTime       = resolveDrawTime(h);
+        const hitType        = resolveHitType(h);
+        const state          = String(h.state ?? '').trim();
+        const dreamEntryId   = String(h.dreamEntryId ?? '');
+        const windowId       = String(h.dreamWindowId ?? h.activeWindowId ?? '');
+        const anchor         = String(h.anchor_date ?? drawDate);
+        const daysFromDream  = calcDays(anchor, drawDate);
 
-        // Write promotion record (marks this hit as promoted)
+        if (!number || !state || !termLabel) continue;
+
+        const sDelta = hitType === 'straight' ? 1 : 0;
+        const bDelta = hitType === 'boxed' ? 1 : 0;
+
+        // Deterministic doc ID — re-runs find same doc and increment
+        const pmId = [ownerUid, dreamerId, normalizedTerm, number, gameType, state]
+          .map(safeId).join('__');
+
         batch.set(
-          db.collection('dreamHitPromotions').doc(hitDocId),
-          { ownerUid, hitDocId, promotedAt: now }
+          db.collection('personalHitMappings').doc(pmId),
+          {
+            ownerUid, dreamerId, dreamerName, termLabel, normalizedTerm,
+            number, candidateNumber: number, winningNumber,
+            gameType, state, drawDate, drawTime, hitType, matchMode: hitType,
+            source: 'live-dream-refresh', dreamEntryId,
+            sourceDreamEntryId: dreamEntryId, activeWindowId: windowId,
+            daysFromDream, sameDay: daysFromDream === 0,
+            hitCount:           FieldValue.increment(1),
+            straightCount:      FieldValue.increment(sDelta),
+            boxedCount:         FieldValue.increment(bDelta),
+            stateStrengthScore: FieldValue.increment(hitType === 'straight' ? 3 : 1),
+            lastHitDate: drawDate, lastHitAt: now, updatedAt: now, createdAt: now,
+          },
+          { merge: true }
         );
 
-        const prev = existing.get(mappingKey) ?? newlyCreated.get(mappingKey);
+        batch.set(
+          db.collection('dreamHitPromotions').doc(hitDocId),
+          { ownerUid, hitDocId, promotedAt: now },
+          { merge: true }
+        );
 
-        if (prev) {
-          // Mapping already exists — update counts
-          const newS = prev.straightCount + sDelta;
-          const newB = prev.boxedCount    + bDelta;
-          batch.update(db.collection('personalHitMappings').doc(prev.id), {
-            hitCount:           prev.hitCount + 1,
-            straightCount:      newS,
-            boxedCount:         newB,
-            stateStrengthScore: newS * 3 + newB,
-            lastHitDate:        drawDate,
-            updatedAt:          now,
-          });
-          // Update in-memory so subsequent hits in this batch are correct
-          prev.hitCount++;
-          prev.straightCount = newS;
-          prev.boxedCount    = newB;
-          updated++;
-        } else {
-          // New mapping — create
-          const ref = db.collection('personalHitMappings').doc();
-          batch.set(ref, {
-            ownerUid,
-            dreamerId:          h.dreamerId   ?? '',
-            dreamerName:        h.dreamerName ?? '',
-            termLabel:          h.termLabel,
-            number:             h.candidate,
-            gameType,
-            state:              h.state,
-            drawTime:           h.draw_time,
-            drawDate,
-            hitType,
-            sourceDreamEntryId: h.dreamEntryId ?? '',
-            daysFromDream,
-            sameDay:            daysFromDream === 0,
-            hitCount:           1,
-            straightCount:      sDelta,
-            boxedCount:         bDelta,
-            stateStrengthScore: sDelta * 3 + bDelta,
-            lastHitDate:        drawDate,
-            createdAt:          now,
-            updatedAt:          now,
-          });
-          // Track so same mapping isn't created twice within this run
-          newlyCreated.set(mappingKey, {
-            id: ref.id, hitCount: 1, straightCount: sDelta, boxedCount: bDelta,
-          });
-          promoted++;
-        }
+        promoted++;
       }
-
       await batch.commit();
     }
 
-    return NextResponse.json({
-      ok:       true,
-      promoted,
-      updated,
-      skipped,
-      total:    promoted + updated,
-    });
+    return NextResponse.json({ ok: true, promoted, skipped, total: promoted + skipped });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[promote-hits]', msg);

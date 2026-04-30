@@ -35,6 +35,14 @@ function addDays(dateString: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function normalizeTerm(term: string): string {
+  return String(term ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+}
+
+function safeId(value: unknown): string {
+  return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 interface TermMapping {
   term: string;
   normalizedTerm?: string;
@@ -51,7 +59,7 @@ export async function POST(req: NextRequest) {
 
     const ownerUid     = String(body.ownerUid     || '');
     const dreamerId    = String(body.dreamerId    || 'owner-self');
-    const dreamerName  = String(body.dreamerName  || 'Sweet404Peaches');
+    const dreamerName  = String(body.dreamerName  || '');   // never default to a hardcoded name
     const dreamDate    = String(body.dreamDate    || '');
     const rawText      = String(body.rawText      || '');
     const cleanedText  = String(body.cleanedText  || rawText.trim());
@@ -159,51 +167,73 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 3. Write termNumberMappings (Universal Dream Dictionary) ──────────────
-    // One doc per term+number+gameType combination.
+    //
+    // One flat doc per (ownerUid, dreamerId, normalizedTerm, number, gameType).
+    //
+    // Doc ID includes dreamerId so dreamer-filtered queries return the correct rows.
+    // Leading zeros preserved — numbers stored as strings, never coerced to int.
+    // merge:true + deterministic ID = safe to re-save without duplicating rows.
+
     let termMappingsWritten = 0;
+    const DICT_BATCH_SIZE = 400;
+
+    interface DictRow { docId: string; fields: Record<string, unknown> }
+    const dictRows: DictRow[] = [];
 
     for (const mapping of termMappings) {
-      const termLabel = String(mapping.term || '').trim() || 'unknown-term';
+      const termLabel     = String(mapping.term || '').trim() || 'unknown-term';
+      const normalizedTerm = normalizeTerm(termLabel);
 
       for (const value of (mapping.cash3Numbers ?? [])) {
-        const docId = [ownerUid, termLabel, value, 'cash3'].join('__').replace(/[^a-zA-Z0-9_-]/g, '_');
-        await db.collection('termNumberMappings').doc(docId).set(
-          {
-            ownerUid,
-            termLabel,
-            number:           value,
-            gameType:         'cash3',
-            source:           'parsed',
-            confidenceBasis:  `current-dream:${dreamDate}`,
-            rawContext:       rawText.slice(0, 500),
-            dreamEntryId,
-            createdAt:        now,
-            updatedAt:        now,
-          },
-          { merge: true }
-        );
-        termMappingsWritten++;
+        const number = String(value ?? '').trim();
+        if (!number) continue;
+        const docId = [ownerUid, dreamerId, normalizedTerm, number, 'cash3'].map(safeId).join('__');
+        dictRows.push({ docId, fields: {
+          ownerUid,
+          dreamerId,
+          dreamerName,
+          termLabel,
+          normalizedTerm,
+          number,                         // string — leading zeros preserved
+          gameType:          'cash3',
+          source:            'live-dream-intake',
+          dreamEntryId,
+          sourceDreamEntryId: dreamEntryId,
+          dreamDate,
+          createdAt:          now,
+          updatedAt:          now,
+        }});
       }
 
       for (const value of (mapping.cash4Numbers ?? [])) {
-        const docId = [ownerUid, termLabel, value, 'cash4'].join('__').replace(/[^a-zA-Z0-9_-]/g, '_');
-        await db.collection('termNumberMappings').doc(docId).set(
-          {
-            ownerUid,
-            termLabel,
-            number:           value,
-            gameType:         'cash4',
-            source:           'parsed',
-            confidenceBasis:  `current-dream:${dreamDate}`,
-            rawContext:       rawText.slice(0, 500),
-            dreamEntryId,
-            createdAt:        now,
-            updatedAt:        now,
-          },
-          { merge: true }
-        );
-        termMappingsWritten++;
+        const number = String(value ?? '').trim();
+        if (!number) continue;
+        const docId = [ownerUid, dreamerId, normalizedTerm, number, 'cash4'].map(safeId).join('__');
+        dictRows.push({ docId, fields: {
+          ownerUid,
+          dreamerId,
+          dreamerName,
+          termLabel,
+          normalizedTerm,
+          number,                         // string — leading zeros preserved
+          gameType:          'cash4',
+          source:            'live-dream-intake',
+          dreamEntryId,
+          sourceDreamEntryId: dreamEntryId,
+          dreamDate,
+          createdAt:          now,
+          updatedAt:          now,
+        }});
       }
+    }
+
+    for (let i = 0; i < dictRows.length; i += DICT_BATCH_SIZE) {
+      const batch = db.batch();
+      for (const { docId, fields } of dictRows.slice(i, i + DICT_BATCH_SIZE)) {
+        batch.set(db.collection('termNumberMappings').doc(docId), fields, { merge: true });
+      }
+      await batch.commit();
+      termMappingsWritten += dictRows.slice(i, i + DICT_BATCH_SIZE).length;
     }
 
     return NextResponse.json({
