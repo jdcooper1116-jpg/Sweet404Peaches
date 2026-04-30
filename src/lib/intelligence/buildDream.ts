@@ -254,3 +254,143 @@ export function summarizeFellBeforeSupport(
     .map(s => ({ ...s, stateCount: s.topStates.length }))
     .sort((a, b) => b.hitCount - a.hitCount);
 }
+
+// ─── parseBulkTerms ───────────────────────────────────────────────────────────
+
+export type BulkParseResult = {
+  terms:    ParsedBulkTerm[];
+  warnings: string[];
+};
+
+export type ParsedBulkTerm = {
+  termLabel:     string;
+  normalizedTerm:string;
+  cash3Numbers:  string[];
+  cash4Numbers:  string[];
+};
+
+/**
+ * Parse a multi-line textarea input into grouped term→number mappings.
+ *
+ * Supported formats (all in one textarea):
+ *   boat: 123, 020, 0560
+ *   truck - 312 395 0247
+ *   boat\n123 020 0560       (term on one line, numbers on next)
+ *
+ * Numbers are classified by digit count:
+ *   exactly 3 digits → Cash 3
+ *   exactly 4 digits → Cash 4
+ *   other            → warning, skipped
+ *
+ * Leading zeros preserved — numbers stored as strings, never coerced.
+ *
+ * Merging: if the same normalized term appears multiple times in the input,
+ * their numbers are merged (deduplicated).
+ */
+export function parseBulkTerms(input: string): BulkParseResult {
+  const warnings: string[] = [];
+  const map      = new Map<string, ParsedBulkTerm>();
+
+  // Tokenise into lines, collapsing blank lines
+  const lines = input.split('\n');
+
+  let pendingTerm = '';   // term label from previous line (for "term\nnumbers" format)
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw  = lines[i];
+    const line = raw.trim();
+    if (!line) { pendingTerm = ''; continue; }
+
+    // ── Detect "term : numbers" or "term - numbers" on one line ────────────
+    // Colon or dash separator: term portion is before the first : or -
+    const separatorMatch = line.match(/^([^:\-]+)[:|-](.+)$/);
+    if (separatorMatch) {
+      const termRaw = separatorMatch[1].trim();
+      const numRaw  = separatorMatch[2].trim();
+      if (termRaw && /[a-zA-Z]/.test(termRaw)) {
+        // Valid term label
+        pendingTerm = '';
+        addTermNumbers(termRaw, numRaw, map, warnings);
+        continue;
+      }
+    }
+
+    // ── Detect line that is purely numbers (digits + separators, no alpha) ─
+    const isPureNumbers = /^[\d,\s;/|.]+$/.test(line);
+    if (isPureNumbers) {
+      if (pendingTerm) {
+        // Assign these numbers to the pending term from the previous line
+        addTermNumbers(pendingTerm, line, map, warnings);
+        pendingTerm = '';
+      } else {
+        warnings.push(`Numbers on line ${i + 1} could not be attributed to a term: "${line.slice(0, 40)}"`);
+      }
+      continue;
+    }
+
+    // ── Detect pure term label (no digits) ────────────────────────────────
+    // Lines like "boat" or "woman crying" that have no numbers on them
+    if (/[a-zA-Z]/.test(line) && !/\d/.test(line)) {
+      pendingTerm = line;
+      continue;
+    }
+
+    // ── Mixed line: term-like token followed by numbers ───────────────────
+    // e.g. "boat 123 020 0560" or "crying 918 672 8415"
+    const tokens = line.split(/[,\s;/|]+/).map(t => t.trim()).filter(Boolean);
+    const numTokens  = tokens.filter(t => /^\d+$/.test(t));
+    const wordTokens = tokens.filter(t => /[a-zA-Z]/.test(t));
+
+    if (wordTokens.length > 0 && numTokens.length > 0) {
+      const termLabel = wordTokens.join(' ');
+      addTermNumbers(termLabel, numTokens.join(' '), map, warnings);
+      pendingTerm = '';
+      continue;
+    }
+
+    // ── Unrecognised line ─────────────────────────────────────────────────
+    warnings.push(`Could not parse line ${i + 1}: "${line.slice(0, 50)}"`);
+  }
+
+  return { terms: Array.from(map.values()), warnings };
+}
+
+function addTermNumbers(
+  termRaw:  string,
+  numRaw:   string,
+  map:      Map<string, ParsedBulkTerm>,
+  warnings: string[]
+): void {
+  const termLabel     = termRaw.trim();
+  const normalizedTerm = normalizeTermLabel(termLabel);
+  if (!normalizedTerm) return;
+
+  if (!map.has(normalizedTerm)) {
+    map.set(normalizedTerm, { termLabel, normalizedTerm, cash3Numbers: [], cash4Numbers: [] });
+  }
+  const entry = map.get(normalizedTerm)!;
+
+  // Tokenise numbers — allow comma, space, slash, semicolon, pipe
+  const tokens = numRaw.split(/[,\s;/|]+/).map(t => t.trim()).filter(Boolean);
+
+  for (const tok of tokens) {
+    if (!/^\d+$/.test(tok)) {
+      if (tok) warnings.push(`Skipped "${tok}" — not a valid number.`);
+      continue;
+    }
+    if (tok.length === 3) {
+      if (!entry.cash3Numbers.includes(tok)) entry.cash3Numbers.push(tok);
+    } else if (tok.length === 4) {
+      if (!entry.cash4Numbers.includes(tok)) entry.cash4Numbers.push(tok);
+    } else {
+      warnings.push(`Skipped "${tok}" — Cash 3 numbers must be exactly 3 digits, Cash 4 exactly 4 digits.`);
+    }
+  }
+
+  // Warn if the term ended up with no valid numbers
+  if (entry.cash3Numbers.length === 0 && entry.cash4Numbers.length === 0) {
+    if (!warnings.some(w => w.includes(`No numbers`))) {
+      warnings.push(`No valid numbers found for term "${termLabel}".`);
+    }
+  }
+}

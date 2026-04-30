@@ -15,6 +15,7 @@ type NavItem = { href: string; label: string; icon: any; badge?: BadgeKind; };
 const dreamLedgerNav: NavItem[] = [
   { href: '/dashboard',   label: 'Ledger Dashboard',     icon: LayoutDashboard },
   { href: '/dreams/new',  label: 'Write a Dream',        icon: PenLine },
+  { href: '/dreams/build', label: 'Build a Dream',        icon: Sparkles },
   { href: '/dreams',      label: 'Dream Journal',        icon: BookOpen },
   { href: '/dreamers',    label: 'Dreamers',             icon: Users },
   { href: '/windows',     label: 'Active Windows',       icon: CalendarRange },

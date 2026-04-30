@@ -5,12 +5,14 @@ import Link from 'next/link';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   groupDictionaryTerms,
-  parseNumberList,
+  parseBulkTerms,
   buildSaveEntryPayload,
   summarizeFellBeforeSupport,
+  normalizeTermLabel,
   type SelectedTerm,
   type GroupedTerm,
   type FellSupportSummary,
+  type ParsedBulkTerm,
 } from '@/lib/intelligence/buildDream';
 
 // ─── Visual helpers ───────────────────────────────────────────────────────────
@@ -92,11 +94,11 @@ export default function BuildDreamPage() {
   const [fellLoading,   setFellLoading]   = useState(false);
   const [fellLoaded,    setFellLoaded]    = useState(false);
 
-  // ── Add custom term ─────────────────────────────────────────────────────────
-  const [customTerm,    setCustomTerm]    = useState('');
-  const [customC3,      setCustomC3]      = useState('');
-  const [customC4,      setCustomC4]      = useState('');
-  const [customErrors,  setCustomErrors]  = useState<string[]>([]);
+  // ── Bulk parser ──────────────────────────────────────────────────────────────
+  const [bulkInput,    setBulkInput]    = useState('');
+  const [bulkParsed,   setBulkParsed]   = useState<ParsedBulkTerm[]>([]);
+  const [bulkWarnings, setBulkWarnings] = useState<string[]>([]);
+  const [bulkParsedAt, setBulkParsedAt] = useState(false);
 
   // ── Save ────────────────────────────────────────────────────────────────────
   const [saving,        setSaving]        = useState(false);
@@ -206,32 +208,6 @@ export default function BuildDreamPage() {
     [fellPreview, fellLoaded, selectedTerms]
   );
 
-  // ── Add custom term ─────────────────────────────────────────────────────────
-  function addCustomTerm() {
-    const label = customTerm.trim();
-    if (!label) { setCustomErrors(['Term label is required.']); return; }
-
-    const c3 = parseNumberList(customC3, 3);
-    const c4 = parseNumberList(customC4, 4);
-    const errs: string[] = [];
-    if (c3.invalid.length) errs.push(`Invalid Cash 3 (need 3 digits): ${c3.invalid.join(', ')}`);
-    if (c4.invalid.length) errs.push(`Invalid Cash 4 (need 4 digits): ${c4.invalid.join(', ')}`);
-    if (c3.valid.length === 0 && c4.valid.length === 0) errs.push('Add at least one Cash 3 or Cash 4 number.');
-    if (errs.length) { setCustomErrors(errs); return; }
-
-    const normalized = label.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
-    if (selectedKeys.has(normalized)) { setCustomErrors(['This term is already selected.']); return; }
-
-    setSelectedTerms(prev => [...prev, {
-      term:          label,
-      normalizedTerm:normalized,
-      cash3Numbers:  c3.valid,
-      cash4Numbers:  c4.valid,
-      source:        'custom',
-    }]);
-    setCustomTerm(''); setCustomC3(''); setCustomC4(''); setCustomErrors([]);
-    setFellLoaded(false); setFellPreview([]);
-  }
 
   // ── Merged numbers ───────────────────────────────────────────────────────────
   const { allCash3, allCash4 } = useMemo(() => {
@@ -253,6 +229,94 @@ export default function BuildDreamPage() {
   }
 
   // ── Save dream ───────────────────────────────────────────────────────────────
+  const handleParse = () => {
+    const result = parseBulkTerms(bulkInput) as any;
+    setBulkParsed(result.terms ?? result.parsed ?? result.items ?? []);
+    setBulkWarnings(result.warnings ?? []);
+    setBulkParsedAt(true);
+  };
+
+  const handleClearParser = () => {
+    setBulkInput('');
+    setBulkParsed([]);
+    setBulkWarnings([]);
+    setBulkParsedAt(false);
+  };
+
+  const handleAddParsed = () => {
+    if (!bulkParsed.length) return;
+
+    const cleanTerm = (value: any) =>
+      String(value ?? '').trim();
+
+    const normalizeTerm = (value: any) =>
+      cleanTerm(value)
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9_-]/g, '');
+
+    const uniqueStrings = (values: any[]) =>
+      Array.from(new Set(
+        (values ?? [])
+          .map(v => String(v ?? '').trim())
+          .filter(Boolean)
+      ));
+
+    setSelectedTerms((prev: any) => {
+      const current = Array.isArray(prev) ? prev : [];
+      const byTerm = new Map<string, any>();
+
+      for (const item of current) {
+        const key = normalizeTerm(item.normalizedTerm || item.term || item.termLabel);
+        if (!key) continue;
+
+        byTerm.set(key, {
+          ...item,
+          term: item.term ?? item.termLabel ?? key,
+          normalizedTerm: item.normalizedTerm ?? key,
+          cash3Numbers: uniqueStrings(item.cash3Numbers ?? []),
+          cash4Numbers: uniqueStrings(item.cash4Numbers ?? []),
+        });
+      }
+
+      for (const raw of bulkParsed as any[]) {
+        const label = cleanTerm(raw.term ?? raw.termLabel ?? raw.label);
+        const key = normalizeTerm(raw.normalizedTerm ?? label);
+        if (!key || !label) continue;
+
+        const nextCash3 = uniqueStrings(raw.cash3Numbers ?? raw.cash3 ?? []);
+        const nextCash4 = uniqueStrings(raw.cash4Numbers ?? raw.cash4 ?? []);
+        const existing = byTerm.get(key);
+
+        if (existing) {
+          byTerm.set(key, {
+            ...existing,
+            source: existing.source === 'dictionary' ? 'mixed' : (existing.source ?? 'mixed'),
+            cash3Numbers: uniqueStrings([...(existing.cash3Numbers ?? []), ...nextCash3]),
+            cash4Numbers: uniqueStrings([...(existing.cash4Numbers ?? []), ...nextCash4]),
+          });
+        } else {
+          byTerm.set(key, {
+            term: label,
+            normalizedTerm: key,
+            cash3Numbers: nextCash3,
+            cash4Numbers: nextCash4,
+            relatedTerms: [],
+            archivedNumbers: [],
+            lineContexts: raw.lineContexts ?? [],
+            source: 'custom',
+          });
+        }
+      }
+
+      return Array.from(byTerm.values()) as any;
+    });
+
+    setBulkParsed([]);
+    setBulkWarnings([]);
+    setBulkParsedAt(false);
+  };
+
   async function handleSave() {
     if (!user) return;
     if (!dreamDate) { setSaveError('Dream date is required.'); return; }
@@ -510,39 +574,85 @@ export default function BuildDreamPage() {
         </section>
       )}
 
-      {/* ── 7. Add Missing Term ── */}
+      {/* ── 7. Add New Terms (Bulk Parser) ── */}
       <section className="journal-card">
-        <SH title="Add a New Term" sub="Term not in your dictionary? Add it with numbers here." />
-        <div style={{ display:'grid', gap:'10px' }}>
-          <div style={{ display:'grid', gap:'8px', gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))' }}>
-            <div>
-              <label className="journal-label" htmlFor="customTerm">Term Label</label>
-              <input id="customTerm" className="journal-input" value={customTerm} onChange={e => setCustomTerm(e.target.value)} placeholder="e.g. boat, funeral, crying…" />
-            </div>
-            <div>
-              <label className="journal-label" htmlFor="customC3">Cash 3 Numbers</label>
-              <input id="customC3" className="journal-input" value={customC3} onChange={e => setCustomC3(e.target.value)}
-                placeholder="856, 089, 312…" style={{ fontFamily:'monospace' }} />
-            </div>
-            <div>
-              <label className="journal-label" htmlFor="customC4">Cash 4 Numbers</label>
-              <input id="customC4" className="journal-input" value={customC4} onChange={e => setCustomC4(e.target.value)}
-                placeholder="0187, 3456…" style={{ fontFamily:'monospace' }} />
-            </div>
-          </div>
-          {customErrors.length > 0 && (
-            <div style={{ fontSize:'12px', color:'#ff9090', display:'grid', gap:'3px' }}>
-              {customErrors.map(e => <div key={e}>· {e}</div>)}
-            </div>
-          )}
-          <div>
-            <button type="button" className="btn-secondary" style={{ fontSize:'13px' }} onClick={addCustomTerm} disabled={!customTerm.trim()}>
-              + Add Term to Dream
+        <SH title="Add New Terms" sub="Paste terms and numbers not yet in your dictionary. These will be added to this dream and saved to the dictionary." />
+
+        <div style={{ marginBottom:'10px', padding:'10px 13px', borderRadius:'12px', background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', fontSize:'12px', color:'rgba(255,255,255,0.50)', lineHeight:1.7 }}>
+          Use dictionary buttons above for known symbols. Use this parser for new symbols.
+          Everything selected here saves as one normal dream entry.
+        </div>
+
+        <textarea
+          className="journal-input"
+          rows={7}
+          value={bulkInput}
+          onChange={e => { setBulkInput(e.target.value); setBulkParsedAt(false); }}
+          placeholder={"boat: 123, 020, 0560\ntruck: 312, 395, 0247\ncrying: 918, 672, 8415\n\n— or —\n\nboat\n123 020 0560\n\ntruck\n312 395"}
+          style={{ fontFamily:'monospace', fontSize:'12px', resize:'vertical', width:'100%' }}
+        />
+
+        <div style={{ display:'flex', gap:'8px', marginTop:'10px', flexWrap:'wrap', alignItems:'center' }}>
+          <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}
+            onClick={handleParse} disabled={!bulkInput.trim()}>
+            🔍 Parse Terms
+          </button>
+          {bulkParsedAt && bulkParsed.length > 0 && (
+            <button type="button" className="btn-primary" style={{ fontSize:'12px' }}
+              onClick={handleAddParsed}>
+              + Add {bulkParsed.length} Term{bulkParsed.length !== 1 ? 's' : ''} to Dream
             </button>
-            <div style={{ marginTop:'5px', fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>
-              Comma, space, or line separated · Cash 3 = exactly 3 digits · Cash 4 = exactly 4 digits · Leading zeros preserved
+          )}
+          {(bulkInput || bulkParsedAt) && (
+            <button type="button" className="btn-secondary" style={{ fontSize:'12px', opacity:0.7 }}
+              onClick={handleClearParser}>
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Parsed preview */}
+        {bulkParsedAt && bulkParsed.length > 0 && (
+          <div style={{ marginTop:'12px', display:'grid', gap:'7px' }}>
+            <div style={{ fontSize:'11px', fontWeight:700, color:'rgba(255,255,255,0.55)', textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>
+              Parsed — {bulkParsed.length} term{bulkParsed.length !== 1 ? 's' : ''}
             </div>
+            {bulkParsed.map(p => (
+              <div key={p.normalizedTerm} style={{ padding:'8px 11px', borderRadius:'11px', background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.09)', display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
+                <span style={{ fontWeight:700, fontSize:'12px', color:'#fff', fontFamily:'system-ui,sans-serif', minWidth:'80px' }}>{p.termLabel}</span>
+                <div style={{ display:'flex', gap:'4px', flexWrap:'wrap' }}>
+                  {p.cash3Numbers.map(n => <span key={n} style={{ fontFamily:'monospace', fontSize:'11px', padding:'1px 6px', borderRadius:'6px', background:'rgba(255,107,74,0.14)', border:'1px solid rgba(255,107,74,0.26)', color:'#ff8a6a' }}>{n}</span>)}
+                  {p.cash4Numbers.map(n => <span key={n} style={{ fontFamily:'monospace', fontSize:'11px', padding:'1px 6px', borderRadius:'6px', background:'rgba(160,144,255,0.14)', border:'1px solid rgba(160,144,255,0.26)', color:'#a090ff' }}>{n}</span>)}
+                  {p.cash3Numbers.length === 0 && p.cash4Numbers.length === 0 && (
+                    <span style={{ fontSize:'11px', color:'rgba(255,204,80,0.70)' }}>no valid numbers found</span>
+                  )}
+                </div>
+                <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)', marginLeft:'auto' }}>
+                  {p.cash3Numbers.length}×3 · {p.cash4Numbers.length}×4
+                </span>
+              </div>
+            ))}
           </div>
+        )}
+
+        {bulkParsedAt && bulkParsed.length === 0 && (
+          <div style={{ marginTop:'10px', fontSize:'12px', color:'rgba(255,204,80,0.80)' }}>
+            ⚠ No terms were parsed. Check the format — each term needs a label and at least one number.
+          </div>
+        )}
+
+        {/* Warnings */}
+        {bulkWarnings.length > 0 && (
+          <div style={{ marginTop:'8px', display:'grid', gap:'3px' }}>
+            {bulkWarnings.map((w, i) => (
+              <div key={i} style={{ fontSize:'11px', color:'rgba(255,204,80,0.70)' }}>⚠ {w}</div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop:'8px', fontSize:'11px', color:'rgba(255,255,255,0.30)', lineHeight:1.7 }}>
+          Cash 3 = exactly 3 digits · Cash 4 = exactly 4 digits · Leading zeros preserved ·
+          Separators: colon, dash, comma, space, semicolon, slash
         </div>
       </section>
 
