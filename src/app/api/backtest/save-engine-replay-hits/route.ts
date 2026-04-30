@@ -264,7 +264,8 @@ export async function POST(req: NextRequest) {
                 daysFromDream:      hit.daysFromDream,
                 sameDay:            hit.sameDay,
                 lastHitDate:        hit.drawDate,
-                replaySource:       'lottery-engine',
+                source:             'backtest-replay',    // for fell-before source filter
+            replaySource:       'lottery-engine',
                 // FieldValue.increment is safe — we only call this for new events
                 hitCount:           FieldValue.increment(1),
                 straightCount:      FieldValue.increment(straightDelta),

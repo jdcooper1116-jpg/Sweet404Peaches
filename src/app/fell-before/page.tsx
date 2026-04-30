@@ -151,6 +151,7 @@ function FellBeforeInner() {
 
   const [rows,      setRows]      = useState<MappingRow[]>([]);
   const [dreamers,  setDreamers]  = useState<DreamerOption[]>([]);
+  const [ownerDisplayName, setOwnerDisplayName] = useState('');
   const [dreamerId, setDreamerId] = useState('');
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');
@@ -160,6 +161,8 @@ function FellBeforeInner() {
   const [searchNumber, setSearchNumber] = useState('');
   const [stateFilter,  setStateFilter]  = useState('');
   const [gameFilter,   setGameFilter]   = useState<'all'|'cash3'|'cash4'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all'|'backtest-replay'|'live-dream-refresh'|'unknown'>('all');
+  const [totalSampled, setTotalSampled] = useState<number | null>(null);
 
   useEffect(() => {
     const qd = searchParams.get('dreamerId') ?? '';
@@ -168,29 +171,57 @@ function FellBeforeInner() {
 
   useEffect(() => {
     if (!user) return;
-    fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`)
-      .then(r => r.json())
-      .then(d => { if (d.ok) setDreamers(d.dreamers ?? []); })
-      .catch(err => console.error('dreamers load:', err));
+    Promise.all([
+      fetch(`/api/dreamers?ownerUid=${encodeURIComponent(user.uid)}`).then(r => r.json()),
+      fetch(`/api/owner-profile?ownerUid=${encodeURIComponent(user.uid)}`).then(r => r.json()),
+    ]).then(([dreamerData, profileData]) => {
+      if (dreamerData.ok) setDreamers(dreamerData.dreamers ?? []);
+      if (profileData.ok && profileData.profile?.displayName) {
+        setOwnerDisplayName(profileData.profile.displayName);
+      }
+    }).catch(err => console.error('dreamers/profile load:', err));
   }, [user]);
 
-  async function loadRows(did?: string) {
+  // loadRows is called whenever any server-side filter changes.
+  // It passes all active filters to the API so results come from a full
+  // 500-row sample with server-side filtering — not a capped 250-row client filter.
+  async function loadRows(overrides?: {
+    did?: string; term?: string; num?: string;
+    state?: string; game?: string; source?: string;
+  }) {
     if (!user) { setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const activeDid = did !== undefined ? did : dreamerId;
+      const activeDid    = overrides?.did    !== undefined ? overrides.did    : dreamerId;
+      const activeTerm   = overrides?.term   !== undefined ? overrides.term   : searchTerm;
+      const activeNum    = overrides?.num    !== undefined ? overrides.num    : searchNumber;
+      const activeState  = overrides?.state  !== undefined ? overrides.state  : stateFilter;
+      const activeGame   = overrides?.game   !== undefined ? overrides.game   : gameFilter;
+      const activeSource = overrides?.source !== undefined ? overrides.source : sourceFilter;
+
       const qs = new URLSearchParams({ ownerUid: user.uid });
-      if (activeDid) qs.set('dreamerId', activeDid);
+      if (activeDid && activeDid !== 'all')   qs.set('dreamerId', activeDid);
+      if (activeTerm.trim())                  qs.set('term',      activeTerm.trim());
+      if (activeNum.trim())                   qs.set('number',    activeNum.trim());
+      if (activeState)                        qs.set('state',     activeState);
+      if (activeGame && activeGame !== 'all') qs.set('gameType',  activeGame);
+      if (activeSource && activeSource !== 'all') qs.set('source', activeSource);
+      // Auto-bump limit when any filter is active so server can search full dataset
+      const hasFilter = !!(activeTerm.trim() || activeNum.trim() || activeSource !== 'all');
+      qs.set('limit', hasFilter ? '500' : '250');
+
       const res  = await fetch(`/api/fell-before?${qs.toString()}`);
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Failed to load term memory.');
+      if (!data.ok) { setError(data.error || 'Failed to load term memory.'); return; }
       setRows(Array.isArray(data.rows) ? (data.rows as MappingRow[]) : []);
+      setTotalSampled(data.totalSampled ?? null);
     } catch (err) {
       console.error(err);
       setError('Could not load As They Fell Before dictionary.');
     } finally { setLoading(false); }
   }
 
+  // Reload when dreamer changes
   useEffect(() => { void loadRows(); }, [user, dreamerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleDreamerChange(did: string) { setDreamerId(did); }
@@ -204,34 +235,14 @@ function FellBeforeInner() {
     return Array.from(s).sort();
   }, [dictionary]);
 
-  // Filter by term/number/state/game
-  const filtered = useMemo(() => {
-    const qt = searchTerm.trim().toLowerCase();
-    const qn = searchNumber.trim();
-    return dictionary
-      .map(tg => {
-        if (qt && !tg.term.toLowerCase().includes(qt)) return null;
-        const filteredNumbers = tg.numbers
-          .map(ng => {
-            if (qn && !ng.number.includes(qn)) return null;
-            if (gameFilter !== 'all' && ng.gameType !== gameFilter) return null;
-            const filteredStates = stateFilter
-              ? ng.states.filter(sr => sr.state === stateFilter)
-              : ng.states;
-            if (!filteredStates.length) return null;
-            return { ...ng, states: filteredStates };
-          })
-          .filter((ng): ng is NonNullable<typeof ng> => ng !== null);
-        if (!filteredNumbers.length) return null;
-        return { ...tg, numbers: filteredNumbers };
-      })
-      .filter((tg): tg is NonNullable<typeof tg> => tg !== null);
-  }, [dictionary, searchTerm, searchNumber, stateFilter, gameFilter]);
+  // Server handles term/number/state/gameType/source filtering.
+  // The dictionary useMemo just groups returned rows — no client-side filter needed.
+  const filtered = dictionary;
 
   const letters = useMemo(() => Array.from(new Set(filtered.map(g => g.letter))).sort(), [filtered]);
 
   const scopeLabel = dreamerId === '' ? 'All Dreamers'
-    : dreamerId === 'owner-self' ? 'Owner / Self'
+    : dreamerId === 'owner-self' ? (ownerDisplayName || 'Owner / Self')
     : dreamers.find(d => d.id === dreamerId)?.displayName ?? dreamerId;
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -279,13 +290,13 @@ function FellBeforeInner() {
             <label className="journal-label" htmlFor="dreamerSel">Personal Dictionary</label>
             <select id="dreamerSel" className="journal-select" value={dreamerId} onChange={e => handleDreamerChange(e.target.value)}>
               <option value="">All Dreamers</option>
-              <option value="owner-self">Owner / Self</option>
+              <option value="owner-self">{ownerDisplayName || 'Owner / Self'}</option>
               {dreamers.map(d => <option key={d.id} value={d.id}>{d.displayName}</option>)}
             </select>
           </div>
           <div>
             <label className="journal-label" htmlFor="gameFil">Game Type</label>
-            <select id="gameFil" className="journal-select" value={gameFilter} onChange={e => setGameFilter(e.target.value as typeof gameFilter)}>
+            <select id="gameFil" className="journal-select" value={gameFilter} onChange={e => { setGameFilter(e.target.value as typeof gameFilter); void loadRows({ game: e.target.value }); }}>
               <option value="all">All Games</option>
               <option value="cash3">Cash 3</option>
               <option value="cash4">Cash 4</option>
@@ -293,20 +304,53 @@ function FellBeforeInner() {
           </div>
           <div>
             <label className="journal-label" htmlFor="stateFil">State</label>
-            <select id="stateFil" className="journal-select" value={stateFilter} onChange={e => setStateFilter(e.target.value)}>
+            <select id="stateFil" className="journal-select" value={stateFilter} onChange={e => { setStateFilter(e.target.value); void loadRows({ state: e.target.value }); }}>
               <option value="">All States</option>
               {allStates.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           <div>
             <label className="journal-label" htmlFor="termSearch">Search Term</label>
-            <input id="termSearch" className="journal-input" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="driving, sister…" />
+            <input id="termSearch" className="journal-input" value={searchTerm}
+              onChange={e => { setSearchTerm(e.target.value); }}
+              onKeyDown={e => { if (e.key === 'Enter') void loadRows({ term: searchTerm }); }}
+              onBlur={() => void loadRows()}
+              placeholder="driving, sister, boat…" />
           </div>
           <div>
             <label className="journal-label" htmlFor="numSearch">Search Number</label>
-            <input id="numSearch" className="journal-input" value={searchNumber} onChange={e => setSearchNumber(e.target.value)} placeholder="856, 089…" style={{ fontFamily: 'monospace' }} />
+            <input id="numSearch" className="journal-input" value={searchNumber}
+              onChange={e => setSearchNumber(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') void loadRows({ num: searchNumber }); }}
+              onBlur={() => void loadRows()}
+              placeholder="856, 089…" style={{ fontFamily: 'monospace' }} />
+            <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}
+              onClick={() => void loadRows()}>
+              Search
+            </button>
           </div>
         </div>
+
+        {/* Capped sample note */}
+        {totalSampled !== null && (
+          <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)', padding:'2px 0 6px' }}>
+            Showing {rows.length} of {totalSampled} sampled rows.
+            {totalSampled >= 250 && !searchTerm && sourceFilter === 'all' && (
+              <span style={{ color:'rgba(255,204,80,0.70)', marginLeft:'4px' }}>
+                Showing a capped sample. Use search to find terms outside this sample.
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Backtest hint — only on empty/default state */}
+        {!loading && rows.length === 0 && (
+          <div style={{ padding:'11px 14px', borderRadius:'13px', border:'1px solid rgba(160,144,255,0.22)', background:'rgba(160,144,255,0.07)', fontSize:'12px', color:'rgba(255,255,255,0.65)', lineHeight:1.7 }}>
+            💡 <strong style={{ color:'#a090ff' }}>Looking for replay evidence?</strong>{' '}
+            Try searching terms from Backtest Archive such as <strong>boat</strong>, <strong>truck</strong>, or <strong>crying</strong>,
+            or filter <strong>Source = Backtest Replay</strong>.
+          </div>
+        )}
 
         {/* A–Z jump */}
         {letters.length > 0 && (
@@ -326,7 +370,7 @@ function FellBeforeInner() {
       {!loading && error && <div style={{ padding: '16px 20px', borderRadius: '16px', border: '1px solid rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</div>}
 
       {/* Empty state */}
-      {!loading && !error && filtered.length === 0 && (
+      {!loading && !error && filtered.length === 0 && rows.length === 0 && (
         <section className="journal-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: '#a090ff' }}>
             <BookMarked size={18} />
