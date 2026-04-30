@@ -45,6 +45,13 @@ export async function GET(req: NextRequest) {
     const dreamerId   = (params.get('dreamerId')     ?? '').trim();
     const termParam   = (params.get('term')          ?? '').trim().toLowerCase();
     const numberParam = (params.get('number')        ?? '').trim();
+
+    // If a word like "boat" is accidentally typed into Search Number,
+    // treat it as a term search instead of returning 0 rows.
+    // True numeric searches still preserve leading zeros like 020, 0560, 007.
+    const numberParamIsDigitsOnly = /^\d+$/.test(numberParam);
+    const effectiveTermParam = termParam || (!numberParamIsDigitsOnly && numberParam ? numberParam.toLowerCase() : '');
+    const effectiveNumberParam = numberParamIsDigitsOnly ? numberParam : '';
     const stateParam  = (params.get('state')         ?? '').trim();
     const gameParam   = (params.get('gameType')      ?? '').trim();
     const sourceParam = (params.get('source')        ?? '').trim();
@@ -90,17 +97,17 @@ export async function GET(req: NextRequest) {
     const totalSampled = rows.length;
 
     // ── In-memory filters ─────────────────────────────────────────────────
-    if (termParam) {
+    if (effectiveTermParam) {
       rows = rows.filter(r =>
-        String(r.termLabel      ?? '').toLowerCase().includes(termParam) ||
-        String(r.normalizedTerm ?? '').toLowerCase().includes(termParam)
+        String(r.termLabel      ?? '').toLowerCase().includes(effectiveTermParam) ||
+        String(r.normalizedTerm ?? '').toLowerCase().includes(effectiveTermParam)
       );
       filtersApplied.push(`term=${termParam}`);
     }
 
-    if (numberParam) {
+    if (effectiveNumberParam) {
       rows = rows.filter(r =>
-        String(r.number ?? r.candidateNumber ?? '').includes(numberParam)
+        String(r.number ?? r.candidateNumber ?? '').includes(effectiveNumberParam)
       );
       filtersApplied.push(`number=${numberParam}`);
     }
