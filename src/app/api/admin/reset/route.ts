@@ -10,6 +10,11 @@
  *   live     — activeDreamWindows, dreamHits, dreamHitPromotions
  *   research — backtestHits, backtestSummaries, personalHitEvents (resets backtestDreams status)
  *   hard     — live + research
+ *   factory  — ALL app data for ownerUid (dreamEntries, activeDreamWindows, dreamHits,
+ *              dreamHitPromotions, personalHitEvents, personalHitMappings, termNumberMappings,
+ *              backtestDreams, backtestHits, backtestSummaries, pinnedPlays, dreamers).
+ *              ownerProfiles are preserved.
+ *              Requires confirm === "DELETE EVERYTHING".
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase/admin';
@@ -21,6 +26,21 @@ const COLLECTIONS_BY_SCOPE: Record<string, string[]> = {
   research: ['backtestHits', 'backtestSummaries', 'personalHitEvents'],
   hard:     ['activeDreamWindows', 'dreamHits', 'dreamHitPromotions',
               'backtestHits', 'backtestSummaries', 'personalHitEvents'],
+  // factory deletes EVERYTHING for this ownerUid except ownerProfiles
+  factory:  [
+    'dreamEntries',
+    'activeDreamWindows',
+    'dreamHits',
+    'dreamHitPromotions',
+    'personalHitEvents',
+    'personalHitMappings',
+    'termNumberMappings',
+    'backtestDreams',
+    'backtestHits',
+    'backtestSummaries',
+    'pinnedPlays',
+    'dreamers',
+  ],
 };
 
 async function deleteByOwner(
@@ -47,14 +67,23 @@ export async function POST(req: NextRequest) {
   try {
     const body     = await req.json();
     const ownerUid = String(body.ownerUid ?? process.env.SWEET404_OWNER_UID ?? '').trim();
-    const scope    = String(body.scope    ?? '').trim() as 'live' | 'research' | 'hard';
+    const scope    = String(body.scope    ?? '').trim() as 'live' | 'research' | 'hard' | 'factory';
     const confirm  = String(body.confirm  ?? '').trim();
 
     if (!ownerUid) return NextResponse.json({ error: 'ownerUid is required.' }, { status: 400 });
-    if (!['live', 'research', 'hard'].includes(scope))
-      return NextResponse.json({ error: 'scope must be live, research, or hard.' }, { status: 400 });
-    if (confirm !== `CONFIRM_${scope.toUpperCase()}`)
-      return NextResponse.json({ error: `confirm must be "CONFIRM_${scope.toUpperCase()}" to proceed.` }, { status: 400 });
+    if (!['live', 'research', 'hard', 'factory'].includes(scope))
+      return NextResponse.json({ error: 'scope must be live, research, hard, or factory.' }, { status: 400 });
+    // Factory reset requires the typed phrase "DELETE EVERYTHING"
+    // Other scopes use CONFIRM_LIVE / CONFIRM_RESEARCH / CONFIRM_HARD
+    const expectedConfirm = scope === 'factory' ? 'DELETE EVERYTHING' : `CONFIRM_${scope.toUpperCase()}`;
+    if (confirm !== expectedConfirm) {
+      return NextResponse.json(
+        { error: scope === 'factory'
+            ? 'Factory reset requires confirm === "DELETE EVERYTHING".'
+            : `confirm must be "CONFIRM_${scope.toUpperCase()}" to proceed.` },
+        { status: 400 }
+      );
+    }
 
     const db      = getAdminDb();
     const results: Record<string, number> = {};
@@ -63,7 +92,8 @@ export async function POST(req: NextRequest) {
       results[col] = await deleteByOwner(db, col, ownerUid);
     }
 
-    // For research/hard: reset backtestDreams status back to intake-saved
+    // For research/hard: reset backtestDreams status back to intake-saved.
+    // (For factory scope, backtestDreams are fully deleted above — no reset needed.)
     if (scope === 'research' || scope === 'hard') {
       let resetCount = 0;
       let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
