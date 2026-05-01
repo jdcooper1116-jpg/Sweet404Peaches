@@ -6,8 +6,9 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import {
   buildPowerRepeats, buildBoxedRepeats, buildStateHotspots,
-  buildDayWindows, buildFellSummary,
+  buildDayWindows, buildFellSummary, populateGroupEvents,
   type PowerRepeat, type BoxedRepeat, type StateHotspot, type FellSummary,
+  type FellBeforeRow,
 } from '@/lib/intelligence/fellBeforeAnalysis';
 import { BookMarked } from 'lucide-react';
 
@@ -171,6 +172,14 @@ function FellBeforeInner() {
   const [gameFilter,   setGameFilter]   = useState<'all'|'cash3'|'cash4'>('all');
   const [sourceFilter, setSourceFilter] = useState<'all'|'backtest-replay'|'live-dream-refresh'|'unknown'>('all');
 
+  // Drilldown: fetch individual events when user expands a group
+  const [eventsLoaded,   setEventsLoaded]   = useState(false);
+  const [eventsLoading,  setEventsLoading]  = useState(false);
+  const [eventsError,    setEventsError]    = useState('');
+  const [allEvents,      setAllEvents]      = useState<FellBeforeRow[]>([]);
+  // Which repeat/boxed/state cards are expanded
+  const [expandedRepeat, setExpandedRepeat] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     const qd = searchParams.get('dreamerId') ?? '';
     setDreamerId(qd);
@@ -233,6 +242,29 @@ function FellBeforeInner() {
   // Reload when dreamer changes
   useEffect(() => { void loadRows(); }, [user, dreamerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load event-level drilldown data for current search term
+  async function loadEvents(term: string) {
+    if (!user || !term.trim() || eventsLoaded) return;
+    setEventsLoading(true); setEventsError('');
+    try {
+      const uid = encodeURIComponent(user.uid);
+      const res  = await fetch(`/api/fell-before/events?ownerUid=${uid}&term=${encodeURIComponent(term.trim())}&limit=500`);
+      const data = await res.json();
+      if (!data.ok) { setEventsError(data.error ?? 'Could not load events.'); return; }
+      setAllEvents(data.rows ?? []);
+      setEventsLoaded(true);
+    } catch (e) { setEventsError(String(e)); }
+    finally { setEventsLoading(false); }
+  }
+
+  function toggleExpandedRepeat(key: string) {
+    setExpandedRepeat(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  } // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleDreamerChange(did: string) { setDreamerId(did); }
 
   const dictionary = useMemo(() => buildDictionary(rows), [rows]);
@@ -260,6 +292,14 @@ function FellBeforeInner() {
   const fellSummary: FellSummary = useMemo(() =>
     buildFellSummary(rows, powerRepeats, { lookupMode, filtersApplied }),
     [rows, powerRepeats, lookupMode, filtersApplied]);
+
+  // Populated groups — events[] filled in after on-demand fetch
+  const populated = useMemo(() =>
+    eventsLoaded && allEvents.length > 0
+      ? populateGroupEvents(allEvents, powerRepeats, boxedRepeats, stateHotspots)
+      : { powerRepeats, boxedRepeats, stateHotspots },
+    [eventsLoaded, allEvents, powerRepeats, boxedRepeats, stateHotspots]
+  );
 
 
   const letters = useMemo(() => Array.from(new Set(filtered.map(g => g.letter))).sort(), [filtered]);
@@ -373,51 +413,119 @@ function FellBeforeInner() {
         )}
 
         {/* Power Repeats */}
-        {powerRepeats.filter(p => p.evidenceStrength !== 'Single Evidence').length > 0 && (
-          <div style={{ display:'grid', gap:'7px' }}>
-            <div style={{ fontSize:'11px', fontWeight:700, color:'rgba(255,255,255,0.55)', textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>
-              Power &amp; Strong Repeats
+        {populated.powerRepeats.filter(p => p.evidenceStrength !== 'Single Evidence').length > 0 && (
+          <div style={{ display:'grid', gap:'8px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
+              <span style={{ fontSize:'11px', fontWeight:700, color:'rgba(255,255,255,0.55)', textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>
+                Power &amp; Strong Repeats
+              </span>
+              {!eventsLoaded && searchTerm && (
+                <button type="button" className="btn-secondary" style={{ fontSize:'11px' }}
+                  onClick={() => void loadEvents(searchTerm)} disabled={eventsLoading}>
+                  {eventsLoading ? '⏳ Loading events…' : '🔍 Load event drilldowns'}
+                </button>
+              )}
+              {eventsLoaded && (
+                <span style={{ fontSize:'11px', color:'#60e09a' }}>✓ {allEvents.length} individual events loaded</span>
+              )}
             </div>
-            {powerRepeats.filter(p => p.evidenceStrength !== 'Single Evidence').slice(0, 10).map(p => {
-              const isP = p.evidenceStrength === 'Power Repeat';
+            {eventsError && <div style={{ fontSize:'12px', color:'#ff9090' }}>⚠ {eventsError}</div>}
+            {populated.powerRepeats.filter(p => p.evidenceStrength !== 'Single Evidence').slice(0, 12).map(p => {
+              const isP   = p.evidenceStrength === 'Power Repeat';
+              const rKey  = `${p.termLabel}::${p.number}::${p.gameType}::${p.state}`;
+              const isExp = expandedRepeat.has(rKey);
+              const countMismatch = eventsLoaded && p.events.length < p.totalHitCount;
               return (
-                <div key={`${p.termLabel}::${p.number}::${p.state}`}
-                  style={{ padding:'10px 13px', borderRadius:'13px',
-                    background: isP ? 'rgba(96,224,154,0.08)' : 'rgba(255,204,80,0.07)',
-                    border:`1px solid ${isP ? 'rgba(96,224,154,0.22)' : 'rgba(255,204,80,0.18)'}`,
-                    display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
-                  <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'13px',
-                    color: p.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
-                    padding:'2px 7px', borderRadius:'7px',
-                    background: p.gameType === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
-                    border:`1px solid ${p.gameType === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}` }}>
-                    {p.number}
-                  </span>
-                  <span style={{ padding:'2px 7px', borderRadius:'7px', fontSize:'11px', fontWeight:800,
-                    background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.26)', color:'#60e09a', fontFamily:'system-ui,sans-serif' }}>
-                    {p.state}
-                  </span>
-                  <span style={{ padding:'2px 8px', borderRadius:'999px', fontSize:'10px', fontWeight:700,
-                    background: isP ? 'rgba(96,224,154,0.14)' : 'rgba(255,204,80,0.12)',
-                    border:`1px solid ${isP ? 'rgba(96,224,154,0.28)' : 'rgba(255,204,80,0.22)'}`,
-                    color: isP ? '#60e09a' : '#ffcc50', fontFamily:'system-ui,sans-serif' }}>
-                    {p.evidenceStrength}
-                  </span>
-                  <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)' }}>
-                    {p.totalHitCount} hit{p.totalHitCount !== 1 ? 's' : ''} · {p.straightCount}S / {p.boxedCount}B
-                    {p.uniqueDreamCount > 1 && <span style={{ color:'#a090ff', marginLeft:'6px' }}>· {p.uniqueDreamCount} dreams</span>}
-                    {p.lastHitDate && <span style={{ fontFamily:'monospace', fontSize:'11px', marginLeft:'6px', color:'rgba(255,255,255,0.35)' }}>{p.lastHitDate}</span>}
-                  </div>
-                  <div style={{ display:'flex', gap:'4px', flexWrap:'wrap' }}>
-                    {p.sourceClasses.map(sc => (
-                      <span key={sc} style={{ padding:'1px 6px', borderRadius:'5px', fontSize:'9px', fontWeight:700,
-                        background: sc === 'backtest-replay' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
-                        border:`1px solid ${sc === 'backtest-replay' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.24)'}`,
-                        color: sc === 'backtest-replay' ? '#a090ff' : '#ff8a6a' }}>
-                        {sc === 'backtest-replay' ? 'Backtest' : sc === 'live-dream-refresh' ? 'Live' : sc}
+                <div key={rKey} style={{ borderRadius:'14px',
+                  background: isP ? 'rgba(96,224,154,0.06)' : 'rgba(255,204,80,0.06)',
+                  border:`1px solid ${isP ? 'rgba(96,224,154,0.20)' : 'rgba(255,204,80,0.16)'}` }}>
+                  {/* Summary row */}
+                  <div style={{ padding:'10px 13px', display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
+                    <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'13px',
+                      color: p.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
+                      padding:'2px 7px', borderRadius:'7px',
+                      background: p.gameType === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
+                      border:`1px solid ${p.gameType === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}` }}>
+                      {p.number}
+                    </span>
+                    <span style={{ padding:'2px 7px', borderRadius:'7px', fontSize:'11px', fontWeight:800,
+                      background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.26)', color:'#60e09a', fontFamily:'system-ui,sans-serif' }}>
+                      {p.state}
+                    </span>
+                    <span style={{ padding:'2px 8px', borderRadius:'999px', fontSize:'10px', fontWeight:700,
+                      color: isP ? '#60e09a' : '#ffcc50', border:`1px solid ${isP ? 'rgba(96,224,154,0.28)' : 'rgba(255,204,80,0.22)'}`,
+                      background: isP ? 'rgba(96,224,154,0.12)' : 'rgba(255,204,80,0.10)', fontFamily:'system-ui,sans-serif' }}>
+                      {p.evidenceStrength}
+                    </span>
+                    <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)', display:'grid', gap:'2px' }}>
+                      <span>{p.totalHitCount} hit{p.totalHitCount !== 1 ? 's' : ''} · {p.straightCount}S / {p.boxedCount}B
+                        {p.uniqueDreamCount > 1 && <span style={{ color:'#a090ff', marginLeft:'6px' }}>· {p.uniqueDreamCount} dreams</span>}
                       </span>
-                    ))}
+                      <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)', fontFamily:'monospace' }}>
+                        First: {p.firstHitDate || '—'} · Last: {p.lastHitDate || '—'}
+                      </span>
+                    </div>
+                    <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center' }}>
+                      {p.sourceClasses.map(sc => (
+                        <span key={sc} style={{ padding:'1px 6px', borderRadius:'5px', fontSize:'9px', fontWeight:700,
+                          background: sc === 'backtest-replay' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
+                          color: sc === 'backtest-replay' ? '#a090ff' : '#ff8a6a',
+                          border:`1px solid ${sc === 'backtest-replay' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.24)'}` }}>
+                          {sc === 'backtest-replay' ? 'Backtest' : sc === 'live-dream-refresh' ? 'Live' : sc}
+                        </span>
+                      ))}
+                      {eventsLoaded && (
+                        <button type="button" onClick={() => toggleExpandedRepeat(rKey)}
+                          style={{ fontSize:'10px', padding:'2px 8px', borderRadius:'6px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', color:'rgba(255,255,255,0.70)', cursor:'pointer' }}>
+                          {isExp ? 'Hide ↑' : `View ${p.events.length || p.totalHitCount} event${(p.events.length || p.totalHitCount) !== 1 ? 's' : ''} ↓`}
+                        </button>
+                      )}
+                    </div>
                   </div>
+                  {/* Event drilldown */}
+                  {isExp && p.events.length > 0 && (
+                    <div style={{ borderTop:'1px solid rgba(255,255,255,0.07)', padding:'8px 12px', display:'grid', gap:'5px' }}>
+                      {countMismatch && (
+                        <div style={{ fontSize:'11px', color:'rgba(255,204,80,0.70)' }}>
+                          ⚠ Aggregate count ({p.totalHitCount}) is higher than visible events ({p.events.length}). Run repair/audit to rebuild event-level proof.
+                        </div>
+                      )}
+                      {p.events.map((ev, i) => (
+                        <div key={ev.id ?? i} style={{ fontSize:'11px', fontFamily:'monospace',
+                          padding:'5px 8px', borderRadius:'8px', background:'rgba(255,255,255,0.04)',
+                          display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center', color:'rgba(255,255,255,0.70)' }}>
+                          <span style={{ color: ev.hitType === 'straight' ? '#60e09a' : '#ffcc50', fontWeight:700 }}>
+                            {ev.hitType === 'straight' ? 'S' : 'B'}
+                          </span>
+                          {ev.winningNumber && <span style={{ color:'rgba(255,255,255,0.45)' }}>{ev.number}→{ev.winningNumber}</span>}
+                          <span style={{ color:'rgba(255,255,255,0.55)' }}>{ev.drawDate || '—'}</span>
+                          {ev.drawTime && <span style={{ color:'rgba(255,255,255,0.40)' }}>{ev.drawTime}</span>}
+                          {ev.daysFromDream !== null && ev.daysFromDream !== undefined && (
+                            <span style={{ color:'rgba(255,255,255,0.40)' }}>
+                              {ev.sameDay ? 'Same day' : `Day ${ev.daysFromDream}`}
+                            </span>
+                          )}
+                          <span style={{ padding:'1px 5px', borderRadius:'4px', fontSize:'9px',
+                            background: ev._sourceClass === 'backtest-replay' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
+                            color: ev._sourceClass === 'backtest-replay' ? '#a090ff' : '#ff8a6a' }}>
+                            {ev._sourceClass === 'backtest-replay' ? 'Backtest' : ev._sourceClass === 'live-dream-refresh' ? 'Live' : 'Repair'}
+                          </span>
+                          {ev.dreamerName && <span style={{ color:'rgba(255,255,255,0.35)' }}>{ev.dreamerName}</span>}
+                          {ev.backtestDreamId && (
+                            <span style={{ color:'rgba(255,255,255,0.25)', fontSize:'9px' }}>
+                              ID:{ev.backtestDreamId.slice(0, 8)}…
+                            </span>
+                          )}
+                          {!ev.drawDate && <span style={{ color:'rgba(255,204,80,0.70)', fontSize:'9px' }}>Missing timestamp metadata.</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {isExp && p.events.length === 0 && eventsLoaded && (
+                    <div style={{ padding:'8px 12px', fontSize:'11px', color:'rgba(255,204,80,0.70)', borderTop:'1px solid rgba(255,255,255,0.07)' }}>
+                      No individual event rows found for this group. Run repair-backtest-memory to rebuild event-level proof.
+                    </div>
+                  )}
                 </div>
               );
             })}

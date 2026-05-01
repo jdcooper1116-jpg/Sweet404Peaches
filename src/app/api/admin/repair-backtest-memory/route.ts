@@ -156,7 +156,29 @@ export async function POST(req: NextRequest) {
 
         // Mark event as promoted
         bw.set(db.collection('personalHitEvents').doc(eid), {
-          ownerUid, dreamerId, dreamerName, termLabel, backtestDreamId, createdAt: now,
+          ownerUid,
+          dreamerId,
+          dreamerName,
+          termLabel,
+          normalizedTerm:     normalizedT,
+          number,
+          candidateNumber:    number,
+          winningNumber:      winningNum,
+          gameType,
+          state,
+          drawDate,
+          drawTime,
+          hitType,
+          matchMode:          hitType,
+          source:             'backtest-replay',
+          backtestDreamId,
+          sourceDreamEntryId: `backtest:${backtestDreamId}`,
+          activeWindowId:     '',
+          dreamDate:          anchorDate,
+          anchorDate,
+          daysFromDream,
+          sameDay:            daysFromDream === 0,
+          createdAt:          now,
         });
 
         // Upsert personalHitMappings

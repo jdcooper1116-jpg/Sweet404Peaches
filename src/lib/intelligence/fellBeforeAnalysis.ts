@@ -7,20 +7,53 @@
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-
-function evidenceStrengthFrom(totalHitCount: number, uniqueDreamCount = 0): EvidenceStrength {
-  if (totalHitCount >= 3 || uniqueDreamCount >= 2) return 'Power Repeat';
-  if (totalHitCount >= 2) return 'Strong Repeat';
-  return 'Single Evidence';
-}
-
 export function boxedKey(num: string): string {
   return String(num ?? '').split('').sort().join('');
 }
 
 // ─── Power Repeats ────────────────────────────────────────────────────────────
 
+// ─── FellBeforeRow — individual event record ─────────────────────────────────
+
+export type FellBeforeRow = {
+  id?:                string;
+  termLabel:          string;
+  normalizedTerm?:    string;
+  number:             string;
+  candidateNumber?:   string;
+  winningNumber?:     string;
+  state:              string;
+  gameType:           string;
+  drawDate:           string;
+  drawTime?:          string;
+  hitType:            string;
+  matchMode?:         string;
+  dreamerName?:       string;
+  dreamerId?:         string;
+  dreamDate?:         string;
+  anchorDate?:        string;
+  daysFromDream?:     number | null;
+  sameDay?:           boolean;
+  _sourceClass?:      string;
+  source?:            string;
+  backtestDreamId?:   string;
+  sourceDreamEntryId?:string;
+  activeWindowId?:    string;
+  createdAt?:         string | null;
+  detectedAt?:        string | null;
+};
+
 export type EvidenceStrength = 'Power Repeat' | 'Strong Repeat' | 'Single Evidence';
+
+/**
+ * Pure helper so callers don't repeat the ternary logic.
+ * uniqueDreams >= 2 is treated the same as hitCount >= 3 for Power Repeat.
+ */
+export function evidenceStrengthFrom(hitCount: number, uniqueDreams = 0): EvidenceStrength {
+  if (hitCount >= 3 || uniqueDreams >= 2) return 'Power Repeat';
+  if (hitCount >= 2)                      return 'Strong Repeat';
+  return 'Single Evidence';
+}
 
 export type PowerRepeat = {
   termLabel:        string;
@@ -31,12 +64,14 @@ export type PowerRepeat = {
   straightCount:    number;
   boxedCount:       number;
   uniqueDreamCount: number;
+  uniqueWindowCount:number;
   uniqueDrawDates:  string[];
   firstHitDate:     string;
   lastHitDate:      string;
   sourceClasses:    string[];
   evidenceStrength: EvidenceStrength;
   backtestDreamIds: string[];
+  events:           FellBeforeRow[];  // individual event rows (populated by populateGroupEvents)
 };
 
 export function buildPowerRepeats(rows: any[]): PowerRepeat[] {
@@ -54,9 +89,10 @@ export function buildPowerRepeats(rows: any[]): PowerRepeat[] {
       map.set(key, {
         termLabel: term, number: num, gameType: gt, state,
         totalHitCount: 0, straightCount: 0, boxedCount: 0,
-        uniqueDreamCount: 0, uniqueDrawDates: [], firstHitDate: '',
+        uniqueDreamCount: 0, uniqueWindowCount: 0,
+        uniqueDrawDates: [], firstHitDate: '',
         lastHitDate: '', sourceClasses: [], backtestDreamIds: [],
-        evidenceStrength: 'Single Evidence' as EvidenceStrength,
+        evidenceStrength: 'Single Evidence', events: [] as FellBeforeRow[],
       });
     }
     const e = map.get(key)!;
@@ -81,11 +117,32 @@ export function buildPowerRepeats(rows: any[]): PowerRepeat[] {
     }
   }
 
+  // Compute uniqueWindowCount from raw rows per group
+  const windowsByKey = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const term  = String(r.termLabel ?? '').toLowerCase().trim();
+    const num   = String(r.number ?? r.candidateNumber ?? '').trim();
+    const gt    = String(r.gameType ?? '');
+    const state = String(r.state   ?? '');
+    const key   = `${term}::${num}::${gt}::${state}`;
+    const wid   = String(r.activeWindowId ?? r.dreamWindowId ?? '');
+    if (wid) {
+      if (!windowsByKey.has(key)) windowsByKey.set(key, new Set());
+      windowsByKey.get(key)!.add(wid);
+    }
+  }
+
   return Array.from(map.values())
-    .map(e => ({
-      ...e,
-      evidenceStrength: evidenceStrengthFrom(e.totalHitCount, e.uniqueDreamCount),
-    }))
+    .map(e => {
+      const key = `${e.termLabel}::${e.number}::${e.gameType}::${e.state}`;
+      return {
+        ...e,
+        uniqueWindowCount: windowsByKey.get(key)?.size ?? 0,
+        evidenceStrength: (e.totalHitCount >= 3 || e.uniqueDreamCount >= 2)
+          ? 'Power Repeat' as EvidenceStrength
+          : e.totalHitCount >= 2 ? 'Strong Repeat' as EvidenceStrength : 'Single Evidence' as EvidenceStrength,
+      };
+    })
     .sort((a, b) => {
       const tier: Record<EvidenceStrength, number> = { 'Power Repeat': 3, 'Strong Repeat': 2, 'Single Evidence': 1 };
       const dt = tier[b.evidenceStrength] - tier[a.evidenceStrength];
@@ -96,17 +153,20 @@ export function buildPowerRepeats(rows: any[]): PowerRepeat[] {
 // ─── Boxed Family Repeats ─────────────────────────────────────────────────────
 
 export type BoxedRepeat = {
-  termLabel:     string;
-  boxedKey:      string;
-  gameType:      string;
-  state:         string;
-  numbers:       string[];
-  totalHitCount: number;
-  straightCount: number;
-  boxedCount:    number;
-  firstHitDate:  string;
-  lastHitDate:   string;
-  sourceClasses: string[];
+  termLabel:        string;
+  boxedKey:         string;
+  gameType:         string;
+  state:            string;
+  numbers:          string[];
+  totalHitCount:    number;
+  straightCount:    number;
+  boxedCount:       number;
+  uniqueDreamCount: number;
+  uniqueWindowCount:number;
+  firstHitDate:     string;
+  lastHitDate:      string;
+  sourceClasses:    string[];
+  events:           FellBeforeRow[];
 };
 
 export function buildBoxedRepeats(rows: any[]): BoxedRepeat[] {
@@ -125,6 +185,7 @@ export function buildBoxedRepeats(rows: any[]): BoxedRepeat[] {
       map.set(key, {
         termLabel: term, boxedKey: bk, gameType: gt, state,
         numbers: [], totalHitCount: 0, straightCount: 0, boxedCount: 0,
+        uniqueDreamCount: 0, uniqueWindowCount: 0, events: [],
         firstHitDate: '', lastHitDate: '', sourceClasses: [],
       });
     }
@@ -148,14 +209,16 @@ export function buildBoxedRepeats(rows: any[]): BoxedRepeat[] {
 // ─── State Hotspots ───────────────────────────────────────────────────────────
 
 export type StateHotspot = {
-  termLabel:     string;
-  state:         string;
-  totalHitCount: number;
-  straightCount: number;
-  boxedCount:    number;
-  numbers:       string[];
-  uniqueDrawDates: string[];
-  firstHitDate:  string;
+  termLabel:        string;
+  state:            string;
+  totalHitCount:    number;
+  straightCount:    number;
+  boxedCount:       number;
+  numbers:          string[];
+  uniqueDrawDates:  string[];
+  uniqueDreamCount: number;
+  uniqueWindowCount:number;
+  firstHitDate:     string;
   lastHitDate:   string;
   strengthTier:  EvidenceStrength;
 };
@@ -174,6 +237,7 @@ export function buildStateHotspots(rows: any[]): StateHotspot[] {
       map.set(key, {
         termLabel: term, state, totalHitCount: 0, straightCount: 0,
         boxedCount: 0, numbers: [], uniqueDrawDates: [],
+        uniqueDreamCount: 0, uniqueWindowCount: 0,
         firstHitDate: '', lastHitDate: '', strengthTier: 'Single Evidence',
       });
     }
@@ -247,5 +311,53 @@ export function buildFellSummary(
     boxedTotal:     rows.reduce((s, r) => s + Number(r.boxedCount    ?? 0), 0),
     lookupMode:     meta.lookupMode     ?? '',
     filtersApplied: meta.filtersApplied ?? [],
+  };
+}
+
+// ─── populateGroupEvents ──────────────────────────────────────────────────────
+
+/**
+ * Given a flat array of individual event rows (from /api/fell-before/events),
+ * populate the events[] arrays on power repeats, boxed repeats, and state hotspots.
+ *
+ * This is called on the client after the on-demand events fetch completes.
+ * Pure — no side effects, returns new arrays.
+ */
+export function populateGroupEvents(
+  events:       FellBeforeRow[],
+  powerRepeats: PowerRepeat[],
+  boxedRepeats: BoxedRepeat[],
+  stateHotspots: StateHotspot[],
+): {
+  powerRepeats:  PowerRepeat[];
+  boxedRepeats:  BoxedRepeat[];
+  stateHotspots: StateHotspot[];
+} {
+  const sorted = [...events].sort((a, b) => {
+    const ak = `${a.drawDate ?? ''}|${a.drawTime ?? ''}`;
+    const bk = `${b.drawDate ?? ''}|${b.drawTime ?? ''}`;
+    return ak.localeCompare(bk);
+  });
+
+  return {
+    powerRepeats: powerRepeats.map(p => ({
+      ...p,
+      events: sorted.filter(e =>
+        e.number === p.number &&
+        String(e.gameType ?? '') === p.gameType &&
+        String(e.state    ?? '') === p.state
+      ),
+    })),
+    boxedRepeats: boxedRepeats.map(b => ({
+      ...b,
+      events: sorted.filter(e =>
+        b.numbers.includes(String(e.number ?? '')) &&
+        String(e.state ?? '') === b.state
+      ),
+    })),
+    stateHotspots: stateHotspots.map(s => ({
+      ...s,
+      events: sorted.filter(e => String(e.state ?? '') === s.state),
+    })),
   };
 }
