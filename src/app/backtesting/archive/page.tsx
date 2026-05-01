@@ -62,6 +62,8 @@ export default function BacktestArchivePage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // fellBeforeConfirmed: maps backtestDreamId → true (has personalHitMappings) | false (checked, none) | null (not checked)
+  const [fellBeforeConfirmed, setFellBeforeConfirmed] = useState<Record<string, boolean | null>>({});
 
   useEffect(() => {
     if (authLoading || !user) { if (!authLoading) setLoading(false); return; }
@@ -83,9 +85,16 @@ export default function BacktestArchivePage() {
     setDetailLoading(true);
     try {
       const uid = encodeURIComponent(ownerUid);
-      const res = await fetch(`/api/backtest/dream-detail?ownerUid=${uid}&backtestDreamId=${encodeURIComponent(dreamId)}`);
-      const d   = await res.json();
-      setExpandedDetail(d.ok ? d : null);
+      // Load dream detail and check real fell-before evidence simultaneously
+      const [detailRes, fellRes] = await Promise.all([
+        fetch(`/api/backtest/dream-detail?ownerUid=${uid}&backtestDreamId=${encodeURIComponent(dreamId)}`),
+        fetch(`/api/fell-before?ownerUid=${uid}&backtestDreamId=${encodeURIComponent(dreamId)}&limit=5`),
+      ]);
+      const detail = await detailRes.json();
+      const fell   = await fellRes.json().catch(() => ({ ok: false, count: 0 }));
+      setExpandedDetail(detail.ok ? detail : null);
+      // Only show Fell-Before Saved badge if personalHitMappings actually has rows
+      setFellBeforeConfirmed(prev => ({ ...prev, [dreamId]: fell.ok && (fell.count ?? 0) > 0 }));
     } catch { setExpandedDetail(null); }
     finally { setDetailLoading(false); }
   }
@@ -274,8 +283,13 @@ export default function BacktestArchivePage() {
                   {hits > 0 && (
                     <span style={{ padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:700, background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.24)', color:'#60e09a' }}>Replay Evidence</span>
                   )}
-                  {hits > 0 && (
+                  {fellBeforeConfirmed[did] === true && (
                     <span style={{ padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:700, background:'rgba(96,224,154,0.09)', border:'1px solid rgba(96,224,154,0.18)', color:'#60e09a' }}>Fell-Before Saved</span>
+                  )}
+                  {hits > 0 && fellBeforeConfirmed[did] !== true && (
+                    <span style={{ padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:700, background:'rgba(255,204,80,0.09)', border:'1px solid rgba(255,204,80,0.18)', color:'#ffcc50' }}>
+                      {fellBeforeConfirmed[did] === false ? 'Memory Gap' : 'Replay Evidence'}
+                    </span>
                   )}
                   {!replayed && (
                     <span style={{ padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:700, background:'rgba(255,204,80,0.10)', border:'1px solid rgba(255,204,80,0.22)', color:'#ffcc50' }}>Needs Replay</span>
@@ -314,6 +328,11 @@ export default function BacktestArchivePage() {
                     )}
                     {!detailLoading && !expandedDetail && (
                       <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.45)' }}>Detail not available. Try the Replay Lab for this dream.</div>
+                    )}
+                    {!detailLoading && expandedId && fellBeforeConfirmed[expandedId] === false && (
+                      <div style={{ marginTop:'8px', padding:'8px 12px', borderRadius:'11px', background:'rgba(255,204,80,0.07)', border:'1px solid rgba(255,204,80,0.18)', fontSize:'12px', color:'#ffcc50', lineHeight:1.6 }}>
+                        ⚠ No fell-before memory for this replay. Use <a href='/integrity' style={{ color:'#a090ff' }}>Integrity Console</a> → repair-backtest-memory to promote hits.
+                      </div>
                     )}
                   </div>
                 )}

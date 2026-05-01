@@ -1,20 +1,19 @@
 /**
  * GET /api/fell-before?ownerUid=...
  *
- * Quota-protected (v3) — server-side search:
- *   ownerUid    required
- *   dreamerId   optional, Firestore-filtered
- *   term        optional, in-memory filter on termLabel/normalizedTerm
- *   number      optional, in-memory filter on number (contains)
- *   state       optional, Firestore-filtered
- *   gameType    optional, Firestore-filtered (cash3 | cash4)
- *   source      optional, in-memory: backtest-replay | live-dream-refresh | repair | unknown
- *   backtestDreamId optional, in-memory filter
- *   limit       default 250, max 500 (auto-bumped to 500 when term/source filter active)
+ * v4 — Targeted Lookup
  *
- * Strategy: narrow with Firestore first (ownerUid, dreamerId, state, gameType),
- * then apply term/number/source in-memory on the capped sample.
- * Max pull is 500, so in-memory filtering is safe and avoids large reads.
+ * Root-cause fix: previous version fetched a capped sample for ownerUid then
+ * filtered in memory. If personalHitMappings has >500 rows and the searched
+ * term rows sit beyond position 500, the filter found nothing.
+ *
+ * Fix — when term is provided:
+ *   Run TWO targeted Firestore equality queries in parallel:
+ *     A. where normalizedTerm == normalizedTerm
+ *     B. where termLabel     == rawTerm
+ *   Merge by docId. Finds ALL matching rows regardless of collection size.
+ *
+ * Browse mode (no term): ownerUid-scoped sample, 250 default / 500 max.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
@@ -26,16 +25,30 @@ function isQuotaError(err: unknown): boolean {
   return msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('429');
 }
 
-function classifySource(data: Record<string, any>): string {
-  const src  = String(data.source               ?? '');
-  const sdeid = String(data.sourceDreamEntryId ?? '');
-  const btid  = String(data.backtestDreamId    ?? '');
+function normalizeTerm(term: string): string {
+  return term.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+}
 
+function classifySource(data: Record<string, any>): string {
+  const src   = String(data.source               ?? '');
+  const sdeid = String(data.sourceDreamEntryId   ?? '');
+  const btid  = String(data.backtestDreamId      ?? '');
   if (src === 'backtest-replay' || src.includes('backtest'))  return 'backtest-replay';
-  if (sdeid.startsWith('backtest:') || btid.length > 0)        return 'backtest-replay';
+  if (sdeid.startsWith('backtest:') || btid.length > 0)       return 'backtest-replay';
   if (src === 'live-dream-refresh' || src.includes('live'))   return 'live-dream-refresh';
-  if (src.includes('repair'))                                   return 'repair';
+  if (src.includes('repair'))                                  return 'repair';
   return 'unknown';
+}
+
+function mapDoc(doc: any): any {
+  const data = doc.data();
+  return {
+    id: doc.id, ...data,
+    createdAt: data.createdAt?.toDate?.()?.toISOString?.() ?? data.createdAt ?? null,
+    updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null,
+    lastHitAt: data.lastHitAt?.toDate?.()?.toISOString?.() ?? data.lastHitAt ?? null,
+    _sourceClass: classifySource(data),
+  };
 }
 
 export async function GET(req: NextRequest) {
@@ -43,109 +56,126 @@ export async function GET(req: NextRequest) {
     const params      = req.nextUrl.searchParams;
     const ownerUid    = resolveOwnerUid(params.get('ownerUid'));
     const dreamerId   = (params.get('dreamerId')     ?? '').trim();
-    const termParam   = (params.get('term')          ?? '').trim().toLowerCase();
+    const termRaw     = (params.get('term')          ?? '').trim().toLowerCase();
     const numberParam = (params.get('number')        ?? '').trim();
-
-    // If a word like "boat" is accidentally typed into Search Number,
-    // treat it as a term search instead of returning 0 rows.
-    // True numeric searches still preserve leading zeros like 020, 0560, 007.
-    const numberParamIsDigitsOnly = /^\d+$/.test(numberParam);
-    const effectiveTermParam = termParam || (!numberParamIsDigitsOnly && numberParam ? numberParam.toLowerCase() : '');
-    const effectiveNumberParam = numberParamIsDigitsOnly ? numberParam : '';
     const stateParam  = (params.get('state')         ?? '').trim();
     const gameParam   = (params.get('gameType')      ?? '').trim();
     const sourceParam = (params.get('source')        ?? '').trim();
     const btidParam   = (params.get('backtestDreamId') ?? '').trim();
+    const browseLimit = Math.min(Number(params.get('limit') ?? 250), 500);
 
-    // Auto-bump to 500 when in-memory filters are active so they can find deep rows
-    const hasInMemoryFilter = !!(termParam || numberParam || sourceParam || btidParam);
-    const defaultLimit = hasInMemoryFilter ? 500 : 250;
-    const maxRows      = Math.min(Number(params.get('limit') ?? defaultLimit), 500);
-
+    const db  = getAdminDb();
+    const col = db.collection('personalHitMappings');
     const filtersApplied: string[] = [];
-    const db = getAdminDb();
 
-    // ── Firestore filters (indexed) ────────────────────────────────────────
-    let query: any = db.collection('personalHitMappings').where('ownerUid', '==', ownerUid);
+    let rows: any[];
+    let lookupMode: string;
+    let totalSampled: number;
 
-    if (dreamerId) {
-      query = query.where('dreamerId', '==', dreamerId);
-      filtersApplied.push(`dreamerId=${dreamerId}`);
-    }
-    if (stateParam) {
-      query = query.where('state', '==', stateParam);
-      filtersApplied.push(`state=${stateParam}`);
-    }
-    if (gameParam === 'cash3' || gameParam === 'cash4') {
-      query = query.where('gameType', '==', gameParam);
-      filtersApplied.push(`gameType=${gameParam}`);
-    }
+    // Helper: add shared Firestore constraints
+    const constrain = (q: any) => {
+      let out = q;
+      if (dreamerId)                                         out = out.where('dreamerId', '==', dreamerId);
+      if (stateParam)                                        out = out.where('state',     '==', stateParam);
+      if (gameParam === 'cash3' || gameParam === 'cash4')    out = out.where('gameType',  '==', gameParam);
+      return out;
+    };
 
-    const snap = await query.limit(maxRows).get();
+    // ── TARGETED TERM LOOKUP ─────────────────────────────────────────────────
+    if (termRaw) {
+      const normalizedT = normalizeTerm(termRaw);
+      lookupMode = 'targeted-term';
 
-    let rows: any[] = snap.docs.map((doc: any) => {
-      const data = doc.data();
-      return {
-        id: doc.id, ...data,
-        createdAt:    data.createdAt?.toDate?.()?.toISOString?.()  ?? data.createdAt  ?? null,
-        updatedAt:    data.updatedAt?.toDate?.()?.toISOString?.()  ?? data.updatedAt  ?? null,
-        lastHitAt:    data.lastHitAt?.toDate?.()?.toISOString?.()  ?? data.lastHitAt  ?? null,
-        _sourceClass: classifySource(data),   // computed label used by page + source filter
-      };
-    });
+      const qA = constrain(col.where('ownerUid', '==', ownerUid).where('normalizedTerm', '==', normalizedT));
+      const qB = constrain(col.where('ownerUid', '==', ownerUid).where('termLabel',      '==', termRaw));
 
-    const totalSampled = rows.length;
+      let snapA: any, snapB: any;
+      try {
+        [snapA, snapB] = await Promise.all([qA.limit(500).get(), qB.limit(500).get()]);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes('FAILED_PRECONDITION') || msg.includes('requires an index')) {
+          return NextResponse.json({
+            ok: false, lookupMode, filtersApplied: [`term=${termRaw}`],
+            error: `Firestore index required for term lookup. Create it in Firebase Console then retry. Detail: ${msg}`,
+          }, { status: 412 });
+        }
+        throw e;
+      }
 
-    // ── In-memory filters ─────────────────────────────────────────────────
-    if (effectiveTermParam) {
-      rows = rows.filter(r =>
-        String(r.termLabel      ?? '').toLowerCase().includes(effectiveTermParam) ||
-        String(r.normalizedTerm ?? '').toLowerCase().includes(effectiveTermParam)
-      );
-      filtersApplied.push(`term=${termParam}`);
-    }
+      const seen = new Set<string>();
+      const merged: any[] = [];
+      for (const snap of [snapA, snapB]) {
+        for (const doc of snap.docs) {
+          if (!seen.has(doc.id)) { seen.add(doc.id); merged.push(mapDoc(doc)); }
+        }
+      }
+      rows = merged;
+      totalSampled = rows.length;
+      filtersApplied.push(`term=${termRaw}`);
 
-    if (effectiveNumberParam) {
-      rows = rows.filter(r =>
-        String(r.number ?? r.candidateNumber ?? '').includes(effectiveNumberParam)
-      );
+    // ── TARGETED NUMBER LOOKUP ────────────────────────────────────────────────
+    } else if (numberParam && /^\d+$/.test(numberParam)) {
+      lookupMode = 'targeted-number';
+      const q = constrain(col.where('ownerUid', '==', ownerUid).where('number', '==', numberParam));
+      const snap = await q.limit(500).get();
+      rows = snap.docs.map(mapDoc);
+      totalSampled = rows.length;
       filtersApplied.push(`number=${numberParam}`);
+
+    // ── BROWSE / SAMPLE MODE ──────────────────────────────────────────────────
+    } else {
+      lookupMode = 'browse-sample';
+      const q = constrain(col.where('ownerUid', '==', ownerUid));
+      const snap = await q.limit(browseLimit).get();
+      rows = snap.docs.map(mapDoc);
+      totalSampled = rows.length;
+      if (numberParam) {
+        rows = rows.filter(r => String(r.number ?? r.candidateNumber ?? '').includes(numberParam));
+        filtersApplied.push(`number=${numberParam}`);
+      }
     }
 
+    // ── Common in-memory filters ──────────────────────────────────────────────
     if (sourceParam) {
       const want = sourceParam.toLowerCase();
       rows = rows.filter(r => {
         const sc = r._sourceClass as string;
         if (want === 'backtest-replay' || want === 'backtest') return sc === 'backtest-replay';
         if (want === 'live-dream-refresh' || want === 'live')  return sc === 'live-dream-refresh';
-        if (want === 'repair')                                  return sc === 'repair';
-        if (want === 'unknown')                                 return sc === 'unknown';
+        if (want === 'repair')   return sc === 'repair';
+        if (want === 'unknown')  return sc === 'unknown';
         return true;
       });
       filtersApplied.push(`source=${sourceParam}`);
     }
-
     if (btidParam) {
       rows = rows.filter(r => String(r.backtestDreamId ?? '') === btidParam);
       filtersApplied.push(`backtestDreamId=${btidParam}`);
     }
+    if (dreamerId)  filtersApplied.push(`dreamerId=${dreamerId}`);
+    if (stateParam) filtersApplied.push(`state=${stateParam}`);
+    if (gameParam)  filtersApplied.push(`gameType=${gameParam}`);
+
+    // Final dedup
+    const deduped = new Map<string, any>();
+    for (const r of rows) deduped.set(r.id, r);
+    rows = Array.from(deduped.values());
 
     const res = NextResponse.json({
       ok: true, rows,
-      count: rows.length,
-      totalSampled,
-      filtersApplied,
-      limit: maxRows,
-      dreamerId: dreamerId || 'ALL',
+      count: rows.length, totalSampled, lookupMode,
+      filtersApplied: [...new Set(filtersApplied)],
+      limit: browseLimit, dreamerId: dreamerId || 'ALL',
     });
-    res.headers.set('Cache-Control', filtersApplied.length > 0 ? 'private, max-age=10' : 'private, max-age=30');
+    res.headers.set('Cache-Control', lookupMode === 'browse-sample' ? 'private, max-age=30' : 'private, max-age=5');
     return res;
+
   } catch (err) {
     console.error('[api/fell-before]', err);
     const q = isQuotaError(err);
     return NextResponse.json(
-      { ok: false, quota: q,
-        error: q ? 'Firebase quota exhausted. Try again later.' : err instanceof Error ? err.message : 'Failed.' },
+      { ok: false, quota: q, error: q ? 'Firebase quota exhausted.' : err instanceof Error ? err.message : 'Failed.' },
       { status: q ? 429 : 500 }
     );
   }

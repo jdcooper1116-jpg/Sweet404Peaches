@@ -4,6 +4,11 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/contexts/AuthContext';
+import {
+  buildPowerRepeats, buildBoxedRepeats, buildStateHotspots,
+  buildDayWindows, buildFellSummary,
+  type PowerRepeat, type BoxedRepeat, type StateHotspot, type FellSummary,
+} from '@/lib/intelligence/fellBeforeAnalysis';
 import { BookMarked } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -150,6 +155,9 @@ function FellBeforeInner() {
   const searchParams   = useSearchParams();
 
   const [rows,      setRows]      = useState<MappingRow[]>([]);
+  const [lookupMode, setLookupMode] = useState('');
+  const [filtersApplied, setFiltersApplied] = useState<string[]>([]);
+  const [totalSampled, setTotalSampled] = useState<number | null>(null);
   const [dreamers,  setDreamers]  = useState<DreamerOption[]>([]);
   const [ownerDisplayName, setOwnerDisplayName] = useState('');
   const [dreamerId, setDreamerId] = useState('');
@@ -162,7 +170,6 @@ function FellBeforeInner() {
   const [stateFilter,  setStateFilter]  = useState('');
   const [gameFilter,   setGameFilter]   = useState<'all'|'cash3'|'cash4'>('all');
   const [sourceFilter, setSourceFilter] = useState<'all'|'backtest-replay'|'live-dream-refresh'|'unknown'>('all');
-  const [totalSampled, setTotalSampled] = useState<number | null>(null);
 
   useEffect(() => {
     const qd = searchParams.get('dreamerId') ?? '';
@@ -214,6 +221,8 @@ function FellBeforeInner() {
       const data = await res.json();
       if (!data.ok) { setError(data.error || 'Failed to load term memory.'); return; }
       setRows(Array.isArray(data.rows) ? (data.rows as MappingRow[]) : []);
+      setLookupMode(data.lookupMode ?? '');
+      setFiltersApplied(data.filtersApplied ?? []);
       setTotalSampled(data.totalSampled ?? null);
     } catch (err) {
       console.error(err);
@@ -238,6 +247,20 @@ function FellBeforeInner() {
   // Server handles term/number/state/gameType/source filtering.
   // The dictionary useMemo just groups returned rows — no client-side filter needed.
   const filtered = dictionary;
+
+  // ── Pattern analysis (only when rows are loaded) ──────────────────────────
+  const powerRepeats: PowerRepeat[] = useMemo(() =>
+    rows.length > 0 ? buildPowerRepeats(rows) : [], [rows]);
+  const boxedRepeats: BoxedRepeat[] = useMemo(() =>
+    rows.length > 0 ? buildBoxedRepeats(rows) : [], [rows]);
+  const stateHotspots: StateHotspot[] = useMemo(() =>
+    rows.length > 0 ? buildStateHotspots(rows) : [], [rows]);
+  const dayWindows = useMemo(() =>
+    rows.length > 0 ? buildDayWindows(rows) : [], [rows]);
+  const fellSummary: FellSummary = useMemo(() =>
+    buildFellSummary(rows, powerRepeats, { lookupMode, filtersApplied }),
+    [rows, powerRepeats, lookupMode, filtersApplied]);
+
 
   const letters = useMemo(() => Array.from(new Set(filtered.map(g => g.letter))).sort(), [filtered]);
 
@@ -331,13 +354,145 @@ function FellBeforeInner() {
           </div>
         </div>
 
+        {/* Search summary + pattern analysis */}
+        {rows.length > 0 && searchTerm && (
+          <div style={{ padding:'10px 14px', borderRadius:'13px', border:'1px solid rgba(255,255,255,0.09)', background:'rgba(255,255,255,0.04)', display:'grid', gap:'5px', fontSize:'12px', color:'rgba(255,255,255,0.60)' }}>
+            <div style={{ fontWeight:700, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
+              Search: <span style={{ color:'#a090ff' }}>{searchTerm}</span>
+              <span style={{ marginLeft:'10px', fontSize:'11px', color: lookupMode === 'targeted-term' ? '#60e09a' : 'rgba(255,204,80,0.70)' }}>
+                {lookupMode === 'targeted-term' ? '✓ targeted lookup' : lookupMode === 'browse-sample' ? '⚠ capped sample' : lookupMode}
+              </span>
+            </div>
+            <div style={{ display:'flex', gap:'12px', flexWrap:'wrap' }}>
+              <span>{rows.length} rows · {fellSummary.states.length} states · {fellSummary.numbers.length} numbers</span>
+              {fellSummary.powerRepeats > 0 && <span style={{ color:'#60e09a' }}>⚡ {fellSummary.powerRepeats} power repeat{fellSummary.powerRepeats !== 1 ? 's' : ''}</span>}
+              {fellSummary.strongRepeats > 0 && <span style={{ color:'#ffcc50' }}>● {fellSummary.strongRepeats} strong</span>}
+              <span>{fellSummary.straightTotal}S / {fellSummary.boxedTotal}B</span>
+            </div>
+          </div>
+        )}
+
+        {/* Power Repeats */}
+        {powerRepeats.filter(p => p.evidenceStrength !== 'Single Evidence').length > 0 && (
+          <div style={{ display:'grid', gap:'7px' }}>
+            <div style={{ fontSize:'11px', fontWeight:700, color:'rgba(255,255,255,0.55)', textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>
+              Power &amp; Strong Repeats
+            </div>
+            {powerRepeats.filter(p => p.evidenceStrength !== 'Single Evidence').slice(0, 10).map(p => {
+              const isP = p.evidenceStrength === 'Power Repeat';
+              return (
+                <div key={`${p.termLabel}::${p.number}::${p.state}`}
+                  style={{ padding:'10px 13px', borderRadius:'13px',
+                    background: isP ? 'rgba(96,224,154,0.08)' : 'rgba(255,204,80,0.07)',
+                    border:`1px solid ${isP ? 'rgba(96,224,154,0.22)' : 'rgba(255,204,80,0.18)'}`,
+                    display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
+                  <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'13px',
+                    color: p.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
+                    padding:'2px 7px', borderRadius:'7px',
+                    background: p.gameType === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
+                    border:`1px solid ${p.gameType === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}` }}>
+                    {p.number}
+                  </span>
+                  <span style={{ padding:'2px 7px', borderRadius:'7px', fontSize:'11px', fontWeight:800,
+                    background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.26)', color:'#60e09a', fontFamily:'system-ui,sans-serif' }}>
+                    {p.state}
+                  </span>
+                  <span style={{ padding:'2px 8px', borderRadius:'999px', fontSize:'10px', fontWeight:700,
+                    background: isP ? 'rgba(96,224,154,0.14)' : 'rgba(255,204,80,0.12)',
+                    border:`1px solid ${isP ? 'rgba(96,224,154,0.28)' : 'rgba(255,204,80,0.22)'}`,
+                    color: isP ? '#60e09a' : '#ffcc50', fontFamily:'system-ui,sans-serif' }}>
+                    {p.evidenceStrength}
+                  </span>
+                  <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)' }}>
+                    {p.totalHitCount} hit{p.totalHitCount !== 1 ? 's' : ''} · {p.straightCount}S / {p.boxedCount}B
+                    {p.uniqueDreamCount > 1 && <span style={{ color:'#a090ff', marginLeft:'6px' }}>· {p.uniqueDreamCount} dreams</span>}
+                    {p.lastHitDate && <span style={{ fontFamily:'monospace', fontSize:'11px', marginLeft:'6px', color:'rgba(255,255,255,0.35)' }}>{p.lastHitDate}</span>}
+                  </div>
+                  <div style={{ display:'flex', gap:'4px', flexWrap:'wrap' }}>
+                    {p.sourceClasses.map(sc => (
+                      <span key={sc} style={{ padding:'1px 6px', borderRadius:'5px', fontSize:'9px', fontWeight:700,
+                        background: sc === 'backtest-replay' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
+                        border:`1px solid ${sc === 'backtest-replay' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.24)'}`,
+                        color: sc === 'backtest-replay' ? '#a090ff' : '#ff8a6a' }}>
+                        {sc === 'backtest-replay' ? 'Backtest' : sc === 'live-dream-refresh' ? 'Live' : sc}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Boxed Family Repeats */}
+        {boxedRepeats.filter(b => b.numbers.length > 1).length > 0 && (
+          <div style={{ display:'grid', gap:'7px' }}>
+            <div style={{ fontSize:'11px', fontWeight:700, color:'rgba(255,255,255,0.55)', textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>
+              Boxed Families
+            </div>
+            <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+              {boxedRepeats.filter(b => b.numbers.length > 1).slice(0, 8).map(b => (
+                <div key={`${b.boxedKey}::${b.state}`}
+                  style={{ padding:'8px 12px', borderRadius:'12px', background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.10)' }}>
+                  <div style={{ fontFamily:'monospace', fontWeight:900, fontSize:'12px', color:'#a090ff', marginBottom:'4px' }}>
+                    {b.boxedKey} · <span style={{ fontSize:'10px', fontWeight:800, color:'#60e09a' }}>{b.state}</span>
+                  </div>
+                  <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', marginBottom:'4px' }}>
+                    {b.numbers.slice(0, 6).map(n => (
+                      <span key={n} style={{ fontFamily:'monospace', fontSize:'11px', padding:'1px 6px', borderRadius:'5px',
+                        background: b.gameType === 'cash4' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.14)',
+                        color: b.gameType === 'cash4' ? '#a090ff' : '#ff8a6a' }}>{n}</span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize:'10px', color:'rgba(255,255,255,0.40)' }}>{b.totalHitCount} hits · {b.straightCount}S / {b.boxedCount}B</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* State Hotspots */}
+        {stateHotspots.filter(s => s.totalHitCount >= 2).length > 0 && (
+          <div style={{ display:'grid', gap:'7px' }}>
+            <div style={{ fontSize:'11px', fontWeight:700, color:'rgba(255,255,255,0.55)', textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>
+              State Hotspots
+            </div>
+            <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+              {stateHotspots.filter(s => s.totalHitCount >= 2).slice(0, 8).map(s => (
+                <div key={`${s.termLabel}::${s.state}`}
+                  style={{ padding:'8px 12px', borderRadius:'12px', background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.10)' }}>
+                  <div style={{ fontWeight:900, fontSize:'13px', color:'#a090ff', fontFamily:'system-ui,sans-serif' }}>{s.state}</div>
+                  <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.55)', marginTop:'3px' }}>
+                    {s.totalHitCount} hits · {s.straightCount}S / {s.boxedCount}B
+                  </div>
+                  <div style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)', marginTop:'2px' }}>
+                    {s.numbers.slice(0, 4).join(', ')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Day windows */}
+        {dayWindows.filter(d => d.label !== 'Unknown').length > 0 && (
+          <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center' }}>
+            <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)', fontFamily:'system-ui,sans-serif', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.08em' }}>Day Windows:</span>
+            {dayWindows.filter(d => d.label !== 'Unknown').map(d => (
+              <span key={d.label} style={{ fontSize:'11px', padding:'2px 8px', borderRadius:'6px', background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.60)', border:'1px solid rgba(255,255,255,0.09)' }}>
+                {d.label}: {d.count}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Capped sample note */}
         {totalSampled !== null && (
           <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)', padding:'2px 0 6px' }}>
             Showing {rows.length} of {totalSampled} sampled rows.
-            {totalSampled >= 250 && !searchTerm && sourceFilter === 'all' && (
+            {lookupMode === 'browse-sample' && totalSampled >= 250 && !searchTerm && (
               <span style={{ color:'rgba(255,204,80,0.70)', marginLeft:'4px' }}>
-                Showing a capped sample. Use search to find terms outside this sample.
+                Capped sample. Use search to target a specific term.
               </span>
             )}
           </div>
@@ -377,7 +532,9 @@ function FellBeforeInner() {
             <strong>{dictionary.length === 0 ? 'No hit memory yet' : 'No matches for current filters'}</strong>
           </div>
           <p style={{ margin: 0, color: 'rgba(255,255,255,0.50)', lineHeight: 1.7 }}>
-            {dictionary.length === 0
+            {lookupMode === 'targeted-term' || lookupMode === 'targeted-number'
+              ? 'No targeted memory rows found for this term. If Backtest Archive shows hits for this term, run Backtest Memory Repair from the Integrity Console to promote the evidence.'
+              : dictionary.length === 0
               ? 'No confirmed fell-before memory yet. Hits will appear here after active windows are refreshed and the engine finds matches.'
               : 'Try broadening the search or clearing filters.'}
           </p>
