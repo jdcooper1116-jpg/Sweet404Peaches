@@ -491,8 +491,8 @@ function FellBeforeInner() {
                           </span>
                         )}
                         {countMismatch && !eventVerifiedFor(p) && (
-                          <span style={{ marginLeft:'6px', padding:'1px 5px', borderRadius:'4px', fontSize:'9px', fontWeight:700, background:'rgba(255,204,80,0.12)', border:'1px solid rgba(255,204,80,0.26)', color:'#ffcc50' }}>
-                            Aggregate Mismatch
+                          <span style={{ marginLeft:'6px', padding:'1px 5px', borderRadius:'4px', fontSize:'9px', fontWeight:700, background:'rgba(255,85,85,0.12)', border:'1px solid rgba(255,85,85,0.26)', color:'#ff9090' }}>
+                            ⚠ Aggregate says {p.totalHitCount}, events show {eventCountFor(p)} — run Rebuild
                           </span>
                         )}
                       </span>
@@ -514,6 +514,13 @@ function FellBeforeInner() {
                           {sc === 'backtest-replay' ? 'Backtest' : sc === 'live-dream-refresh' ? 'Live' : sc}
                         </span>
                       ))}
+                      {!eventsLoaded && (
+                        <span style={{ fontSize:'9px', padding:'2px 6px', borderRadius:'4px',
+                          background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.09)',
+                          color:'rgba(255,255,255,0.40)', fontFamily:'system-ui,sans-serif' }}>
+                          Aggregate only
+                        </span>
+                      )}
                       {eventsLoaded && (
                         <button type="button" onClick={() => toggleExpandedRepeat(rKey)}
                           style={{ fontSize:'10px', padding:'2px 8px', borderRadius:'6px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', color:'rgba(255,255,255,0.70)', cursor:'pointer' }}>

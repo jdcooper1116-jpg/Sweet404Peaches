@@ -65,8 +65,11 @@ export default function IntegrityConsolePage() {
   const [indexError, setIndexError] = useState(false);
   const [repairing,  setRepairing]  = useState(false);
   const [promoting,  setPromoting]  = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMode,setRebuildMode]= useState('');
   const [actionResult, setActionResult] = useState('');
   const [actionError,  setActionError]  = useState('');
+  const [rebuildResult,setRebuildResult]= useState<any>(null);
 
   useEffect(() => {
     if (authLoading || !user) { if (!authLoading) setLoading(false); return; }
@@ -142,6 +145,31 @@ export default function IntegrityConsolePage() {
       setActionResult(`Promote complete — ${data.promoted ?? 0} promoted, ${data.skipped ?? 0} skipped.`);
     } catch (e) { setActionError(String(e)); }
     finally { setPromoting(false); }
+  }
+
+  async function runRebuild(mode: 'dry' | 'all' | 'backtest' | 'live') {
+    if (!user) return;
+    if (mode !== 'dry') {
+      const ok = window.confirm(
+        `Rebuild hit memory from event ledger (${mode} source)?\n\n` +
+        `This overwrites aggregate hitCounts with event-based truth. It is safe and idempotent.`
+      );
+      if (!ok) return;
+    }
+    setRebuilding(true); setRebuildMode(mode); setRebuildResult(null); setActionError('');
+    try {
+      const body: Record<string, any> = { ownerUid: user.uid, repair: mode !== 'dry', limit: 500 };
+      if (mode === 'backtest') body.source = 'backtest-replay';
+      if (mode === 'live')     body.source = 'live-dream-refresh';
+      const res  = await fetch('/api/admin/rebuild-hit-memory', {
+        method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!data.ok) { setActionError(data.error ?? 'Rebuild failed.'); return; }
+      setRebuildResult(data);
+    } catch (e) { setActionError(String(e)); }
+    finally { setRebuilding(false); setRebuildMode(''); }
   }
 
   return (
@@ -251,6 +279,74 @@ export default function IntegrityConsolePage() {
               </div>
               {actionResult && <div style={{ padding:'10px 14px', borderRadius:'12px', background:'rgba(96,224,154,0.09)', border:'1px solid rgba(96,224,154,0.24)', color:'#60e09a', fontSize:'13px' }}>{actionResult}</div>}
               {actionError  && <div style={{ padding:'10px 14px', borderRadius:'12px', background:'rgba(255,85,85,0.09)',  border:'1px solid rgba(255,85,85,0.24)',  color:'#ff9090', fontSize:'13px' }}>✗ {actionError}</div>}
+            </div>
+          </section>
+
+          {/* ── Hit Memory Truth Rebuild ── */}
+          <section className="journal-card">
+            <div style={{ display:'flex', gap:'10px', alignItems:'center', marginBottom:'14px' }}>
+              <h2 style={{ margin:0, fontSize:'1.0rem', fontWeight:900, fontFamily:'system-ui,sans-serif', color:'#fff' }}>
+                Hit Memory Truth Rebuild
+              </h2>
+              <span style={{ fontSize:'11px', color:'rgba(255,204,80,0.80)', padding:'2px 7px', borderRadius:'999px', background:'rgba(255,204,80,0.10)', border:'1px solid rgba(255,204,80,0.22)' }}>
+                Fixes inflated aggregate counts
+              </span>
+            </div>
+            <p style={{ margin:'0 0 14px', fontSize:'12px', color:'rgba(255,255,255,0.55)', lineHeight:1.7 }}>
+              personalHitMappings aggregates can accumulate incorrect counts when multiple write paths
+              increment the same event. Rebuild reads the event ledger (personalHitEvents, backtestHits, dreamHits),
+              counts distinct events, and writes absolute values back.
+            </p>
+            <div style={{ display:'grid', gap:'10px' }}>
+              <div style={{ display:'flex', gap:'10px', flexWrap:'wrap' }}>
+                <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}
+                  onClick={() => runRebuild('dry')} disabled={rebuilding || !user}>
+                  {rebuilding && rebuildMode === 'dry' ? '⏳ Auditing…' : '🔍 Dry Audit All'}
+                </button>
+                <button type="button" className="btn-primary" style={{ fontSize:'12px' }}
+                  onClick={() => runRebuild('all')} disabled={rebuilding || !user}>
+                  {rebuilding && rebuildMode === 'all' ? '⏳ Rebuilding…' : '🔧 Rebuild All From Events'}
+                </button>
+                <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}
+                  onClick={() => runRebuild('backtest')} disabled={rebuilding || !user}>
+                  {rebuilding && rebuildMode === 'backtest' ? '⏳…' : '📚 Rebuild Backtest Only'}
+                </button>
+                <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}
+                  onClick={() => runRebuild('live')} disabled={rebuilding || !user}>
+                  {rebuilding && rebuildMode === 'live' ? '⏳…' : '🔴 Rebuild Live Only'}
+                </button>
+              </div>
+
+              {rebuildResult && (
+                <div style={{ padding:'12px 14px', borderRadius:'13px',
+                  background: rebuildResult.mismatchedAggregates > 0 ? 'rgba(255,204,80,0.08)' : 'rgba(96,224,154,0.08)',
+                  border:`1px solid ${rebuildResult.mismatchedAggregates > 0 ? 'rgba(255,204,80,0.24)' : 'rgba(96,224,154,0.24)'}`,
+                  fontSize:'12px', lineHeight:1.8 }}>
+                  <div style={{ fontWeight:700, color:'#fff', marginBottom:'6px' }}>
+                    {rebuildResult.repairRan ? '✓ Rebuild complete' : '🔍 Audit complete'}
+                  </div>
+                  <div style={{ display:'grid', gap:'3px', color:'rgba(255,255,255,0.70)', fontFamily:'monospace' }}>
+                    <div>Distinct events scanned: <strong style={{ color:'#fff' }}>{rebuildResult.distinctEvents ?? 0}</strong></div>
+                    <div>Semantic groups: <strong style={{ color:'#fff' }}>{rebuildResult.aggregateGroups ?? 0}</strong></div>
+                    <div style={{ color: (rebuildResult.mismatchedAggregates ?? 0) > 0 ? '#ffcc50' : '#60e09a' }}>
+                      Mismatched aggregates: <strong>{rebuildResult.mismatchedAggregates ?? 0}</strong>
+                    </div>
+                    {rebuildResult.repairRan && <div style={{ color:'#60e09a' }}>Repaired mappings: <strong>{rebuildResult.repairedMappings ?? 0}</strong></div>}
+                    {rebuildResult.repairRan && <div>Deprecated legacy docs: <strong>{rebuildResult.deprecatedDuplicates ?? 0}</strong></div>}
+                    {rebuildResult.nonCanonicalDocs > 0 && <div style={{ color:'#ffcc50' }}>Non-canonical docs found: <strong>{rebuildResult.nonCanonicalDocs}</strong></div>}
+                  </div>
+                  {rebuildResult.examples?.length > 0 && (
+                    <div style={{ marginTop:'8px', borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:'8px' }}>
+                      <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.45)', marginBottom:'5px' }}>Example mismatches:</div>
+                      {rebuildResult.examples.slice(0, 3).map((ex: any, i: number) => (
+                        <div key={i} style={{ fontSize:'11px', fontFamily:'monospace', color:'rgba(255,255,255,0.60)', marginBottom:'3px' }}>
+                          {ex.term} / {ex.number} / {ex.state}: aggregate {ex.before?.hitCount ?? ex.eventTruth?.hitCount} → event truth {ex.eventTruth?.hitCount ?? ex.after?.hitCount}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
 
