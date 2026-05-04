@@ -275,11 +275,25 @@ function ErrorBanner({ msg }: { msg: string }) {
   );
 }
 
+
+function playlistEntryState(entry: any): string {
+  return String(
+    entry?.state ??
+    entry?.stateCode ??
+    entry?.targetState ??
+    entry?.playState ??
+    entry?.jurisdiction ??
+    ''
+  ).trim().toUpperCase();
+}
+
+
 export default function PlaylistsPage() {
   const { user } = useAuth();
 
   const [windowsRaw,  setWindowsRaw]  = useState<any[]>([]);
   const [fellRows,    setFellRows]    = useState<FellBeforeRow[]>([]);
+  const [recentHits,  setRecentHits]  = useState<any[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState('');
 
@@ -294,15 +308,17 @@ export default function PlaylistsPage() {
       if (!user) { setLoading(false); return; }
       try {
         const uid = encodeURIComponent(user.uid);
-        const [winRes, fellRes] = await Promise.all([
+        const [winRes, fellRes, hitsRes] = await Promise.all([
           fetch(`/api/dreams/windows?ownerUid=${uid}`),
           fetch(`/api/fell-before?ownerUid=${uid}`),
+          fetch(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
         ]);
-        const [winData, fellData] = await Promise.all([winRes.json(), fellRes.json()]);
-        if (!winData.ok)  { setError(winData.error  || 'Windows load failed.'); return; }
+        const [winData, fellData, hitsData] = await Promise.all([winRes.json(), fellRes.json(), hitsRes.json()]);
+        if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
         if (!fellData.ok) { setError(fellData.error || 'Fell-before load failed.'); return; }
         setWindowsRaw(winData.windows  ?? []);
         setFellRows(fellData.rows      ?? []);
+        if (hitsData?.ok) setRecentHits(hitsData.hits ?? []);
       } catch (err) { console.error(err); setError('Could not load playlist data.'); }
       finally { setLoading(false); }
     }
@@ -313,6 +329,20 @@ export default function PlaylistsPage() {
   const windows = useMemo(() => buildGroupedWindows(windowsRaw), [windowsRaw]);
   const active  = useMemo(() => windows.filter(w => (w.activeEnd ?? '') >= today), [windows, today]);
   const fellIdx = useMemo(() => buildFellIndex(fellRows), [fellRows]);
+  const hitIndex = useMemo(() => {
+    const idx = new Map<string, { hitType: string; drawDate: string; winningNumber: string }>();
+    for (const h of recentHits) {
+      const num   = String(h.number ?? h.candidate ?? '');
+      const state = String(h.state ?? '');
+      if (!num || !state) continue;
+      const key = `${num}::${state}`;
+      const dd  = String(h.drawDate ?? h.draw_date ?? '');
+      if (!idx.has(key) || dd > (idx.get(key)?.drawDate ?? ''))
+        idx.set(key, { hitType: String(h.hitType ?? h.match_type ?? ''), drawDate: dd, winningNumber: String(h.winningNumber ?? h.winning_number ?? '') });
+    }
+    return idx;
+  }, [recentHits]);
+
   const { stateGroups, watchlist } = useMemo(
     () => buildStatePlaylists(windows, today, fellIdx),
     [windows, today, fellIdx]
@@ -499,6 +529,21 @@ export default function PlaylistsPage() {
                             {entry.fellBefore   && <Badge kind="fell"     />}
                             <Badge kind="active" />
                             {entry.multiTerm    && <Badge kind="multi"    />}
+                            {/* Playlist hit attribution — checks if this number hit in this state */}
+                            {(() => {
+                              const stateKey = playlistEntryState(entry);
+                        const h = stateKey ? hitIndex.get(`${entry.number}::${stateKey}`) : null;
+                              if (!h) return null;
+                              const isS = h.hitType === 'exact' || h.hitType === 'straight';
+                              return (
+                                <span style={{ display:'inline-flex', alignItems:'center', gap:'3px', padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:800,
+                                  background: isS ? 'rgba(96,224,154,0.18)' : 'rgba(255,204,80,0.14)',
+                                  border:`1px solid ${isS ? 'rgba(96,224,154,0.35)' : 'rgba(255,204,80,0.30)'}`,
+                                  color: isS ? '#60e09a' : '#ffcc50', fontFamily:'system-ui,sans-serif' }}>
+                                  {isS ? '🎯 Straight Hit' : '📦 Boxed Hit'} {h.drawDate}
+                                </span>
+                              );
+                            })()}
                             {entry.matchTypes.includes('straight') && <Badge kind="straight" />}
                             {entry.matchTypes.includes('boxed')    && <Badge kind="boxed"    />}
                           </div>

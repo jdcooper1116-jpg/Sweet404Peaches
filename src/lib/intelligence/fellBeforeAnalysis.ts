@@ -44,15 +44,13 @@ function rowSemKey(row: Record<string, any>): string {
   return `${uid}|${did}|${nt}|${num}|${gt}|${state}`;
 }
 
-
-function activeRowsOnly<T extends Record<string, any>>(rows: T[]): T[] {
-  return (rows ?? []).filter((r: any) => !r?._deprecated);
-}
-
 export function dedupeAggregateRows(rows: any[]): DedupedRow[] {
+  // Exclude rows marked deprecated by audit-hit-counts repair.
+  // Deprecated docs represent legacy duplicate doc IDs — canonical doc holds the truth.
+  const activeRows = rows.filter(r => !r._deprecated);
   const map = new Map<string, DedupedRow>();
 
-  for (const r of rows) {
+  for (const r of activeRows) {
     const key = rowSemKey(r);
     if (!map.has(key)) {
       map.set(key, {
@@ -158,7 +156,7 @@ export type PowerRepeat = {
   events:           FellBeforeRow[];  // individual event rows (populated by populateGroupEvents)
 };
 
-export function buildPowerRepeats(rows: any[] = [], rawRows: any[] = []): PowerRepeat[] {
+export function buildPowerRepeats(rows: any[] = [], rawRows: any[]): PowerRepeat[] {
   const map = new Map<string, PowerRepeat>();
 
   for (const r of rows) {
@@ -253,7 +251,7 @@ export type BoxedRepeat = {
   events:           FellBeforeRow[];
 };
 
-export function buildBoxedRepeats(rows: any[] = [], rawRows: any[] = []): BoxedRepeat[] {
+export function buildBoxedRepeats(rows: any[] = [], rawRows: any[]): BoxedRepeat[] {
   const map = new Map<string, BoxedRepeat>();
 
   for (const r of rows) {
@@ -307,7 +305,7 @@ export type StateHotspot = {
   strengthTier:  EvidenceStrength;
 };
 
-export function buildStateHotspots(rows: any[] = [], rawRows: any[] = []): StateHotspot[] {
+export function buildStateHotspots(rows: any[] = [], rawRows: any[]): StateHotspot[] {
   const map = new Map<string, StateHotspot>();
 
   for (const r of rows) {
@@ -322,7 +320,7 @@ export function buildStateHotspots(rows: any[] = [], rawRows: any[] = []): State
         termLabel: term, state, totalHitCount: 0, straightCount: 0,
         boxedCount: 0, numbers: [], uniqueDrawDates: [],
         uniqueDreamCount: 0, uniqueWindowCount: 0,
-        firstHitDate: '', lastHitDate: '', strengthTier: 'Single Evidence',
+        firstHitDate: '', lastHitDate: '', strengthTier: 'Single Evidence' as EvidenceStrength,
       });
     }
     const e = map.get(key)!;
@@ -378,20 +376,22 @@ export type FellSummary = {
   filtersApplied:  string[];
 };
 
-export function buildFellSummary(rows: any[] = [], rawRows: any[],
+export function buildFellSummary(
+  rawRows: any[],
   powerRepeats: PowerRepeat[],
-  meta: { lookupMode?: string; filtersApplied?: string[] }): FellSummary {
-  const summaryRows = dedupeAggregateRows(rawRows);
-  const states  = [...new Set(summaryRows.map(r => r.state  ?? '').filter(Boolean))];
-  const numbers = [...new Set(summaryRows.map(r => r.number ?? '').filter(Boolean))];
+  meta: { lookupMode?: string; filtersApplied?: string[] }
+): FellSummary {
+  const rows = dedupeAggregateRows(rawRows);
+  const states  = [...new Set(rows.map(r => r.state  ?? '').filter(Boolean))];
+  const numbers = [...new Set(rows.map(r => r.number ?? '').filter(Boolean))];
   return {
-    rowCount:       summaryRows.length,
+    rowCount:       rows.length,
     states, numbers,
     powerRepeats:   powerRepeats.filter(p => p.evidenceStrength === 'Power Repeat').length,
     strongRepeats:  powerRepeats.filter(p => p.evidenceStrength === 'Strong Repeat').length,
     singleEvidence: powerRepeats.filter(p => p.evidenceStrength === 'Single Evidence').length,
-    straightTotal:  summaryRows.reduce((s, r) => s + Number(r.straightCount ?? 0), 0),
-    boxedTotal:     summaryRows.reduce((s, r) => s + Number(r.boxedCount    ?? 0), 0),
+    straightTotal:  rows.reduce((s, r) => s + Number(r.straightCount ?? 0), 0),
+    boxedTotal:     rows.reduce((s, r) => s + Number(r.boxedCount    ?? 0), 0),
     lookupMode:     meta.lookupMode     ?? '',
     filtersApplied: meta.filtersApplied ?? [],
   };

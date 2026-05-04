@@ -290,7 +290,7 @@ function FellBeforeInner() {
   const dayWindows = useMemo(() =>
     rows.length > 0 ? buildDayWindows(rows) : [], [rows]);
   const fellSummary: FellSummary = useMemo(() =>
-    buildFellSummary(rows, powerRepeats, [], { lookupMode, filtersApplied }),
+    buildFellSummary(rows, powerRepeats, { lookupMode, filtersApplied }),
     [rows, powerRepeats, lookupMode, filtersApplied]);
 
   // Populated groups — events[] filled in after on-demand fetch

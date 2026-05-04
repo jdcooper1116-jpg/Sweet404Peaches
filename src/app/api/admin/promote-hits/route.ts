@@ -22,6 +22,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb }                from '@/lib/firebase/admin';
 import { Timestamp, FieldValue }     from 'firebase-admin/firestore';
+import { canonicalPmDocId, canonicalEventId } from '@/lib/intelligence/hitClassification';
 
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
@@ -162,8 +163,7 @@ export async function POST(req: NextRequest) {
         const bDelta = hitType === 'boxed' ? 1 : 0;
 
         // Deterministic doc ID — re-runs find same doc and increment
-        const pmId = [ownerUid, dreamerId, normalizedTerm, number, gameType, state]
-          .map(safeId).join('__');
+        const pmId = canonicalPmDocId(ownerUid, dreamerId, normalizedTerm, number, gameType, state);
 
         batch.set(
           db.collection('personalHitMappings').doc(pmId),
@@ -183,6 +183,23 @@ export async function POST(req: NextRequest) {
           { merge: true }
         );
 
+        // personalHitEvents — event-level proof, idempotent via canonical event ID
+        const evId = canonicalEventId(
+          ownerUid, dreamerId, normalizedTerm, number, gameType, state,
+          drawDate, drawTime, hitType, dreamEntryId || windowId
+        );
+        batch.set(db.collection('personalHitEvents').doc(evId), {
+          ownerUid, dreamerId, dreamerName, termLabel, normalizedTerm,
+          candidateNumber: number, number, winningNumber,
+          state, gameType, drawDate, drawTime,
+          hitType, matchMode: hitType,
+          hitCount: 1, straightCount: sDelta, boxedCount: bDelta,
+          source: 'live-dream-refresh', sourceClass: 'live-dream-refresh',
+          dreamEntryId, activeWindowId: windowId, sourceDreamEntryId: dreamEntryId,
+          daysFromDream, sameDay: daysFromDream === 0,
+          createdAt: now,
+        }, { merge: true });
+
         batch.set(
           db.collection('dreamHitPromotions').doc(hitDocId),
           { ownerUid, hitDocId, promotedAt: now },
@@ -194,7 +211,7 @@ export async function POST(req: NextRequest) {
       await batch.commit();
     }
 
-    return NextResponse.json({ ok: true, promoted, skipped, total: promoted + skipped });
+    return NextResponse.json({ ok: true, promotedToMemory: promoted, promoted, skipped, total: promoted + skipped });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[promote-hits]', msg);

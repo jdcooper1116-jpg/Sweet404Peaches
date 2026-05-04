@@ -7,7 +7,8 @@
  * - match_type removed from dedup key (prevents duplicates when switching modes)
  */
 import type { firestore } from 'firebase-admin';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp, FieldValue } from 'firebase-admin/firestore';
+import { canonicalPmDocId, canonicalEventId, normalizeTerm as normalizeTermForId, classifyHit } from '@/lib/intelligence/hitClassification';
 import { runBacktest } from './client';
 import type { EngineHit } from './types';
 
@@ -102,6 +103,8 @@ export interface RefreshAllResult {
   engineCallsMade: number;
   errors: Array<{ context: string; error: string }>;
   checkedAt: string;
+  promotedToMemory: number;
+  skippedExistingEvents: number;
 }
 
 export async function refreshAllActiveWindows(
@@ -124,6 +127,8 @@ export async function refreshAllActiveWindows(
   if (windows.length === 0) {
     return {
       windowsChecked: 0, windowsWithNewHits: 0, totalNewHits: 0,
+      promotedToMemory: 0,
+      skippedExistingEvents: 0,
       engineCallsMade: 0, errors: [], checkedAt: new Date().toISOString(),
     };
   }
@@ -160,9 +165,9 @@ export async function refreshAllActiveWindows(
   const hitsToWrite: Array<{ docId: string; data: DreamHitDoc }> = [];
 
   for (const [groupKey, groupWindows] of groups.entries()) {
-    const [gameType, activeStart, activeEnd] = groupKey.split('::') as ['cash3'|'cash4'|'pick3'|'pick4', string, string];
+    const [gameType, activeStart, activeEnd] = groupKey.split('::') as ['pick3'|'pick4', string, string];
     const lookahead_days = calcLookahead(activeStart, activeEnd);
-    const states = (gameType === 'cash3' || gameType === 'pick3') ? PICK3_STATES : PICK4_STATES;
+    const states = gameType === 'pick3' ? PICK3_STATES : PICK4_STATES;
 
     const candidateSet = new Set(groupWindows.map(w => w.number));
     const candidates   = Array.from(candidateSet);
@@ -264,6 +269,123 @@ export async function refreshAllActiveWindows(
     await batch.commit();
   }
 
+  // ── Inline promotion: new hits → personalHitEvents + personalHitMappings ──
+  //
+  // hitsToWrite only contains genuinely new hits (deduped against existingHitsByWindow).
+  // We promote them here so no separate promote-hits call is needed for live refresh.
+  // Idempotency: personalHitEvents (one doc per unique draw event) prevents double-counting.
+  let promotedToMemory   = 0;
+  let skippedExistingEvents = 0;
+
+  if (hitsToWrite.length > 0) {
+    // Pre-fetch any existing personalHitEvents for these windows to guard against
+    // edge-case double-promotion (e.g. refresh called twice before Firestore catches up)
+    const windowIds  = new Set(hitsToWrite.map(h => h.data.dreamWindowId));
+    let existingEvSnap: any = { docs: [] };
+    try {
+      existingEvSnap = await db.collection('personalHitEvents')
+        .where('ownerUid', '==', ownerUid)
+        .where('activeWindowId', 'in', [...windowIds].slice(0, 10))   // 'in' max 10
+        .limit(500).get();
+    } catch { /* non-fatal — worst case we over-write with merge:true */ }
+    const existingEvIds = new Set(existingEvSnap.docs.map((d: any) => d.id));
+
+    const PBATCH = 400;
+    for (let i = 0; i < hitsToWrite.length; i += PBATCH) {
+      const batch = db.batch();
+      for (const { data: h } of hitsToWrite.slice(i, i + PBATCH)) {
+        const candidate  = String(h.candidate ?? h.number ?? '');
+        const winning    = String(h.winning_number ?? h.winningNumber ?? '');
+        const normalizedT = normalizeTermForId(String(h.termLabel ?? ''));
+        const gameType   = String(h.gameType ?? h.game_type ?? '');
+        const state      = String(h.state ?? '');
+        const drawDate   = String(h.draw_date ?? h.drawDate ?? '');
+        const drawTime   = String(h.draw_time ?? h.drawTime ?? '');
+        const dreamerId  = String(h.dreamerId ?? 'owner-self');
+        const dreamEntryId = String(h.dreamEntryId ?? '');
+        const windowId   = String(h.dreamWindowId ?? h.activeWindowId ?? '');
+
+        // Classify using canonical helper (straight/boxed mutually exclusive)
+        const cls = classifyHit(candidate, winning);
+        if (!cls.isHit) continue;
+
+        const hitType = cls.hitType!;
+        const evId = canonicalEventId(
+          ownerUid, dreamerId, normalizedT, candidate, gameType, state,
+          drawDate, drawTime, hitType, dreamEntryId || windowId
+        );
+
+        if (existingEvIds.has(evId)) { skippedExistingEvents++; continue; }
+
+        const pmId = canonicalPmDocId(ownerUid, dreamerId, normalizedT, candidate, gameType, state);
+
+        // personalHitEvents — one per unique draw event (idempotency registry)
+        batch.set(db.collection('personalHitEvents').doc(evId), {
+          ownerUid,
+          dreamerId,
+          dreamerName:        String(h.dreamerName ?? ''),
+          termLabel:          String(h.termLabel ?? ''),
+          normalizedTerm:     normalizedT,
+          candidateNumber:    candidate,
+          number:             candidate,
+          winningNumber:      winning,
+          state,
+          gameType,
+          drawDate,
+          drawTime,
+          hitType,
+          matchMode:          hitType,
+          hitCount:           1,
+          straightCount:      cls.straightCount,
+          boxedCount:         cls.boxedCount,
+          source:             'live-dream-refresh',
+          sourceClass:        'live-dream-refresh',
+          dreamEntryId,
+          activeWindowId:     windowId,
+          sourceDreamEntryId: dreamEntryId,
+          daysFromDream:      typeof (h as any).daysFromDream === 'number' ? (h as any).daysFromDream : null,
+          sameDay:            (h as any).sameDay ?? null,
+          createdAt:          now,
+          updatedAt:          now,
+        });
+
+        // personalHitMappings — canonical aggregated doc, incremented per unique event
+        batch.set(db.collection('personalHitMappings').doc(pmId), {
+          ownerUid,
+          dreamerId,
+          dreamerName:        String(h.dreamerName ?? ''),
+          termLabel:          String(h.termLabel ?? ''),
+          normalizedTerm:     normalizedT,
+          number:             candidate,
+          candidateNumber:    candidate,
+          winningNumber:      winning,
+          gameType,
+          state,
+          drawDate,
+          drawTime,
+          hitType,
+          matchMode:          hitType,
+          source:             'live-dream-refresh',
+          sourceClass:        'live-dream-refresh',
+          dreamEntryId,
+          activeWindowId:     windowId,
+          sourceDreamEntryId: dreamEntryId,
+          lastHitDate:        drawDate,
+          lastHitAt:          now,
+          hitCount:           FieldValue.increment(1),
+          straightCount:      FieldValue.increment(cls.straightCount),
+          boxedCount:         FieldValue.increment(cls.boxedCount),
+          stateStrengthScore: FieldValue.increment(cls.straightCount * 3 + cls.boxedCount),
+          createdAt:          now,
+          updatedAt:          now,
+        }, { merge: true });
+
+        promotedToMemory++;
+      }
+      await batch.commit();
+    }
+  }
+
   const windowUpdateBatch = db.batch();
   for (const w of windows) {
     const newHits = newHitsPerWindow.get(w.id) ?? 0;
@@ -284,6 +406,8 @@ export async function refreshAllActiveWindows(
     windowsChecked: windows.length,
     windowsWithNewHits,
     totalNewHits,
+    promotedToMemory,
+    skippedExistingEvents,
     engineCallsMade,
     errors,
     checkedAt: new Date().toISOString(),
