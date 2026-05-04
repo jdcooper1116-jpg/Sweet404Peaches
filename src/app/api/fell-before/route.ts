@@ -137,6 +137,16 @@ export async function GET(req: NextRequest) {
       }
     }
 
+
+    // If a term lookup also includes a numeric filter, apply the number filter too.
+    // Previously term=crying&number=088 returned all crying rows instead of only 088.
+    if (numberParam && /^\d+$/.test(numberParam) && termRaw) {
+      rows = rows.filter((r: any) =>
+        String(r.number ?? r.candidateNumber ?? '').trim() === numberParam
+      );
+      filtersApplied.push(`number=${numberParam}`);
+    }
+
     // ── Common in-memory filters ──────────────────────────────────────────────
     if (sourceParam) {
       const want = sourceParam.toLowerCase();
