@@ -167,6 +167,41 @@ export async function GET(req: NextRequest) {
     }
 
     // Source filter
+
+    // Normalize event source classes before source filtering or response.
+    // dreamHits/live refresh events may not store `source`, but they usually
+    // have activeWindowId, dreamEntryId/sourceDreamEntryId, or detectedAt.
+    rows = rows.map((r: any) => {
+      const rawSource = String(r.source ?? r.sourceClass ?? r._sourceClass ?? '').toLowerCase();
+      const sourceDreamEntryId = String(r.sourceDreamEntryId ?? '');
+      const backtestDreamId = String(r.backtestDreamId ?? '');
+
+      const isBacktest =
+        rawSource.includes('backtest') ||
+        !!backtestDreamId ||
+        sourceDreamEntryId.startsWith('backtest:');
+
+      const isLive =
+        rawSource.includes('live') ||
+        !!r.activeWindowId ||
+        !!r.dreamWindowId ||
+        !!r.dreamEntryId ||
+        !!r.detectedAt ||
+        (!!sourceDreamEntryId && !sourceDreamEntryId.startsWith('backtest:'));
+
+      const sourceClass = isBacktest
+        ? 'backtest-replay'
+        : isLive
+          ? 'live-dream-refresh'
+          : 'unknown';
+
+      return {
+        ...r,
+        source: sourceClass,
+        _sourceClass: sourceClass,
+      };
+    });
+
     if (sourceP) {
       const want = sourceP.toLowerCase();
       rows = rows.filter(r => {
