@@ -229,9 +229,17 @@ function FellBeforeInner() {
       const res  = await fetch(`/api/fell-before?${qs.toString()}`);
       const data = await res.json();
       if (!data.ok) { setError(data.error || 'Failed to load term memory.'); return; }
-      setRows(Array.isArray(data.rows) ? (data.rows as MappingRow[]) : []);
+      const newRows = Array.isArray(data.rows) ? (data.rows as MappingRow[]) : [];
+      setRows(newRows);
       setLookupMode(data.lookupMode ?? '');
       setFiltersApplied(data.filtersApplied ?? []);
+      // Auto-load event proof when we have rows and a term — no button click required
+      if (newRows.length > 0 && (activeTerm || activeNum)) {
+        // Reset events so loadEvents runs fresh
+        setEventsLoaded(false);
+        setAllEvents([]);
+        setEventsLoaded(false);
+      }
       setTotalSampled(data.totalSampled ?? null);
     } catch (err) {
       console.error(err);
@@ -242,6 +250,13 @@ function FellBeforeInner() {
   // Reload when dreamer changes
   useEffect(() => { void loadRows(); }, [user, dreamerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-load events when rows arrive and a term/number search is active
+  useEffect(() => {
+    if (rows.length > 0 && !eventsLoaded && !eventsLoading && searchTerm.trim()) {
+      void loadEvents(searchTerm.trim());
+    }
+  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load event-level drilldown data for current search term
   async function loadEvents(term: string) {
     if (!user || !term.trim() || eventsLoaded) return;
@@ -251,7 +266,7 @@ function FellBeforeInner() {
       const res  = await fetch(`/api/fell-before/events?ownerUid=${uid}&term=${encodeURIComponent(term.trim())}&limit=500`);
       const data = await res.json();
       if (!data.ok) { setEventsError(data.error ?? 'Could not load events.'); return; }
-      setAllEvents(data.rows ?? []);
+      setAllEvents(data.events ?? data.rows ?? []);
       setEventsLoaded(true);
     } catch (e) { setEventsError(String(e)); }
     finally { setEventsLoading(false); }
@@ -515,35 +530,54 @@ function FellBeforeInner() {
                           ⚠ Aggregate count ({p.totalHitCount}) is higher than visible events ({p.events.length}). Run repair/audit to rebuild event-level proof.
                         </div>
                       )}
-                      {p.events.map((ev, i) => (
-                        <div key={ev.id ?? i} style={{ fontSize:'11px', fontFamily:'monospace',
-                          padding:'5px 8px', borderRadius:'8px', background:'rgba(255,255,255,0.04)',
-                          display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center', color:'rgba(255,255,255,0.70)' }}>
-                          <span style={{ color: ev.hitType === 'straight' ? '#60e09a' : '#ffcc50', fontWeight:700 }}>
-                            {ev.hitType === 'straight' ? 'S' : 'B'}
-                          </span>
-                          {ev.winningNumber && <span style={{ color:'rgba(255,255,255,0.45)' }}>{ev.number}→{ev.winningNumber}</span>}
-                          <span style={{ color:'rgba(255,255,255,0.55)' }}>{ev.drawDate || '—'}</span>
-                          {ev.drawTime && <span style={{ color:'rgba(255,255,255,0.40)' }}>{ev.drawTime}</span>}
-                          {ev.daysFromDream !== null && ev.daysFromDream !== undefined && (
-                            <span style={{ color:'rgba(255,255,255,0.40)' }}>
-                              {ev.sameDay ? 'Same day' : `Day ${ev.daysFromDream}`}
+                      {p.events.map((ev, i) => {
+                        const isStr = ev.hitType === 'straight';
+                        const srcLabel = ev._sourceClass === 'backtest-replay' ? 'Backtest'
+                                       : ev._sourceClass === 'live-dream-refresh' ? 'Live' : 'Repair';
+                        const srcColor = ev._sourceClass === 'backtest-replay' ? '#a090ff' : '#ff8a6a';
+                        const refId    = ev.backtestDreamId || ev.sourceDreamEntryId || ev.activeWindowId || '';
+                        return (
+                        <div key={ev.id ?? i} style={{ fontSize:'11px',
+                          padding:'6px 10px', borderRadius:'9px',
+                          background: isStr ? 'rgba(96,224,154,0.05)' : 'rgba(255,204,80,0.05)',
+                          border:`1px solid ${isStr ? 'rgba(96,224,154,0.12)' : 'rgba(255,204,80,0.12)'}`,
+                          display:'grid', gap:'3px' }}>
+                          {/* Line 1: index · candidate→winning · hitType · state */}
+                          <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center', fontFamily:'monospace' }}>
+                            <span style={{ color:'rgba(255,255,255,0.30)', minWidth:'18px' }}>#{i+1}</span>
+                            <span style={{ color: isStr ? '#60e09a' : '#ffcc50', fontWeight:700 }}>
+                              {isStr ? 'Straight' : 'Boxed'}
                             </span>
-                          )}
-                          <span style={{ padding:'1px 5px', borderRadius:'4px', fontSize:'9px',
-                            background: ev._sourceClass === 'backtest-replay' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
-                            color: ev._sourceClass === 'backtest-replay' ? '#a090ff' : '#ff8a6a' }}>
-                            {ev._sourceClass === 'backtest-replay' ? 'Backtest' : ev._sourceClass === 'live-dream-refresh' ? 'Live' : 'Repair'}
-                          </span>
-                          {ev.dreamerName && <span style={{ color:'rgba(255,255,255,0.35)' }}>{ev.dreamerName}</span>}
-                          {ev.backtestDreamId && (
-                            <span style={{ color:'rgba(255,255,255,0.25)', fontSize:'9px' }}>
-                              ID:{ev.backtestDreamId.slice(0, 8)}…
+                            {ev.winningNumber
+                              ? <span style={{ color:'rgba(255,255,255,0.75)' }}>{ev.number}→{ev.winningNumber}</span>
+                              : <span style={{ color:'rgba(255,255,255,0.50)' }}>{ev.number}</span>
+                            }
+                            <span style={{ padding:'1px 6px', borderRadius:'4px', fontSize:'9px', fontWeight:700,
+                              background:`${srcColor}20`, border:`1px solid ${srcColor}40`, color:srcColor }}>
+                              {srcLabel}
                             </span>
+                          </div>
+                          {/* Line 2: draw date · draw time · days from dream */}
+                          <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', color:'rgba(255,255,255,0.55)', fontFamily:'monospace', fontSize:'10px' }}>
+                            <span>Draw: {ev.drawDate || '—'}</span>
+                            {ev.drawTime && <span>{ev.drawTime}</span>}
+                            {ev.daysFromDream !== null && ev.daysFromDream !== undefined && (
+                              <span style={{ color:'rgba(255,255,255,0.40)' }}>
+                                {ev.sameDay ? 'Same day' : `Day ${ev.daysFromDream}`}
+                              </span>
+                            )}
+                            {ev.dreamerName && <span style={{ color:'rgba(255,255,255,0.35)' }}>{ev.dreamerName}</span>}
+                            {!ev.drawDate && <span style={{ color:'rgba(255,204,80,0.70)' }}>Missing timestamp.</span>}
+                          </div>
+                          {/* Line 3: ref ID */}
+                          {refId && (
+                            <div style={{ fontSize:'9px', color:'rgba(255,255,255,0.22)', fontFamily:'monospace' }}>
+                              ID: {refId.slice(0, 12)}…
+                            </div>
                           )}
-                          {!ev.drawDate && <span style={{ color:'rgba(255,204,80,0.70)', fontSize:'9px' }}>Missing timestamp metadata.</span>}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                   {isExp && p.events.length === 0 && eventsLoaded && (
@@ -792,21 +826,24 @@ function FellBeforeInner() {
 // ─── Export wrapped in Suspense ───────────────────────────────────────────────
 
 
+function eventCountFor(group: any): number {
+  return Array.isArray(group?.events) ? group.events.length : 0;
+}
 
 function eventStraightCountFor(group: any): number {
   return Array.isArray(group?.events)
-    ? group.events.filter((e: any) => String(e?.hitType ?? e?.matchMode ?? '').toLowerCase() === 'straight').length
+    ? group.events.filter((e: any) =>
+        String(e?.hitType ?? e?.matchMode ?? '').toLowerCase() === 'straight'
+      ).length
     : 0;
 }
 
 function eventBoxedCountFor(group: any): number {
   return Array.isArray(group?.events)
-    ? group.events.filter((e: any) => String(e?.hitType ?? e?.matchMode ?? '').toLowerCase() === 'boxed').length
+    ? group.events.filter((e: any) =>
+        String(e?.hitType ?? e?.matchMode ?? '').toLowerCase() === 'boxed'
+      ).length
     : 0;
-}
-
-function eventCountFor(group: any): number {
-  return Array.isArray(group?.events) ? group.events.length : 0;
 }
 
 function eventVerifiedFor(group: any): boolean {

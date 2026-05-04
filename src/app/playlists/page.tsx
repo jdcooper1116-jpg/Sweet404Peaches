@@ -293,7 +293,10 @@ export default function PlaylistsPage() {
 
   const [windowsRaw,  setWindowsRaw]  = useState<any[]>([]);
   const [fellRows,    setFellRows]    = useState<FellBeforeRow[]>([]);
-  const [recentHits,  setRecentHits]  = useState<any[]>([]);
+  const [recentHits,     setRecentHits]    = useState<any[]>([]);
+  const [playlistHits,   setPlaylistHits]  = useState<any[]>([]);
+  const [snapshotSaving, setSnapshotSaving]= useState(false);
+  const [snapshotResult, setSnapshotResult]= useState('');
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState('');
 
@@ -303,22 +306,42 @@ export default function PlaylistsPage() {
   const [numSearch,   setNumSearch]   = useState('');
   const [termSearch,  setTermSearch]  = useState('');
 
+  async function saveSnapshot() {
+    if (!user) return;
+    setSnapshotSaving(true); setSnapshotResult('');
+    try {
+      const res  = await fetch('/api/admin/save-playlist-candidates', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ownerUid: user.uid }),
+      });
+      const data = await res.json();
+      if (data.ok) setSnapshotResult(`Saved ${data.candidatesSaved ?? 0} candidates · ${data.hitsFound ?? 0} hits found.`);
+      else setSnapshotResult(data.error ?? 'Snapshot failed.');
+    } catch (e) { setSnapshotResult(String(e)); }
+    finally { setSnapshotSaving(false); }
+  }
+
   useEffect(() => {
     async function load() {
       if (!user) { setLoading(false); return; }
       try {
         const uid = encodeURIComponent(user.uid);
-        const [winRes, fellRes, hitsRes] = await Promise.all([
-          fetch(`/api/dreams/windows?ownerUid=${uid}`),
-          fetch(`/api/fell-before?ownerUid=${uid}`),
+        const [winRes, fellRes, hitsRes, snapsRes] = await Promise.all([
+          fetch(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+          fetch(`/api/fell-before?ownerUid=${uid}&limit=250`),
           fetch(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
+          fetch(`/api/admin/playlist-hits?ownerUid=${uid}&limit=50`).catch(() => null),
         ]);
-        const [winData, fellData, hitsData] = await Promise.all([winRes.json(), fellRes.json(), hitsRes.json()]);
+        const [winData, fellData, hitsData, snapsData] = await Promise.all([
+          winRes.json(), fellRes.json(), hitsRes.json(),
+          snapsRes ? snapsRes.json().catch(() => null) : Promise.resolve(null),
+        ]);
         if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
         if (!fellData.ok) { setError(fellData.error || 'Fell-before load failed.'); return; }
         setWindowsRaw(winData.windows  ?? []);
         setFellRows(fellData.rows      ?? []);
         if (hitsData?.ok) setRecentHits(hitsData.hits ?? []);
+        if (snapsData?.ok) setPlaylistHits(snapsData.hits ?? []);
       } catch (err) { console.error(err); setError('Could not load playlist data.'); }
       finally { setLoading(false); }
     }
@@ -329,6 +352,16 @@ export default function PlaylistsPage() {
   const windows = useMemo(() => buildGroupedWindows(windowsRaw), [windowsRaw]);
   const active  = useMemo(() => windows.filter(w => (w.activeEnd ?? '') >= today), [windows, today]);
   const fellIdx = useMemo(() => buildFellIndex(fellRows), [fellRows]);
+  // statePlaylistHits index — confirmed hits on persisted candidates
+  const playlistHitIndex = useMemo(() => {
+    const idx = new Map<string, { hitType: string; drawDate: string; winningNumber: string; drawTime: string }>();
+    for (const h of playlistHits) {
+      const key = `${h.number ?? ''}::${h.state ?? ''}`;
+      if (!idx.has(key)) idx.set(key, { hitType: h.hitType ?? '', drawDate: h.drawDate ?? '', winningNumber: h.winningNumber ?? '', drawTime: h.drawTime ?? '' });
+    }
+    return idx;
+  }, [playlistHits]);
+
   const hitIndex = useMemo(() => {
     const idx = new Map<string, { hitType: string; drawDate: string; winningNumber: string }>();
     for (const h of recentHits) {
@@ -463,6 +496,55 @@ export default function PlaylistsPage() {
         </div>
       </section>
 
+      {/* Save Snapshot + Attribution status */}
+      <section style={{ display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
+        <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}
+          onClick={saveSnapshot} disabled={snapshotSaving || !user}>
+          {snapshotSaving ? '⏳ Saving…' : '📸 Save Playlist Snapshot'}
+        </button>
+        {snapshotResult
+          ? <span style={{ fontSize:'12px', color: snapshotResult.startsWith('Saved') ? '#60e09a' : '#ff9090' }}>{snapshotResult}</span>
+          : <span style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)' }}>Playlist attribution begins after candidate snapshots are saved.</span>
+        }
+      </section>
+
+      {/* Recent Playlist Hits — confirmed hits on persisted candidates */}
+      {playlistHits.length > 0 && (
+        <section className="journal-card">
+          <h2 style={{ margin:'0 0 12px', fontSize:'1.0rem', fontWeight:900, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
+            Recent Playlist Hits
+          </h2>
+          <div style={{ display:'grid', gap:'7px' }}>
+            {playlistHits.slice(0, 10).map((h: any, i: number) => {
+              const isS = h.hitType === 'straight' || h.hitType === 'exact';
+              return (
+                <div key={h.id ?? i} style={{ display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center',
+                  padding:'8px 12px', borderRadius:'12px',
+                  background: isS ? 'rgba(96,224,154,0.08)' : 'rgba(255,204,80,0.07)',
+                  border:`1px solid ${isS ? 'rgba(96,224,154,0.22)' : 'rgba(255,204,80,0.18)'}` }}>
+                  <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'13px',
+                    color: h.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
+                    padding:'2px 7px', borderRadius:'7px',
+                    background: h.gameType === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
+                    border:`1px solid ${h.gameType === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}` }}>
+                    {h.number}→{h.winningNumber}
+                  </span>
+                  <span style={{ padding:'2px 7px', borderRadius:'6px', fontSize:'11px', fontWeight:800,
+                    background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.26)', color:'#60e09a' }}>
+                    {h.state}
+                  </span>
+                  <span style={{ fontSize:'11px', fontWeight:700, color: isS ? '#60e09a' : '#ffcc50' }}>{isS ? 'Straight' : 'Boxed'}</span>
+                  <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.55)' }}>{h.termLabel}</span>
+                  <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)', fontFamily:'monospace', marginLeft:'auto' }}>
+                    {h.drawDate} {h.drawTime}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {loading && <section className="journal-card"><p style={{ margin: 0, color: 'rgba(255,255,255,0.55)' }}>Building playlists…</p></section>}
       {!loading && error && <div style={{ padding: '16px 20px', borderRadius: '16px', border: '1px solid rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</div>}
 
@@ -529,10 +611,12 @@ export default function PlaylistsPage() {
                             {entry.fellBefore   && <Badge kind="fell"     />}
                             <Badge kind="active" />
                             {entry.multiTerm    && <Badge kind="multi"    />}
-                            {/* Playlist hit attribution — checks if this number hit in this state */}
+                            {/* Playlist hit attribution — persisted candidate hit first, then live fallback */}
                             {(() => {
                               const stateKey = playlistEntryState(entry);
-                        const h = stateKey ? hitIndex.get(`${entry.number}::${stateKey}`) : null;
+                        const h = stateKey
+                          ? (playlistHitIndex.get(`${entry.number}::${stateKey}`) || hitIndex.get(`${entry.number}::${stateKey}`))
+                          : null;
                               if (!h) return null;
                               const isS = h.hitType === 'exact' || h.hitType === 'straight';
                               return (

@@ -128,23 +128,29 @@ export async function GET(req: NextRequest) {
     const queries: Promise<any>[] = [];
 
     // Term-targeted queries
+    // Sources queried:
+    //   backtestHits     — backtest replay evidence
+    //   dreamHits        — live hit records (written by dreamRefresh)
+    //   personalHitEvents — promoted event-level rows (written by dreamRefresh inline + promote-hits)
+    // personalHitEvents is the most reliable source for live hits.
     if (termRaw) {
       queries.push(
-        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
-        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid).where('normalizedTerm','==', normalizedT)).limit(limit).get(),
-        constrain(db.collection('dreamHits').where('ownerUid',    '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
-        constrain(db.collection('dreamHits').where('ownerUid',    '==', ownerUid).where('normalizedTerm','==', normalizedT)).limit(limit).get(),
+        constrain(db.collection('backtestHits').where('ownerUid',      '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
+        constrain(db.collection('backtestHits').where('ownerUid',      '==', ownerUid).where('normalizedTerm','==', normalizedT)).limit(limit).get(),
+        constrain(db.collection('dreamHits').where('ownerUid',         '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
+        constrain(db.collection('personalHitEvents').where('ownerUid', '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
+        constrain(db.collection('personalHitEvents').where('ownerUid', '==', ownerUid).where('normalizedTerm','==', normalizedT)).limit(limit).get(),
       );
     } else if (btidParam) {
-      // backtestDreamId query without term
       queries.push(
-        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid)).limit(limit).get(),
+        constrain(db.collection('backtestHits').where('ownerUid',      '==', ownerUid)).limit(limit).get(),
+        constrain(db.collection('personalHitEvents').where('ownerUid', '==', ownerUid)).limit(limit).get(),
       );
     } else {
-      // Fallback: owner-scoped browse (only when no other filter)
       queries.push(
-        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid)).limit(limit).get(),
-        constrain(db.collection('dreamHits').where('ownerUid',    '==', ownerUid)).limit(limit).get(),
+        constrain(db.collection('backtestHits').where('ownerUid',      '==', ownerUid)).limit(limit).get(),
+        constrain(db.collection('dreamHits').where('ownerUid',         '==', ownerUid)).limit(limit).get(),
+        constrain(db.collection('personalHitEvents').where('ownerUid', '==', ownerUid)).limit(limit).get(),
       );
     }
 
@@ -167,41 +173,6 @@ export async function GET(req: NextRequest) {
     }
 
     // Source filter
-
-    // Normalize event source classes before source filtering or response.
-    // dreamHits/live refresh events may not store `source`, but they usually
-    // have activeWindowId, dreamEntryId/sourceDreamEntryId, or detectedAt.
-    rows = rows.map((r: any) => {
-      const rawSource = String(r.source ?? r.sourceClass ?? r._sourceClass ?? '').toLowerCase();
-      const sourceDreamEntryId = String(r.sourceDreamEntryId ?? '');
-      const backtestDreamId = String(r.backtestDreamId ?? '');
-
-      const isBacktest =
-        rawSource.includes('backtest') ||
-        !!backtestDreamId ||
-        sourceDreamEntryId.startsWith('backtest:');
-
-      const isLive =
-        rawSource.includes('live') ||
-        !!r.activeWindowId ||
-        !!r.dreamWindowId ||
-        !!r.dreamEntryId ||
-        !!r.detectedAt ||
-        (!!sourceDreamEntryId && !sourceDreamEntryId.startsWith('backtest:'));
-
-      const sourceClass = isBacktest
-        ? 'backtest-replay'
-        : isLive
-          ? 'live-dream-refresh'
-          : 'unknown';
-
-      return {
-        ...r,
-        source: sourceClass,
-        _sourceClass: sourceClass,
-      };
-    });
-
     if (sourceP) {
       const want = sourceP.toLowerCase();
       rows = rows.filter(r => {
@@ -212,6 +183,30 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Semantic dedup: same draw event may exist in both dreamHits and personalHitEvents
+    // Dedup key: number + winningNumber + state + gameType + drawDate + drawTime + hitType
+    const semSeen = new Map<string, any>();
+    for (const r of rows) {
+      const sk = [
+        String(r.number      ?? ''),
+        String(r.winningNumber ?? ''),
+        String(r.state       ?? ''),
+        String(r.gameType    ?? ''),
+        String(r.drawDate    ?? ''),
+        String(r.drawTime    ?? ''),
+        String(r.hitType     ?? ''),
+        String(r.backtestDreamId ?? r.sourceDreamEntryId ?? r.activeWindowId ?? ''),
+      ].join('|');
+      // Prefer personalHitEvents rows (richest metadata) over dreamHits
+      const existing = semSeen.get(sk);
+      if (!existing) {
+        semSeen.set(sk, r);
+      } else if (r._sourceClass === 'live-dream-refresh' && existing._sourceClass !== 'live-dream-refresh') {
+        semSeen.set(sk, r);  // upgrade to richer source
+      }
+    }
+    rows = Array.from(semSeen.values());
+
     // Sort by drawDate asc, then drawTime
     rows.sort((a, b) => {
       const ak = `${a.drawDate ?? ''}|${a.drawTime ?? ''}`;
@@ -219,10 +214,22 @@ export async function GET(req: NextRequest) {
       return ak.localeCompare(bk);
     });
 
+    const filtersApplied: string[] = [];
+    if (termRaw)    filtersApplied.push(`term=${termRaw}`);
+    if (numParam)   filtersApplied.push(`number=${numParam}`);
+    if (stateP)     filtersApplied.push(`state=${stateP}`);
+    if (gameP)      filtersApplied.push(`gameType=${gameP}`);
+    if (dreamerP)   filtersApplied.push(`dreamerId=${dreamerP}`);
+    if (btidParam)  filtersApplied.push(`backtestDreamId=${btidParam}`);
+    if (sourceP)    filtersApplied.push(`source=${sourceP}`);
+
     const res = NextResponse.json({
-      ok: true, rows,
+      ok: true,
+      events: rows,   // canonical key — also aliased as rows for backward compat
+      rows,
       count: rows.length,
       term: termRaw,
+      filtersApplied,
     });
     res.headers.set('Cache-Control', 'private, max-age=30');
     return res;
