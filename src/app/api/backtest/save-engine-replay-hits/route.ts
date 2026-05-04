@@ -29,15 +29,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase/admin';
+import {
+  canonicalPmDocId, canonicalEventId, normalizeTerm,
+} from '@/lib/intelligence/hitClassification';
 
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function safeId(value: unknown): string {
-  return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
-}
+// safeId and normalizeTerm imported from hitClassification
 
 /**
  * Deterministic event ID for one hit within a specific replay run.
@@ -45,6 +46,12 @@ function safeId(value: unknown): string {
  *   1. backtestHits doc ID (merge:true = idempotent re-run)
  *   2. personalHitEvents doc ID (seen-registry for FieldValue.increment guard)
  */
+function safeId(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]/g, '_') || 'unknown';
+}
+
 function makeHitEventId(backtestDreamId: string, hit: EngineReplayHit): string {
   return [
     backtestDreamId,
@@ -233,14 +240,14 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < newHits.length; i += BATCH) {
           const batch = db.batch();
           for (const hit of newHits.slice(i, i + BATCH)) {
-            const mappingId = [
+            const mappingId = canonicalPmDocId(
               ownerUid,
               dreamerId,
-              hit.termLabel,
+              normalizeTerm(hit.termLabel),  // normalizedTerm, not raw termLabel
               hit.number,
-              hit.state,
-              hit.gameType,
-            ].map(safeId).join('__');
+              hit.gameType,   // gameType BEFORE state (canonical order)
+              hit.state
+            );
 
             const straightDelta = hit.hitType === 'straight' ? 1 : 0;
             const boxedDelta    = hit.hitType === 'boxed'    ? 1 : 0;
@@ -253,6 +260,7 @@ export async function POST(req: NextRequest) {
                 dreamerId,
                 dreamerName,
                 termLabel:          hit.termLabel,
+                normalizedTerm:     normalizeTerm(hit.termLabel),  // required for targeted lookup
                 number:             hit.number,
                 gameType:           hit.gameType,
                 state:              hit.state,

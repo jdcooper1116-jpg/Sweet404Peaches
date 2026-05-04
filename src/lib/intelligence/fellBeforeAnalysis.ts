@@ -1,6 +1,11 @@
 /**
  * src/lib/intelligence/fellBeforeAnalysis.ts
- *
+ * Note: imports rowSemanticKey from hitClassification to ensure dedup uses the
+ * same semantic key as write paths — prevents display-layer count inflation.
+ */
+// import { rowSemanticKey } from './hitClassification';
+// (Inline below to keep helper self-contained — copy must match hitClassification.ts)
+/*
  * Pure analysis helpers for As They Fell Before.
  * No Firestore, no fetch, no writes.
  */
@@ -9,6 +14,80 @@
 
 export function boxedKey(num: string): string {
   return String(num ?? '').split('').sort().join('');
+}
+
+// ─── Semantic dedup ──────────────────────────────────────────────────────────────
+//
+// personalHitMappings may contain duplicate docs for the same semantic memory row
+// if different writers used different doc ID formats (e.g. field order swapped).
+//
+// dedupeAggregateRows groups by semantic key and:
+//   - If two docs have matching counts → keep one, flag the other as duplicate.
+//   - If counts differ       → keep the higher-count doc, flag integrity warning.
+//   - Never sums duplicates blindly.
+
+export type DedupedRow = Record<string, any> & {
+  _isDuplicate:       boolean;
+  _duplicateDocIds:   string[];
+  _needsRepair:       boolean;
+  _semanticKey:       string;
+};
+
+function rowSemKey(row: Record<string, any>): string {
+  const nt = String(row.normalizedTerm ?? '').trim() ||
+    String(row.termLabel ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+  const did  = String(row.dreamerId  ?? 'owner-self');
+  const uid  = String(row.ownerUid   ?? '');
+  const num  = String(row.number     ?? row.candidateNumber ?? '');
+  const gt   = String(row.gameType   ?? '');
+  const state= String(row.state      ?? '');
+  return `${uid}|${did}|${nt}|${num}|${gt}|${state}`;
+}
+
+export function dedupeAggregateRows(rows: any[]): DedupedRow[] {
+  const map = new Map<string, DedupedRow>();
+
+  for (const r of rows) {
+    const key = rowSemKey(r);
+    if (!map.has(key)) {
+      map.set(key, {
+        ...r,
+        _isDuplicate: false, _duplicateDocIds: [], _needsRepair: false, _semanticKey: key,
+      });
+    } else {
+      const existing = map.get(key)!;
+      const exHits   = Number(existing.hitCount      ?? 0);
+      const newHits  = Number(r.hitCount             ?? 0);
+      const exSt     = Number(existing.straightCount ?? 0);
+      const newSt    = Number(r.straightCount        ?? 0);
+      const exBx     = Number(existing.boxedCount    ?? 0);
+      const newBx    = Number(r.boxedCount           ?? 0);
+
+      // Mark as duplicate regardless
+      existing._isDuplicate = true;
+      if (r.id) existing._duplicateDocIds.push(String(r.id));
+
+      if (exHits === newHits && exSt === newSt && exBx === newBx) {
+        // Counts match — exact duplicate, keep existing, no repair needed
+      } else {
+        // Counts differ — keep the canonical-looking doc (gameType before state in ID)
+        // or the higher count doc; flag for repair
+        existing._needsRepair = true;
+        if (newHits > exHits) {
+          // New doc has more evidence — replace but preserve duplicate tracking
+          const savedDupIds = [...existing._duplicateDocIds];
+          if (existing.id) savedDupIds.push(String(existing.id));
+          map.set(key, {
+            ...r,
+            _isDuplicate: true, _duplicateDocIds: savedDupIds, _needsRepair: true, _semanticKey: key,
+          });
+        }
+        // else keep existing (higher or equal count)
+      }
+    }
+  }
+
+  return Array.from(map.values());
 }
 
 // ─── Power Repeats ────────────────────────────────────────────────────────────
@@ -74,7 +153,7 @@ export type PowerRepeat = {
   events:           FellBeforeRow[];  // individual event rows (populated by populateGroupEvents)
 };
 
-export function buildPowerRepeats(rows: any[]): PowerRepeat[] {
+export function buildPowerRepeats(rows: any[] = [], rawRows: any[] = []): PowerRepeat[] {
   const map = new Map<string, PowerRepeat>();
 
   for (const r of rows) {
@@ -169,7 +248,7 @@ export type BoxedRepeat = {
   events:           FellBeforeRow[];
 };
 
-export function buildBoxedRepeats(rows: any[]): BoxedRepeat[] {
+export function buildBoxedRepeats(rows: any[] = [], rawRows: any[] = []): BoxedRepeat[] {
   const map = new Map<string, BoxedRepeat>();
 
   for (const r of rows) {
@@ -223,7 +302,7 @@ export type StateHotspot = {
   strengthTier:  EvidenceStrength;
 };
 
-export function buildStateHotspots(rows: any[]): StateHotspot[] {
+export function buildStateHotspots(rows: any[] = [], rawRows: any[] = []): StateHotspot[] {
   const map = new Map<string, StateHotspot>();
 
   for (const r of rows) {
@@ -294,21 +373,20 @@ export type FellSummary = {
   filtersApplied:  string[];
 };
 
-export function buildFellSummary(
-  rows: any[],
+export function buildFellSummary(rows: any[] = [], rawRows: any[],
   powerRepeats: PowerRepeat[],
-  meta: { lookupMode?: string; filtersApplied?: string[] }
-): FellSummary {
-  const states  = [...new Set(rows.map(r => r.state  ?? '').filter(Boolean))];
-  const numbers = [...new Set(rows.map(r => r.number ?? '').filter(Boolean))];
+  meta: { lookupMode?: string; filtersApplied?: string[] }): FellSummary {
+  const summaryRows = dedupeAggregateRows(rawRows);
+  const states  = [...new Set(summaryRows.map(r => r.state  ?? '').filter(Boolean))];
+  const numbers = [...new Set(summaryRows.map(r => r.number ?? '').filter(Boolean))];
   return {
-    rowCount:       rows.length,
+    rowCount:       summaryRows.length,
     states, numbers,
     powerRepeats:   powerRepeats.filter(p => p.evidenceStrength === 'Power Repeat').length,
     strongRepeats:  powerRepeats.filter(p => p.evidenceStrength === 'Strong Repeat').length,
     singleEvidence: powerRepeats.filter(p => p.evidenceStrength === 'Single Evidence').length,
-    straightTotal:  rows.reduce((s, r) => s + Number(r.straightCount ?? 0), 0),
-    boxedTotal:     rows.reduce((s, r) => s + Number(r.boxedCount    ?? 0), 0),
+    straightTotal:  summaryRows.reduce((s, r) => s + Number(r.straightCount ?? 0), 0),
+    boxedTotal:     summaryRows.reduce((s, r) => s + Number(r.boxedCount    ?? 0), 0),
     lookupMode:     meta.lookupMode     ?? '',
     filtersApplied: meta.filtersApplied ?? [],
   };

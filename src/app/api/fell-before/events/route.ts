@@ -105,49 +105,54 @@ export async function GET(req: NextRequest) {
     const numParam  = (params.get('number')    ?? '').trim();
     const stateP    = (params.get('state')     ?? '').trim();
     const gameP     = (params.get('gameType')  ?? '').trim();
-    const dreamerP  = (params.get('dreamerId') ?? '').trim();
+    const dreamerP  = (params.get('dreamerId')     ?? '').trim();
+    const btidParam = (params.get('backtestDreamId') ?? '').trim();
+    const sourceP   = (params.get('source')           ?? '').trim();
     const limit     = Math.min(Number(params.get('limit') ?? 200), 500);
 
-    if (!termRaw) {
-      return NextResponse.json({ ok: false, error: 'term param is required.' }, { status: 400 });
-    }
+    // term is now optional — can query by number/state/gameType/backtestDreamId alone
 
     const normalizedT = normalizeTerm(termRaw);
     const db = getAdminDb();
 
-    // Build a targeted Firestore query for one collection, returning all matching docs
-    const query = (col: string) => {
-      let q: any = db.collection(col)
-        .where('ownerUid', '==', ownerUid)
-        .where('termLabel', '==', termRaw);
-      if (dreamerP) q = q.where('dreamerId', '==', dreamerP);
-      if (stateP)   q = q.where('state',     '==', stateP);
-      if (gameP === 'cash3' || gameP === 'cash4') q = q.where('gameType', '==', gameP);
-      return q.limit(limit);
+    // Shared constraints
+    const constrain = (q: any) => {
+      let out = q;
+      if (dreamerP)                                      out = out.where('dreamerId', '==', dreamerP);
+      if (stateP)                                        out = out.where('state',     '==', stateP);
+      if (gameP === 'cash3' || gameP === 'cash4')        out = out.where('gameType',  '==', gameP);
+      if (btidParam)                                     out = out.where('backtestDreamId', '==', btidParam);
+      return out;
     };
 
-    // Also try normalizedTerm variant in backtestHits
-    const queryNorm = (col: string) => {
-      let q: any = db.collection(col)
-        .where('ownerUid', '==', ownerUid)
-        .where('normalizedTerm', '==', normalizedT);
-      if (dreamerP) q = q.where('dreamerId', '==', dreamerP);
-      if (stateP)   q = q.where('state',     '==', stateP);
-      if (gameP === 'cash3' || gameP === 'cash4') q = q.where('gameType', '==', gameP);
-      return q.limit(limit);
-    };
+    const queries: Promise<any>[] = [];
 
-    // Run 4 queries in parallel: backtestHits (label + normalized) + dreamHits (label + normalized)
-    const snaps = await Promise.allSettled([
-      query('backtestHits').get(),
-      queryNorm('backtestHits').get(),
-      query('dreamHits').get(),
-      queryNorm('dreamHits').get(),
-    ]);
+    // Term-targeted queries
+    if (termRaw) {
+      queries.push(
+        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
+        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid).where('normalizedTerm','==', normalizedT)).limit(limit).get(),
+        constrain(db.collection('dreamHits').where('ownerUid',    '==', ownerUid).where('termLabel',     '==', termRaw)).limit(limit).get(),
+        constrain(db.collection('dreamHits').where('ownerUid',    '==', ownerUid).where('normalizedTerm','==', normalizedT)).limit(limit).get(),
+      );
+    } else if (btidParam) {
+      // backtestDreamId query without term
+      queries.push(
+        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid)).limit(limit).get(),
+      );
+    } else {
+      // Fallback: owner-scoped browse (only when no other filter)
+      queries.push(
+        constrain(db.collection('backtestHits').where('ownerUid', '==', ownerUid)).limit(limit).get(),
+        constrain(db.collection('dreamHits').where('ownerUid',    '==', ownerUid)).limit(limit).get(),
+      );
+    }
+
+    const snaps = await Promise.allSettled(queries);
 
     // Merge by docId, dedup
     const seen = new Set<string>();
-    const rows: any[] = [];
+    let rows: any[] = [];
 
     for (const result of snaps) {
       if (result.status === 'rejected') continue;
@@ -159,6 +164,17 @@ export async function GET(req: NextRequest) {
         if (numParam && mapped.number !== numParam) continue;
         rows.push(mapped);
       }
+    }
+
+    // Source filter
+    if (sourceP) {
+      const want = sourceP.toLowerCase();
+      rows = rows.filter(r => {
+        const sc = r._sourceClass as string;
+        if (want === 'backtest-replay' || want === 'backtest') return sc === 'backtest-replay';
+        if (want === 'live-dream-refresh' || want === 'live')  return sc === 'live-dream-refresh';
+        return true;
+      });
     }
 
     // Sort by drawDate asc, then drawTime

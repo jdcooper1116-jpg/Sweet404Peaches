@@ -8,7 +8,7 @@ import {
   buildPowerRepeats, buildBoxedRepeats, buildStateHotspots,
   buildDayWindows, buildFellSummary, populateGroupEvents,
   type PowerRepeat, type BoxedRepeat, type StateHotspot, type FellSummary,
-  type FellBeforeRow,
+  type FellBeforeRow, type DedupedRow,
 } from '@/lib/intelligence/fellBeforeAnalysis';
 import { BookMarked } from 'lucide-react';
 
@@ -282,15 +282,15 @@ function FellBeforeInner() {
 
   // ── Pattern analysis (only when rows are loaded) ──────────────────────────
   const powerRepeats: PowerRepeat[] = useMemo(() =>
-    rows.length > 0 ? buildPowerRepeats(rows) : [], [rows]);
+    rows.length > 0 ? buildPowerRepeats(rows, []) : [], [rows]);
   const boxedRepeats: BoxedRepeat[] = useMemo(() =>
-    rows.length > 0 ? buildBoxedRepeats(rows) : [], [rows]);
+    rows.length > 0 ? buildBoxedRepeats(rows, []) : [], [rows]);
   const stateHotspots: StateHotspot[] = useMemo(() =>
-    rows.length > 0 ? buildStateHotspots(rows) : [], [rows]);
+    rows.length > 0 ? buildStateHotspots(rows, []) : [], [rows]);
   const dayWindows = useMemo(() =>
     rows.length > 0 ? buildDayWindows(rows) : [], [rows]);
   const fellSummary: FellSummary = useMemo(() =>
-    buildFellSummary(rows, powerRepeats, { lookupMode, filtersApplied }),
+    buildFellSummary(rows, powerRepeats, [], { lookupMode, filtersApplied }),
     [rows, powerRepeats, lookupMode, filtersApplied]);
 
   // Populated groups — events[] filled in after on-demand fetch
@@ -406,6 +406,7 @@ function FellBeforeInner() {
             <div style={{ display:'flex', gap:'12px', flexWrap:'wrap' }}>
               <span>{rows.length} rows · {fellSummary.states.length} states · {fellSummary.numbers.length} numbers</span>
               {fellSummary.powerRepeats > 0 && <span style={{ color:'#60e09a' }}>⚡ {fellSummary.powerRepeats} power repeat{fellSummary.powerRepeats !== 1 ? 's' : ''}</span>}
+              {rows.some((r: any) => r._isDuplicate) && <span style={{ color:'#ffcc50' }}>⚠ deduped duplicates</span>}
               {fellSummary.strongRepeats > 0 && <span style={{ color:'#ffcc50' }}>● {fellSummary.strongRepeats} strong</span>}
               <span>{fellSummary.straightTotal}S / {fellSummary.boxedTotal}B</span>
             </div>
@@ -458,12 +459,36 @@ function FellBeforeInner() {
                       {p.evidenceStrength}
                     </span>
                     <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)', display:'grid', gap:'2px' }}>
-                      <span>{p.totalHitCount} hit{p.totalHitCount !== 1 ? 's' : ''} · {p.straightCount}S / {p.boxedCount}B
+                      <span>
+                        {eventVerifiedFor(p)
+                          ? <span style={{ color:'#60e09a' }}>{eventCountFor(p)} verified event{eventCountFor(p) !== 1 ? 's' : ''}</span>
+                          : <span>{p.totalHitCount} hit{p.totalHitCount !== 1 ? 's' : ''}</span>
+                        }
+                        {' · '}
+                        {eventVerifiedFor(p)
+                          ? <span>{eventStraightCountFor(p)}S / {eventBoxedCountFor(p)}B</span>
+                          : <span>{p.straightCount}S / {p.boxedCount}B</span>
+                        }
                         {p.uniqueDreamCount > 1 && <span style={{ color:'#a090ff', marginLeft:'6px' }}>· {p.uniqueDreamCount} dreams</span>}
+                        {eventVerifiedFor(p) && (
+                          <span style={{ marginLeft:'6px', padding:'1px 5px', borderRadius:'4px', fontSize:'9px', fontWeight:700, background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.28)', color:'#60e09a' }}>
+                            Event Verified
+                          </span>
+                        )}
+                        {countMismatch && !eventVerifiedFor(p) && (
+                          <span style={{ marginLeft:'6px', padding:'1px 5px', borderRadius:'4px', fontSize:'9px', fontWeight:700, background:'rgba(255,204,80,0.12)', border:'1px solid rgba(255,204,80,0.26)', color:'#ffcc50' }}>
+                            Aggregate Mismatch
+                          </span>
+                        )}
                       </span>
                       <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)', fontFamily:'monospace' }}>
                         First: {p.firstHitDate || '—'} · Last: {p.lastHitDate || '—'}
                       </span>
+                      {'_isDuplicate' in p && (p as any)._isDuplicate && (
+                        <span style={{ fontSize:'10px', color:'rgba(255,204,80,0.70)' }}>
+                          ⚠ Duplicate aggregate docs deduped. Run audit-hit-counts to repair.
+                        </span>
+                      )}
                     </div>
                     <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center' }}>
                       {p.sourceClasses.map(sc => (
@@ -765,6 +790,30 @@ function FellBeforeInner() {
 }
 
 // ─── Export wrapped in Suspense ───────────────────────────────────────────────
+
+
+
+function eventStraightCountFor(group: any): number {
+  return Array.isArray(group?.events)
+    ? group.events.filter((e: any) => String(e?.hitType ?? e?.matchMode ?? '').toLowerCase() === 'straight').length
+    : 0;
+}
+
+function eventBoxedCountFor(group: any): number {
+  return Array.isArray(group?.events)
+    ? group.events.filter((e: any) => String(e?.hitType ?? e?.matchMode ?? '').toLowerCase() === 'boxed').length
+    : 0;
+}
+
+function eventCountFor(group: any): number {
+  return Array.isArray(group?.events) ? group.events.length : 0;
+}
+
+function eventVerifiedFor(group: any): boolean {
+  const eventCount = eventCountFor(group);
+  const aggregateCount = Number(group?.totalHitCount ?? group?.hitCount ?? 0);
+  return eventCount > 0 && eventCount === aggregateCount;
+}
 
 export default function FellBeforePage() {
   return (
