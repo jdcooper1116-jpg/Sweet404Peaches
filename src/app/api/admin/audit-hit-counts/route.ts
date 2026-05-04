@@ -62,16 +62,22 @@ export async function POST(req: NextRequest) {
     }
     if (numFilter)   docs = docs.filter(({ data: d }) => String(d.number ?? '') === numFilter);
 
+    // Deprecated duplicate docs are retained for audit history, but they should
+    // not participate in active duplicate detection after repair.
+    const activeDocs = docs.filter(({ data: d }) => !d._deprecated);
+    const deprecatedDocRows = docs.filter(({ data: d }) => !!d._deprecated);
+
     // ── 3. Group by semantic key ─────────────────────────────────────────────
     const semanticGroups = new Map<string, Array<{ id: string; data: Record<string, any> }>>();
-    for (const doc of docs) {
+    for (const doc of activeDocs) {
       const key = rowSemanticKey(doc.data);
       if (!semanticGroups.has(key)) semanticGroups.set(key, []);
       semanticGroups.get(key)!.push(doc);
     }
 
     // ── 4. Audit ─────────────────────────────────────────────────────────────
-    const duplicateGroups: any[]     = [];
+    
+const duplicateGroups: any[]     = [];
     const inconsistentMappings: any[]= [];
     const examples: any[]            = [];
 

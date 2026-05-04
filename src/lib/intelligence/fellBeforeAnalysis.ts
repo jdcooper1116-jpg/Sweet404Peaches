@@ -44,6 +44,11 @@ function rowSemKey(row: Record<string, any>): string {
   return `${uid}|${did}|${nt}|${num}|${gt}|${state}`;
 }
 
+
+function activeRowsOnly<T extends Record<string, any>>(rows: T[]): T[] {
+  return (rows ?? []).filter((r: any) => !r?._deprecated);
+}
+
 export function dedupeAggregateRows(rows: any[]): DedupedRow[] {
   const map = new Map<string, DedupedRow>();
 
