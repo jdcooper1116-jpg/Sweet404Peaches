@@ -54,6 +54,7 @@ function mapDoc(doc: any): any {
 export async function GET(req: NextRequest) {
   try {
     const params      = req.nextUrl.searchParams;
+    const includeDeprecated = params.get('includeDeprecated') === 'true';
     const ownerUid    = resolveOwnerUid(params.get('ownerUid'));
     const dreamerId   = (params.get('dreamerId')     ?? '').trim();
     const termRaw     = (params.get('term')          ?? '').trim().toLowerCase();
@@ -162,9 +163,15 @@ export async function GET(req: NextRequest) {
     for (const r of rows) deduped.set(r.id, r);
     rows = Array.from(deduped.values());
 
+    // Deprecated duplicate memory rows are preserved for audit history,
+    // but excluded from active prediction/scoring by default.
+    const visibleRows = includeDeprecated
+      ? rows
+      : rows.filter((r: any) => !r?._deprecated);
+
     const res = NextResponse.json({
-      ok: true, rows,
-      count: rows.length, totalSampled, lookupMode,
+      ok: true, rows: visibleRows,
+      count: visibleRows.length, totalSampled, lookupMode,
       filtersApplied: [...new Set(filtersApplied)],
       limit: browseLimit, dreamerId: dreamerId || 'ALL',
     });
