@@ -96,16 +96,74 @@ export async function GET(req: NextRequest) {
       try {
         let q: any = db.collection('activeDreamWindows')
           .where('ownerUid',  '==', ownerUid)
-          .where('dreamerId', '==', did)
-          .where('activeEnd', '>=', today);
-        const snap = await q.limit(200).get();
+          .where('dreamerId', '==', did);
+
+        const snap = await q.limit(250).get();
+
         for (const doc of snap.docs) {
           if (seenWin.has(doc.id)) continue;
-          seenWin.add(doc.id);
+
           const d = doc.data();
-          allWindows.push({ id: doc.id, ...d, gameType: resolveGameType(String(d.gameType ?? d.game_type ?? '')) });
+          const activeEnd = String(d.activeEnd ?? d.activeWindowEnd ?? '');
+
+          // Filter active windows in memory so missing composite indexes cannot erase a dreamer.
+          if (activeEnd && activeEnd < today) continue;
+
+          seenWin.add(doc.id);
+
+          const termLabel = String(
+            d.termLabel ??
+            d.term ??
+            d.label ??
+            d.normalizedTerm ??
+            ''
+          ).trim();
+
+          const normalizedTerm = String(
+            d.normalizedTerm ??
+            normalizeTerm(termLabel)
+          ).trim();
+
+          const number = String(
+            d.number ??
+            d.candidateNumber ??
+            d.candidate ??
+            d.playedNumber ??
+            ''
+          ).trim();
+
+          const gameType = resolveGameType(String(
+            d.gameType ??
+            d.game_type ??
+            d.lotteryGame ??
+            ''
+          ));
+
+          const state = String(
+            d.state ??
+            d.targetState ??
+            d.playState ??
+            d.jurisdiction ??
+            ''
+          ).trim().toUpperCase();
+
+          allWindows.push({
+            id: doc.id,
+            ...d,
+            termLabel,
+            normalizedTerm,
+            number,
+            candidateNumber: d.candidateNumber ?? d.candidate ?? number,
+            gameType,
+            state,
+            dreamerId: d.dreamerId ?? did,
+            dreamerName: d.dreamerName ?? d.displayName ?? did,
+            activeEnd,
+          });
         }
-      } catch { /* non-fatal */ }
+      } catch (e) {
+        console.warn('[api/playlists/evidence-backed] activeDreamWindows query failed for dreamer', did, e);
+      }
     }));
 
     // ── Step 2: Extract unique active terms + track active window metadata ──
@@ -122,12 +180,12 @@ export async function GET(req: NextRequest) {
 
     for (const w of allWindows) {
       const dn  = String(w.dreamerName ?? w.dreamerId ?? 'unknown');
-      const tl  = String(w.termLabel   ?? '').trim().toLowerCase();
-      const nt  = normalizeTerm(tl);
-      const num = String(w.number      ?? '').trim();
-      const gt  = String(w.gameType    ?? '');
+      const tl  = String(w.termLabel ?? w.term ?? w.label ?? w.normalizedTerm ?? '').trim().toLowerCase();
+      const nt  = String(w.normalizedTerm ?? normalizeTerm(tl)).trim();
+      const num = String(w.number ?? w.candidateNumber ?? w.candidate ?? w.playedNumber ?? '').trim();
+      const gt  = String(w.gameType ?? w.game_type ?? w.lotteryGame ?? '').trim();
 
-      if (!nt) continue;
+      if (!nt || !num || !gt) continue;
 
       if (!termMeta.has(nt)) {
         termMeta.set(nt, { rawTerm: tl, normalizedTerm: nt, activeDreamers: new Set(), activeWindowIds: new Set(), activeNumbers: new Map() });
@@ -359,11 +417,29 @@ export async function GET(req: NextRequest) {
     const res = NextResponse.json({
       ok: true,
       candidates:          withEvidence,
+      evidenceCandidates:  withEvidence,
+      convergenceCandidates: withEvidence.filter(c => c.strengthTier === 'Cross-Dream Convergence'),
+      recentHits:          [],
       noEvidenceCandidates:noEvidence,
       count:               withEvidence.length,
       noEvidenceCount:     noEvidence.length,
       activeTermCount:     uniqueTerms.length,
       activeWindowCount:   allWindows.length,
+      debug: {
+        activeWindowCount: allWindows.length,
+        validActiveWindowCount: allWindows.filter(w => w.normalizedTerm && w.number && w.gameType).length,
+        activeTermCount: uniqueTerms.length,
+        activeTermsSample: uniqueTerms.slice(0, 15).map(t => t.rawTerm),
+        activeWindowsSample: allWindows.slice(0, 5).map(w => ({
+          dreamerName: w.dreamerName,
+          termLabel: w.termLabel,
+          normalizedTerm: w.normalizedTerm,
+          number: w.number,
+          gameType: w.gameType,
+          state: w.state,
+          activeEnd: w.activeEnd,
+        })),
+      },
       dreamerBreakdown:    Object.fromEntries(
         [...new Set(allWindows.map(w => String(w.dreamerName ?? w.dreamerId ?? 'unknown')))]
           .map(dn => [dn, allWindows.filter(w => (w.dreamerName ?? w.dreamerId) === dn).length])
