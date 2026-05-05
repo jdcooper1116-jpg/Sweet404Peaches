@@ -99,6 +99,7 @@ export default function PerformancePage() {
   const { user, loading: authLoading } = useAuth();
 
   const [windows,     setWindows]     = useState<any[]>([]);
+  const [windowsCapped, setWindowsCapped] = useState(false);
   const [hits,        setHits]        = useState<any[]>([]);
   const [fell,        setFell]        = useState<any[]>([]);
   const [dictTerms,   setDictTerms]   = useState<any[]>([]);
@@ -141,10 +142,10 @@ export default function PerformancePage() {
       safe(`/api/backtest/list-dreams?ownerUid=${uid}`),
       fetch('/api/engine/status').then(r => r.json()).catch(() => null),
     ]).then(([wd, hd, fd, td, pd, dr, bd, eng]) => {
-      if (wd?.ok) setWindows(wd.windows   ?? []);
+      if (wd?.ok) { setWindows(wd.windows ?? []); setWindowsCapped(wd.capped ?? false); }
       if (hd?.ok) setHits(hd.hits         ?? []);
       if (fd?.ok) setFell(fd.rows         ?? []);
-      if (td?.ok) setDictTerms(td.terms   ?? td.rows ?? []);
+      if (td?.ok) setDictTerms(td.terms   ?? []);
       if (pd?.ok) setPinned(pd.plays      ?? []);
       if (dr?.ok) setDreamers(dr.dreamers ?? []);
       if (bd?.ok) setBacktests(bd.dreams  ?? []);
@@ -343,7 +344,7 @@ export default function PerformancePage() {
           <StatTile label="Detected Hits"      val={filteredHits.length}           color="#ff8a6a" />
           <StatTile label="Fell-Before Rows"   val={filteredFell.length}           color="#60e09a" />
           <StatTile label="Dict Mappings"      val={dictTerms.length}              color="#a090ff" />
-          <StatTile label="Active Windows"     val={windows.filter(w => (w.activeEnd ?? '') >= today).length} color="#ff8a6a" />
+          <StatTile label="Active Windows"     val={windows.filter(w => (w.activeEnd ?? '') >= today).length + (windowsCapped ? '+' : '')} color="#ff8a6a" />
           <StatTile label="Active Dreamers"    val={new Set(windows.filter(w => (w.activeEnd ?? '') >= today).map((w: any) => w.dreamerId ?? 'owner-self')).size} color="#ffcc50" />
           <StatTile label="Pinned / Suggest."  val={pinned.filter((p: any) => p.status === 'pinned' || p.status === 'suggested').length} color="#ffcc50" />
           <StatTile label="Straight Hits"      val={straight}                      color="#60e09a"

@@ -105,6 +105,11 @@ export interface RefreshAllResult {
   checkedAt: string;
   promotedToMemory: number;
   skippedExistingEvents: number;
+  uniqueDreamersChecked?: number;
+  uniqueDreamEntriesChecked?: number;
+  dreamerBreakdown?: Record<string, number>;
+  dreamEntryBreakdown?: Record<string, number>;
+
 }
 
 export async function refreshAllActiveWindows(
@@ -126,10 +131,18 @@ export async function refreshAllActiveWindows(
 
   if (windows.length === 0) {
     return {
-      windowsChecked: 0, windowsWithNewHits: 0, totalNewHits: 0,
+      windowsChecked: 0,
+      windowsWithNewHits: 0,
+      totalNewHits: 0,
       promotedToMemory: 0,
       skippedExistingEvents: 0,
-      engineCallsMade: 0, errors: [], checkedAt: new Date().toISOString(),
+      uniqueDreamersChecked: 0,
+      uniqueDreamEntriesChecked: 0,
+      dreamerBreakdown: {},
+      dreamEntryBreakdown: {},
+      engineCallsMade: 0,
+      errors: [],
+      checkedAt: new Date().toISOString(),
     };
   }
 
@@ -402,6 +415,18 @@ export async function refreshAllActiveWindows(
   const windowsWithNewHits = Array.from(newHitsPerWindow.values()).filter(n => n > 0).length;
   const totalNewHits       = Array.from(newHitsPerWindow.values()).reduce((a, b) => a + b, 0);
 
+  // Dreamer breakdown for reporting
+  const dreamerBreakdown: Record<string, number> = {};
+  const dreamEntryBreakdown: Record<string, number> = {};
+  for (const w of windows) {
+    const dn = String(w.dreamerName || w.dreamerId || 'unknown');
+    const de = String(w.dreamEntryId || '');
+    dreamerBreakdown[dn] = (dreamerBreakdown[dn] ?? 0) + 1;
+    if (de) dreamEntryBreakdown[de] = (dreamEntryBreakdown[de] ?? 0) + 1;
+  }
+  const uniqueDreamersChecked     = Object.keys(dreamerBreakdown).length;
+  const uniqueDreamEntriesChecked = Object.keys(dreamEntryBreakdown).length;
+
   return {
     windowsChecked: windows.length,
     windowsWithNewHits,
@@ -409,6 +434,9 @@ export async function refreshAllActiveWindows(
     promotedToMemory,
     skippedExistingEvents,
     engineCallsMade,
+    uniqueDreamersChecked,
+    uniqueDreamEntriesChecked,
+    dreamerBreakdown,
     errors,
     checkedAt: new Date().toISOString(),
   };

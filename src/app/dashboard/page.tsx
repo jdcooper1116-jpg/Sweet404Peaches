@@ -165,6 +165,8 @@ export default function DashboardPage() {
   // ── Data — all server routes, no client Firestore ─────────────────────────
   const [dreams,      setDreams]      = useState<any[]>([]);
   const [windows,     setWindows]     = useState<any[]>([]);
+  const [windowsCapped, setWindowsCapped] = useState(false);
+  const [windowsTotal,  setWindowsTotal]  = useState(0);
   const [memory,      setMemory]      = useState<any[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [error,       setError]       = useState('');
@@ -178,7 +180,7 @@ export default function DashboardPage() {
         const uid = encodeURIComponent(user.uid);
         const [dreamsRes, windowsRes, memoryRes] = await Promise.all([
           fetch(`/api/dreams/entries?ownerUid=${uid}`),
-          fetch(`/api/dreams/windows?ownerUid=${uid}`),
+          fetch(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
           fetch(`/api/fell-before?ownerUid=${uid}`),
         ]);
         const [dreamsData, windowsData, memoryData] = await Promise.all([
@@ -186,6 +188,8 @@ export default function DashboardPage() {
         ]);
         if (dreamsData.ok)  setDreams(dreamsData.entries   ?? []);
         if (windowsData.ok) setWindows(windowsData.windows ?? []);
+        setWindowsCapped(windowsData.capped ?? false);
+        setWindowsTotal(windowsData.count ?? 0);
         if (memoryData.ok)  setMemory(memoryData.rows       ?? []);
       } catch (err) {
         console.error(err);

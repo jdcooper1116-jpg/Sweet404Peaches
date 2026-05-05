@@ -276,6 +276,18 @@ function ErrorBanner({ msg }: { msg: string }) {
 }
 
 
+function CapWarning({ capped, count }: { capped?: boolean; count: number }) {
+  if (!capped) return null;
+  return (
+    <div style={{ padding:'9px 13px', borderRadius:'12px', border:'1px solid rgba(255,204,80,0.26)',
+      background:'rgba(255,204,80,0.07)', fontSize:'12px', color:'rgba(255,255,255,0.65)', lineHeight:1.6 }}>
+      <strong style={{ color:'#ffcc50' }}>⚠ Visible page only ({count} windows).</strong>
+      {' '}Playlist candidates below are based on the visible window set only. Filter by dreamer to see complete groups.
+    </div>
+  );
+}
+
+
 function playlistEntryState(entry: any): string {
   return String(
     entry?.state ??
@@ -292,6 +304,8 @@ export default function PlaylistsPage() {
   const { user } = useAuth();
 
   const [windowsRaw,  setWindowsRaw]  = useState<any[]>([]);
+  const [windowsCapped, setWindowsCapped] = useState(false);
+  const [capCount,      setCapCount]      = useState(0);
   const [fellRows,    setFellRows]    = useState<FellBeforeRow[]>([]);
   const [recentHits,     setRecentHits]    = useState<any[]>([]);
   const [playlistHits,   setPlaylistHits]  = useState<any[]>([]);
@@ -339,6 +353,8 @@ export default function PlaylistsPage() {
         if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
         if (!fellData.ok) { setError(fellData.error || 'Fell-before load failed.'); return; }
         setWindowsRaw(winData.windows  ?? []);
+        setWindowsCapped(winData.capped ?? false);
+        setCapCount((winData.windows ?? []).length);
         setFellRows(fellData.rows      ?? []);
         if (hitsData?.ok) setRecentHits(hitsData.hits ?? []);
         if (snapsData?.ok) setPlaylistHits(snapsData.hits ?? []);
@@ -496,6 +512,7 @@ export default function PlaylistsPage() {
         </div>
       </section>
 
+      <CapWarning capped={windowsCapped} count={capCount} />
       {/* Save Snapshot + Attribution status */}
       <section style={{ display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
         <button type="button" className="btn-secondary" style={{ fontSize:'12px' }}

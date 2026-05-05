@@ -225,10 +225,27 @@ function ErrorBanner({ msg }: { msg: string }) {
   );
 }
 
+
+function CapWarning({ capped, count, hasMore, onViewAll }: {
+  capped?: boolean; count: number; hasMore?: boolean; onViewAll?: () => void;
+}) {
+  if (!capped && !hasMore) return null;
+  return (
+    <div style={{ padding:'10px 14px', borderRadius:'13px', border:'1px solid rgba(255,204,80,0.28)',
+      background:'rgba(255,204,80,0.07)', fontSize:'12px', color:'rgba(255,255,255,0.70)', lineHeight:1.7 }}>
+      <strong style={{ color:'#ffcc50' }}>⚠ Visible page only ({count} windows shown).</strong>
+      {' '}More active windows exist — this analysis reflects the visible page only.
+      Filter by dreamer to see complete groups.
+    </div>
+  );
+}
+
 export default function HotFamiliesPage() {
   const { user } = useAuth();
 
   const [windowsRaw, setWindowsRaw] = useState<any[]>([]);
+  const [windowsCapped, setWindowsCapped] = useState(false);
+  const [capCount,      setCapCount]      = useState(0);
   const [fellRows,   setFellRows]   = useState<FellBeforeRow[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState('');
@@ -249,9 +266,11 @@ export default function HotFamiliesPage() {
           fetch(`/api/fell-before?ownerUid=${uid}`),
         ]);
         const [winData, fellData] = await Promise.all([winRes.json(), fellRes.json()]);
-        if (!winData.ok)  { setError(winData.error  || 'Windows load failed.'); return; }
+        if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
         if (!fellData.ok) { setError(fellData.error || 'Fell-before load failed.'); return; }
         setWindowsRaw(winData.windows  ?? []);
+        setWindowsCapped(winData.capped ?? false);
+        setCapCount((winData.windows ?? []).length);
         setFellRows(fellData.rows      ?? []);
       } catch (err) { console.error(err); setError('Could not load Hot Families.'); }
       finally { setLoading(false); }

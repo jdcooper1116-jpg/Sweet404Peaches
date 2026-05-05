@@ -108,9 +108,44 @@ function ErrorBanner({ msg }: { msg: string }) {
   );
 }
 
+
+// ── Cap-awareness helper ──────────────────────────────────────────────────
+function CapWarning({ capped, count, hasMore, dreamerBreakdown, onFilter }: {
+  capped?: boolean; count: number; hasMore?: boolean;
+  dreamerBreakdown?: Record<string, number>;
+  onFilter?: (dreamerId: string, dreamerName: string) => void;
+}) {
+  if (!capped && !hasMore) return null;
+  return (
+    <div style={{ padding:'10px 14px', borderRadius:'13px', border:'1px solid rgba(255,204,80,0.28)',
+      background:'rgba(255,204,80,0.07)', fontSize:'12px', color:'rgba(255,255,255,0.70)', lineHeight:1.7 }}>
+      <strong style={{ color:'#ffcc50' }}>⚠ Showing first {count} windows — more exist.</strong>
+      {' '}Filter by dreamer or dream entry to see complete groups.
+      {dreamerBreakdown && Object.entries(dreamerBreakdown).length > 0 && onFilter && (
+        <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', marginTop:'7px' }}>
+          <span style={{ color:'rgba(255,255,255,0.45)', fontSize:'11px' }}>Show only:</span>
+          {Object.entries(dreamerBreakdown).map(([name, cnt]) => (
+            <button key={name} type="button"
+              onClick={() => onFilter('', name)}
+              style={{ padding:'2px 9px', borderRadius:'999px', fontSize:'10px', fontWeight:700, cursor:'pointer',
+                background:'rgba(160,144,255,0.14)', border:'1px solid rgba(160,144,255,0.28)', color:'#a090ff' }}>
+              {name} ({cnt})
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ActiveWindowsPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<ActiveWindow[]>([]);
+  const [dreamerFilter, setDreamerFilter] = useState('');
+  const [capped, setCapped] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [capCount, setCapCount] = useState(0);
+  const [dreamerBD, setDreamerBD] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -118,7 +153,9 @@ export default function ActiveWindowsPage() {
     if (!user) { setRows([]); setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const res = await fetch(`/api/dreams/windows?ownerUid=${encodeURIComponent(user.uid)}`);
+      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250' });
+      if (dreamerFilter) qs.set('dreamerId', dreamerFilter);
+      const res = await fetch(`/api/dreams/windows?${qs}`);
       const data = await res.json();
       if (!data.ok) { setError(data.error || 'Failed to load windows.'); return; }
       setRows(Array.isArray(data.windows) ? data.windows : []);
@@ -168,7 +205,13 @@ export default function ActiveWindowsPage() {
           ))}
         </section>
 
-        {loading && <section className="journal-card"><p>Loading dream windows…</p></section>}
+        <CapWarning capped={capped} count={capCount} hasMore={hasMore}
+        dreamerBreakdown={dreamerBD}
+        onFilter={(_, name) => {
+          console.log('Dreamer filter requires dreamerId; selected visible breakdown label:', name);
+        }}
+      />
+      {loading && <section className="journal-card"><p>Loading dream windows…</p></section>}
         {error && <ErrorBanner msg={error} />}
         {!loading && !grouped.length && <section className="journal-card"><p>No dream windows yet. <Link href="/dreams/new">Create your first dream entry →</Link></p></section>}
 
