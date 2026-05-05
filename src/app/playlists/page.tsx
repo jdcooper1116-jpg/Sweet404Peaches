@@ -287,19 +287,6 @@ function CapWarning({ capped, count }: { capped?: boolean; count: number }) {
   );
 }
 
-
-function playlistEntryState(entry: any): string {
-  return String(
-    entry?.state ??
-    entry?.stateCode ??
-    entry?.targetState ??
-    entry?.playState ??
-    entry?.jurisdiction ??
-    ''
-  ).trim().toUpperCase();
-}
-
-
 export default function PlaylistsPage() {
   const { user } = useAuth();
 
@@ -307,6 +294,9 @@ export default function PlaylistsPage() {
   const [windowsCapped, setWindowsCapped] = useState(false);
   const [capCount,      setCapCount]      = useState(0);
   const [fellRows,    setFellRows]    = useState<FellBeforeRow[]>([]);
+  const [ebCandidates,  setEbCandidates]  = useState<any[]>([]);
+  const [ebNoEvidence,  setEbNoEvidence]  = useState<any[]>([]);
+  const [ebMeta,        setEbMeta]        = useState<{ activeTermCount: number; activeWindowCount: number; dreamerBreakdown: Record<string,number> }>({ activeTermCount: 0, activeWindowCount: 0, dreamerBreakdown: {} });
   const [recentHits,     setRecentHits]    = useState<any[]>([]);
   const [playlistHits,   setPlaylistHits]  = useState<any[]>([]);
   const [snapshotSaving, setSnapshotSaving]= useState(false);
@@ -342,22 +332,25 @@ export default function PlaylistsPage() {
         const uid = encodeURIComponent(user.uid);
         const [winRes, fellRes, hitsRes, snapsRes] = await Promise.all([
           fetch(`/api/dreams/window-groups?ownerUid=${uid}&limit=50`),
-          fetch(`/api/fell-before?ownerUid=${uid}&limit=250`),
+          fetch(`/api/playlists/evidence-backed?ownerUid=${uid}`),
           fetch(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
           fetch(`/api/admin/playlist-hits?ownerUid=${uid}&limit=50`).catch(() => null),
         ]);
-        const [winData, fellData, hitsData, snapsData] = await Promise.all([
+        const [winData, ebData, hitsData, snapsData] = await Promise.all([
           winRes.json(), fellRes.json(), hitsRes.json(),
           snapsRes ? snapsRes.json().catch(() => null) : Promise.resolve(null),
         ]);
-        if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
-        if (!fellData.ok) { setError(fellData.error || 'Fell-before load failed.'); return; }
+        if (!winData.ok) throw new Error(winData.error || 'Windows load failed.');
         setWindowsRaw(winData.windows ?? []);
-        setWindowsCapped(false);  // window-groups covers all dreamers
-        setCapCount(winData.totalActiveWindows ?? (winData.windows ?? []).length);
         setWindowsCapped(winData.capped ?? false);
-        setCapCount((winData.windows ?? []).length);
-        setFellRows(fellData.rows      ?? []);
+        setCapCount(winData.totalActiveWindows ?? (winData.windows ?? []).length);
+        if (ebData?.ok) {
+          setEbCandidates(ebData.candidates ?? []);
+          setEbNoEvidence(ebData.noEvidenceCandidates ?? []);
+          setEbMeta({ activeTermCount: ebData.activeTermCount ?? 0, activeWindowCount: ebData.activeWindowCount ?? 0, dreamerBreakdown: ebData.dreamerBreakdown ?? {} });
+        }
+        // Still set fellRows from ebData for backward compat with any helpers that use it
+        setFellRows([]);
         if (hitsData?.ok) setRecentHits(hitsData.hits ?? []);
         if (snapsData?.ok) setPlaylistHits(snapsData.hits ?? []);
       } catch (err) { console.error(err); setError('Could not load playlist data.'); }
@@ -564,191 +557,180 @@ export default function PlaylistsPage() {
         </section>
       )}
 
-      {loading && <section className="journal-card"><p style={{ margin: 0, color: 'rgba(255,255,255,0.55)' }}>Building playlists…</p></section>}
+      {loading && <section className="journal-card"><p style={{ margin: 0, color: 'rgba(255,255,255,0.55)' }}>Building evidence-backed playlists…</p></section>}
       {!loading && error && <div style={{ padding: '16px 20px', borderRadius: '16px', border: '1px solid rgba(255,85,85,0.28)', background: 'rgba(255,85,85,0.10)', color: '#ff9090' }}>{error}</div>}
 
-      {/* Empty state */}
-      {!loading && !error && stateGroups.length === 0 && watchlist.length === 0 && (
+      {/* ── Empty state ── */}
+      {!loading && !error && ebCandidates.length === 0 && ebNoEvidence.length === 0 && (
         <section className="journal-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', color: '#a090ff' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'10px', color:'#a090ff' }}>
             <MapPinned size={18} />
-            <strong>No playlist entries yet</strong>
+            <strong>No evidence-backed playlist entries yet</strong>
           </div>
-          <p style={{ margin: 0, color: 'rgba(255,255,255,0.50)', lineHeight: 1.7 }}>
-            {active.length === 0
+          <p style={{ margin:0, color:'rgba(255,255,255,0.50)', lineHeight:1.7 }}>
+            {ebMeta.activeWindowCount === 0
               ? 'No active dream windows. Write a dream entry to generate candidates.'
-              : 'Active windows exist but no fell-before evidence yet. Run a refresh to match numbers against lottery results.'}
+              : 'Active windows exist but no historical fell-before evidence for these terms yet. Run a refresh, then check As They Fell Before.'}
           </p>
         </section>
       )}
 
-      {/* State cards */}
-      {!loading && !error && filteredGroups.length > 0 && (
-        <section style={{ display: 'grid', gap: '16px' }}>
-          {filteredGroups.map(group => (
-            <article key={group.state} className="journal-card">
-
-              {/* State header */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '14px' }}>
-                <div style={{
-                  width: '48px', height: '48px', borderRadius: '14px', flexShrink: 0,
-                  background: 'rgba(160,144,255,0.14)', border: '1px solid rgba(160,144,255,0.28)',
-                  display: 'grid', placeItems: 'center',
-                  fontWeight: 900, fontSize: '14px', color: '#a090ff', fontFamily: 'system-ui,sans-serif',
-                }}>{group.state}</div>
-                <div>
-                  <strong style={{ fontSize: '1.1rem', fontWeight: 900, letterSpacing: '-0.03em', fontFamily: 'system-ui,sans-serif', color: '#ffffff' }}>
-                    {group.state}
-                  </strong>
-                  <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', marginTop: '2px' }}>
-                    {group.entries.filter(e => e.gameType === 'cash3').length} Cash 3
-                    {' · '}
-                    {group.entries.filter(e => e.gameType === 'cash4').length} Cash 4
-                    {' · '}
-                    {group.entries.length} total candidate{group.entries.length !== 1 ? 's' : ''}
-                  </div>
-                </div>
+      {/* ── Section 1: Evidence-Backed State Playlist ── */}
+      {!loading && ebCandidates.length > 0 && (
+        <section style={{ display:'grid', gap:'10px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
+            <div>
+              <h2 style={{ margin:0, fontSize:'1.0rem', fontWeight:900, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
+                Evidence-Backed State Playlist
+              </h2>
+              <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', marginTop:'3px' }}>
+                {ebCandidates.length} candidate{ebCandidates.length !== 1 ? 's' : ''} · {ebMeta.activeWindowCount} active windows · {ebMeta.activeTermCount} active terms
               </div>
-
-              {/* Cash 3 entries */}
-              {group.entries.filter(e => e.gameType === 'cash3').length > 0 && (
-                <div style={{ marginBottom: '12px' }}>
-                  <div style={{ fontSize: '10px', fontWeight: 800, color: '#ff6b4a', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '8px', fontFamily: 'system-ui,sans-serif' }}>
-                    Cash 3 — {group.entries.filter(e => e.gameType === 'cash3').length} numbers
+            </div>
+          </div>
+          <div style={{ display:'grid', gap:'8px' }}>
+            {ebCandidates.filter((c: any) => c.strengthTier !== 'Cross-Dream Convergence').map((c: any) => {
+              const isStrong = c.strengthTier === 'Strong Play';
+              const isMed    = c.strengthTier === 'Watch Closely';
+              const tierColor = isStrong ? '#60e09a' : isMed ? '#ffcc50' : '#a090ff';
+              return (
+                <div key={`${c.normalizedTerm}::${c.number}::${c.gameType}::${c.state}`}
+                  style={{ padding:'10px 13px', borderRadius:'14px',
+                    background: isStrong ? 'rgba(96,224,154,0.07)' : 'rgba(255,255,255,0.06)',
+                    border:`1px solid ${isStrong ? 'rgba(96,224,154,0.20)' : 'rgba(255,255,255,0.09)'}`,
+                    display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
+                  {/* State chip */}
+                  <span style={{ padding:'2px 8px', borderRadius:'7px', fontSize:'12px', fontWeight:800, background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.26)', color:'#60e09a', fontFamily:'system-ui,sans-serif', minWidth:'28px', textAlign:'center' }}>
+                    {c.state}
+                  </span>
+                  {/* Number chip */}
+                  <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'13px', padding:'2px 8px', borderRadius:'7px',
+                    background: c.gameType === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
+                    border:`1px solid ${c.gameType === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}`,
+                    color: c.gameType === 'cash4' ? '#a090ff' : '#ff8a6a' }}>
+                    {c.number}
+                  </span>
+                  {/* Tier badge */}
+                  <span style={{ padding:'2px 9px', borderRadius:'999px', fontSize:'10px', fontWeight:700,
+                    color: tierColor, border:`1px solid ${tierColor}40`,
+                    background:`${tierColor}15`, fontFamily:'system-ui,sans-serif' }}>
+                    {c.strengthTier}
+                  </span>
+                  {/* Meta */}
+                  <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)', lineHeight:1.5, minWidth:'120px' }}>
+                    <span style={{ fontWeight:700, color:'rgba(255,255,255,0.80)' }}>{c.termLabel}</span>
+                    {' · '}
+                    {c.verifiedEventCount} event{c.verifiedEventCount !== 1 ? 's' : ''}
+                    {c.straightCount > 0 && ` · ${c.straightCount}S`}
+                    {c.boxedCount > 0   && ` · ${c.boxedCount}B`}
+                    {c.lastHitDate && <span style={{ color:'rgba(255,255,255,0.35)', marginLeft:'6px', fontFamily:'monospace', fontSize:'11px' }}>{c.lastHitDate}</span>}
                   </div>
-                  <div style={{ display: 'grid', gap: '8px' }}>
-                    {group.entries.filter(e => e.gameType === 'cash3').map(entry => (
-                      <div key={`${entry.number}::cash3`} style={{
-                        display: 'flex', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap',
-                        padding: '10px 12px', borderRadius: '12px',
-                        background: entry.fellBefore ? 'rgba(96,224,154,0.07)' : 'rgba(255,255,255,0.05)',
-                        border: `1px solid ${entry.fellBefore ? 'rgba(96,224,154,0.18)' : 'rgba(255,255,255,0.09)'}`,
-                      }}>
-                        <NumberChip n={entry.number} game="cash3" />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '5px' }}>
-                            {entry.fellBefore   && <Badge kind="fell"     />}
-                            <Badge kind="active" />
-                            {entry.multiTerm    && <Badge kind="multi"    />}
-                            {/* Playlist hit attribution — persisted candidate hit first, then live fallback */}
-                            {(() => {
-                              const stateKey = playlistEntryState(entry);
-                        const h = stateKey
-                          ? (playlistHitIndex.get(`${entry.number}::${stateKey}`) || hitIndex.get(`${entry.number}::${stateKey}`))
-                          : null;
-                              if (!h) return null;
-                              const isS = h.hitType === 'exact' || h.hitType === 'straight';
-                              return (
-                                <span style={{ display:'inline-flex', alignItems:'center', gap:'3px', padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:800,
-                                  background: isS ? 'rgba(96,224,154,0.18)' : 'rgba(255,204,80,0.14)',
-                                  border:`1px solid ${isS ? 'rgba(96,224,154,0.35)' : 'rgba(255,204,80,0.30)'}`,
-                                  color: isS ? '#60e09a' : '#ffcc50', fontFamily:'system-ui,sans-serif' }}>
-                                  {isS ? '🎯 Straight Hit' : '📦 Boxed Hit'} {h.drawDate}
-                                </span>
-                              );
-                            })()}
-                            {entry.matchTypes.includes('straight') && <Badge kind="straight" />}
-                            {entry.matchTypes.includes('boxed')    && <Badge kind="boxed"    />}
-                          </div>
-                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.55)', lineHeight: 1.5 }}>
-                            {entry.termList.length > 0 && (
-                              <span>
-                                {entry.termList.map(t => (
-                                  <span key={t} style={{ fontWeight: 700, color: 'rgba(255,255,255,0.80)', marginRight: '6px' }}>{t}</span>
-                                ))}
-                                {' '}·{' '}
-                              </span>
-                            )}
-                            {entry.dreamerName}
-                            {entry.fellBefore && entry.stateHitCount > 0 && (
-                              <span style={{ color: '#60e09a' }}> · {entry.stateHitCount} hit{entry.stateHitCount !== 1 ? 's' : ''}</span>
-                            )}
-                            {entry.latestHitDate && (
-                              <span style={{ color: 'rgba(255,255,255,0.35)' }}> · {entry.latestHitDate}</span>
-                            )}
-                          </div>
-                          {entry.fellBefore && (() => {
-                            const pKey = `${group.state}::${entry.number}::cash3`;
-                            const msg  = pinMsg[pKey];
-                            return msg
-                              ? <span style={{ fontSize: '11px', color: '#60e09a', fontWeight: 700, marginTop: '4px' }}>{msg}</span>
-                              : <button type="button" onClick={() => pinEntry(entry, group.state)} disabled={!!pinningKey}
-                                  style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, background: 'rgba(255,204,80,0.10)', border: '1px solid rgba(255,204,80,0.24)', color: '#ffcc50', cursor: pinningKey ? 'default' : 'pointer', fontFamily: 'system-ui,sans-serif', marginTop: '4px', display: 'inline-block' }}>
-                                  {pinningKey === pKey ? '…' : '★ Pin'}
-                                </button>;
-                          })()}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  {/* Hit attribution */}
+                  {(() => {
+                    const h = playlistHitIndex.get(`${c.number}::${c.state}`) || hitIndex.get(`${c.number}::${c.state}`);
+                    if (!h) return null;
+                    const isS = h.hitType === 'exact' || h.hitType === 'straight';
+                    return (
+                      <span style={{ padding:'2px 7px', borderRadius:'999px', fontSize:'9px', fontWeight:800,
+                        background: isS ? 'rgba(96,224,154,0.18)' : 'rgba(255,204,80,0.14)',
+                        border:`1px solid ${isS ? 'rgba(96,224,154,0.35)' : 'rgba(255,204,80,0.30)'}`,
+                        color: isS ? '#60e09a' : '#ffcc50', fontFamily:'system-ui,sans-serif' }}>
+                        {isS ? '🎯 Straight Hit' : '📦 Boxed Hit'} {h.drawDate}
+                      </span>
+                    );
+                  })()}
                 </div>
-              )}
-
-              {/* Cash 4 entries */}
-              {group.entries.filter(e => e.gameType === 'cash4').length > 0 && (
-                <div>
-                  <div style={{ fontSize: '10px', fontWeight: 800, color: '#a090ff', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '8px', fontFamily: 'system-ui,sans-serif' }}>
-                    Cash 4 — {group.entries.filter(e => e.gameType === 'cash4').length} numbers
-                  </div>
-                  <div style={{ display: 'grid', gap: '8px' }}>
-                    {group.entries.filter(e => e.gameType === 'cash4').map(entry => (
-                      <div key={`${entry.number}::cash4`} style={{
-                        display: 'flex', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap',
-                        padding: '10px 12px', borderRadius: '12px',
-                        background: entry.fellBefore ? 'rgba(96,224,154,0.07)' : 'rgba(255,255,255,0.05)',
-                        border: `1px solid ${entry.fellBefore ? 'rgba(96,224,154,0.18)' : 'rgba(255,255,255,0.09)'}`,
-                      }}>
-                        <NumberChip n={entry.number} game="cash4" />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '5px' }}>
-                            {entry.fellBefore   && <Badge kind="fell"     />}
-                            <Badge kind="active" />
-                            {entry.multiTerm    && <Badge kind="multi"    />}
-                          </div>
-                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.55)', lineHeight: 1.5 }}>
-                            {entry.termList.filter(Boolean).map(t => (
-                              <span key={t} style={{ fontWeight: 700, color: 'rgba(255,255,255,0.80)', marginRight: '6px' }}>{t}</span>
-                            ))}
-                            · {entry.dreamerName}
-                            {entry.fellBefore && entry.stateHitCount > 0 && (
-                              <span style={{ color: '#60e09a' }}> · {entry.stateHitCount} hit{entry.stateHitCount !== 1 ? 's' : ''}</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </article>
-          ))}
+              );
+            })}
+          </div>
         </section>
       )}
 
-      {/* Active Dream Watchlist — no state evidence yet */}
-      {!loading && !error && filteredWatchlist.length > 0 && (
-        <section className="journal-card" style={{ borderLeft: '3px solid rgba(255,204,80,0.40)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', color: '#ffcc50' }}>
-            <MapPinned size={16} strokeWidth={1.8} />
-            <strong style={{ fontFamily: 'system-ui,sans-serif', fontWeight: 800, fontSize: '14px' }}>
-              Active Dream Watchlist — No State Memory Yet
-            </strong>
-          </div>
-          <p style={{ margin: '0 0 14px', color: 'rgba(255,255,255,0.45)', fontSize: '13px', lineHeight: 1.65 }}>
-            These numbers are active from current dream windows but have no fell-before state evidence.
-            They become state-specific after a refresh finds matching results.
-          </p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {filteredWatchlist.map(e => (
-              <div key={`${e.number}::${e.gameType}::${e.sourceTerm}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <NumberChip n={e.number} game={e.gameType} />
-                {e.sourceTerm && (
-                  <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)' }}>{e.sourceTerm}</span>
-                )}
+      {/* ── Section 2: Cross-Dream Convergence ── */}
+      {!loading && ebCandidates.filter((c: any) => c.strengthTier === 'Cross-Dream Convergence').length > 0 && (
+        <section style={{ display:'grid', gap:'8px' }}>
+          <h2 style={{ margin:0, fontSize:'1.0rem', fontWeight:900, color:'#60e09a', fontFamily:'system-ui,sans-serif' }}>
+            ⚡ Cross-Dream Convergence
+          </h2>
+          <div style={{ display:'grid', gap:'7px' }}>
+            {ebCandidates.filter((c: any) => c.strengthTier === 'Cross-Dream Convergence').map((c: any) => (
+              <div key={`xd::${c.normalizedTerm}::${c.number}::${c.state}`}
+                style={{ padding:'10px 13px', borderRadius:'14px',
+                  background:'rgba(96,224,154,0.09)', border:'1px solid rgba(96,224,154,0.28)',
+                  display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
+                <span style={{ padding:'2px 8px', borderRadius:'7px', fontSize:'12px', fontWeight:800, background:'rgba(96,224,154,0.12)', border:'1px solid rgba(96,224,154,0.26)', color:'#60e09a', fontFamily:'system-ui,sans-serif' }}>{c.state}</span>
+                <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'13px', padding:'2px 8px', borderRadius:'7px',
+                  background: c.gameType === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
+                  color: c.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
+                  border:`1px solid ${c.gameType === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}` }}>{c.number}</span>
+                <span style={{ padding:'2px 9px', borderRadius:'999px', fontSize:'10px', fontWeight:700, color:'#60e09a', border:'1px solid rgba(96,224,154,0.35)', background:'rgba(96,224,154,0.12)', fontFamily:'system-ui,sans-serif' }}>Cross-Dream Convergence</span>
+                <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)' }}>
+                  <span style={{ fontWeight:700, color:'rgba(255,255,255,0.80)' }}>{c.termLabel}</span>
+                  {' · '}{c.activeDreamerCount} dreamers: {c.activeDreamers.slice(0,3).join(', ')}
+                  {' · '}{c.verifiedEventCount} verified event{c.verifiedEventCount !== 1 ? 's' : ''}
+                </div>
               </div>
             ))}
           </div>
         </section>
+      )}
+
+      {/* ── Section 3: Recent Confirmed Hits From Active Windows ── */}
+      {!loading && recentHits.length > 0 && (
+        <section className="journal-card">
+          <h2 style={{ margin:'0 0 12px', fontSize:'1.0rem', fontWeight:900, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
+            Recent Confirmed Hits From Active Windows
+          </h2>
+          <div style={{ display:'grid', gap:'6px' }}>
+            {recentHits.slice(0, 8).map((h: any, i: number) => {
+              const isS = h.hitType === 'exact' || h.hitType === 'straight' || h.matchType === 'exact';
+              return (
+                <div key={i} style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center', padding:'7px 10px', borderRadius:'10px',
+                  background: isS ? 'rgba(96,224,154,0.07)' : 'rgba(255,204,80,0.06)',
+                  border:`1px solid ${isS ? 'rgba(96,224,154,0.18)' : 'rgba(255,204,80,0.14)'}` }}>
+                  <span style={{ fontFamily:'monospace', fontWeight:900, fontSize:'12px', padding:'1px 6px', borderRadius:'6px',
+                    background: (h.gameType||h.game_type) === 'cash4' ? 'rgba(160,144,255,0.16)' : 'rgba(255,107,74,0.16)',
+                    color: (h.gameType||h.game_type) === 'cash4' ? '#a090ff' : '#ff8a6a',
+                    border:`1px solid ${(h.gameType||h.game_type) === 'cash4' ? 'rgba(160,144,255,0.28)' : 'rgba(255,107,74,0.28)'}` }}>
+                    {h.candidate ?? h.number}
+                  </span>
+                  <span style={{ padding:'2px 6px', borderRadius:'6px', fontSize:'10px', fontWeight:800, background:'rgba(96,224,154,0.10)', color:'#60e09a', border:'1px solid rgba(96,224,154,0.22)' }}>
+                    {h.state}
+                  </span>
+                  <span style={{ fontSize:'11px', fontWeight:700, color: isS ? '#60e09a' : '#ffcc50' }}>{isS ? 'Straight' : 'Boxed'}</span>
+                  <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.50)' }}>{h.termLabel ?? ''}</span>
+                  <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)', marginLeft:'auto', fontFamily:'monospace' }}>{h.drawDate ?? h.draw_date ?? ''}</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ── Section 4: New Active Numbers — No Evidence Yet ── */}
+      {!loading && ebNoEvidence.length > 0 && (
+        <details style={{ padding:'10px 14px', borderRadius:'13px', border:'1px solid rgba(255,255,255,0.09)', background:'rgba(255,255,255,0.04)' }}>
+          <summary style={{ cursor:'pointer', fontSize:'12px', color:'rgba(255,255,255,0.55)', fontWeight:700, fontFamily:'system-ui,sans-serif', listStyle:'none', display:'flex', gap:'8px', alignItems:'center' }}>
+            <span>New Active Numbers — No Fell-Before Evidence Yet ({ebNoEvidence.length})</span>
+          </summary>
+          <div style={{ marginTop:'10px', fontSize:'12px', color:'rgba(255,255,255,0.45)', lineHeight:1.6, marginBottom:'8px' }}>
+            These numbers are active from current dream windows but have no historical fell-before evidence yet.
+            They will become playlist candidates after confirmed hits are detected and promoted.
+          </div>
+          <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+            {ebNoEvidence.slice(0, 30).map((c: any) => (
+              <span key={`ne::${c.normalizedTerm}::${c.number}::${c.gameType}`}
+                style={{ fontFamily:'monospace', fontWeight:700, fontSize:'11px', padding:'2px 7px', borderRadius:'7px',
+                  background: c.gameType === 'cash4' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
+                  color: c.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
+                  border:`1px solid ${c.gameType === 'cash4' ? 'rgba(160,144,255,0.24)' : 'rgba(255,107,74,0.22)'}` }}>
+                {c.number}
+                <span style={{ fontSize:'9px', marginLeft:'3px', opacity:0.6 }}>{c.termLabel}</span>
+              </span>
+            ))}
+            {ebNoEvidence.length > 30 && <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>+{ebNoEvidence.length - 30} more</span>}
+          </div>
+        </details>
       )}
 
     </div>
