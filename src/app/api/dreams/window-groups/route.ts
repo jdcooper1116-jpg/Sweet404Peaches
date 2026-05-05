@@ -1,34 +1,3 @@
-/**
- * GET /api/dreams/window-groups?ownerUid=...
- *
- * Returns active dream windows grouped by dreamEntryId.
- *
- * WHY THIS EXISTS:
- *   /api/dreams/windows queries activeDreamWindows with a single ownerUid filter
- *   and caps at 250 rows. With 403 total active windows across 4 dreamers, the
- *   first 250 Firestore returns are dominated by one dreamer (e.g. OPdaBoss's
- *   200 windows), hiding SweetRed83$'s 65 windows entirely.
- *
- * HOW WE BYPASS THE CAP:
- *   1. Load the dreamers list (typically < 20 docs)
- *   2. For each dreamer, run a targeted query:
- *        activeDreamWindows where ownerUid=X AND dreamerId=Y AND activeEnd >= today
- *      Each dreamer query is capped at 250, but since we run N dreamer queries in
- *      parallel, we get full coverage: 4 dreamers × 250 = up to 1000 windows.
- *   3. Also include owner-self windows (no specific dreamer).
- *   4. Group the merged results by dreamEntryId.
- *
- * This pattern works for any number of dreamers up to ~250 windows per dreamer.
- * If a single dreamer has >250 windows, they'll still be capped — use dreamEntryId
- * filtering in that case.
- *
- * Params:
- *   ownerUid      required
- *   dreamerId     optional — return only this dreamer's groups
- *   dreamEntryId  optional — return only this dream entry's group
- *   includeExpired optional — default false
- *   limit         optional — max groups to return, default 50
- */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
 
@@ -39,202 +8,194 @@ function isQuotaError(err: unknown): boolean {
   return msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('429');
 }
 
-function boxedKey(num: string): string {
-  return String(num ?? '').split('').sort().join('');
+function isoDate(value: any): string | null {
+  return value?.toDate?.()?.toISOString?.() ?? value ?? null;
 }
 
-function resolveGameType(raw: string): 'cash3' | 'cash4' | string {
-  if (raw === 'pick3') return 'cash3';
-  if (raw === 'pick4') return 'cash4';
-  return raw;
+function boxedKey(n: any): string {
+  return String(n ?? '').split('').sort().join('');
 }
 
 export async function GET(req: NextRequest) {
   try {
-    const params        = req.nextUrl.searchParams;
-    const ownerUid      = resolveOwnerUid(params.get('ownerUid'));
-    const dreamerFilter = (params.get('dreamerId')     ?? '').trim();
-    const entryFilter   = (params.get('dreamEntryId')  ?? '').trim();
-    const includeExpired= params.get('includeExpired') === 'true';
-    const groupLimit    = Math.min(Number(params.get('limit') ?? 50), 100);
-    const today         = new Date().toISOString().slice(0, 10);
+    const params = req.nextUrl.searchParams;
+    const ownerUid = resolveOwnerUid(params.get('ownerUid'));
+    const dreamerIdFilter = (params.get('dreamerId') ?? '').trim();
+    const dreamEntryIdFilter = (params.get('dreamEntryId') ?? '').trim();
+    const includeExpired = params.get('includeExpired') === 'true';
+    const maxPerDreamer = Math.min(Math.max(Number(params.get('limit') ?? 250), 1), 250);
+    const today = new Date().toISOString().slice(0, 10);
 
     const db = getAdminDb();
 
-    // ── Step 1: Get dreamer list ───────────────────────────────────────────
-    // Small collection — typically < 20 docs per owner
-    let dreamerIds: string[] = ['owner-self'];  // always include owner-self
+    let dreamersSnap: any;
 
-    if (!dreamerFilter) {
-      // Load all dreamers for this owner to build the query loop
-      const dreamersSnap = await db.collection('dreamers')
-        .where('ownerUid', '==', ownerUid)
-        .limit(50).get();
-      dreamerIds = ['owner-self', ...dreamersSnap.docs.map(d => d.id)];
+    if (dreamerIdFilter) {
+      const doc = await db.collection('dreamers').doc(dreamerIdFilter).get();
+      dreamersSnap = { docs: doc.exists ? [doc] : [] };
     } else {
-      dreamerIds = [dreamerFilter];
+      dreamersSnap = await db.collection('dreamers')
+        .where('ownerUid', '==', ownerUid)
+        .limit(250)
+        .get();
     }
 
-    // ── Step 2: Query activeDreamWindows per dreamer (parallel) ───────────
-    // This bypasses the flat cap by running targeted dreamer-scoped queries.
+    const dreamers = dreamersSnap.docs.map((doc: any) => {
+      const d = doc.data() || {};
+      return {
+        id: doc.id,
+        displayName: d.displayName ?? d.dreamerName ?? d.name ?? doc.id,
+      };
+    });
+
+    // Include owner-self as a fallback in case any windows were saved without a dreamer doc.
+    if (!dreamerIdFilter && !dreamers.some((d: any) => d.id === 'owner-self')) {
+      dreamers.push({ id: 'owner-self', displayName: 'Sweet404Peaches' });
+    }
+
     const allWindows: any[] = [];
     const seen = new Set<string>();
+    const warnings: string[] = [];
 
-    const perDreamerLimit = 250;  // max per dreamer query
+    for (const dreamer of dreamers) {
+      let q: any = db.collection('activeDreamWindows')
+        .where('ownerUid', '==', ownerUid)
+        .where('dreamerId', '==', dreamer.id);
 
-    await Promise.allSettled(dreamerIds.map(async (did) => {
-      try {
-        let q: any = db.collection('activeDreamWindows')
-          .where('ownerUid',  '==', ownerUid)
-          .where('dreamerId', '==', did);
+      if (dreamEntryIdFilter) {
+        q = q.where('dreamEntryId', '==', dreamEntryIdFilter);
+      }
 
-        if (!includeExpired) {
-          q = q.where('activeEnd', '>=', today);
-        }
-        if (entryFilter) {
-          q = q.where('dreamEntryId', '==', entryFilter);
-        }
+      const snap = await q.limit(maxPerDreamer).get();
 
-        const snap = await q.limit(perDreamerLimit).get();
+      if (snap.docs.length >= maxPerDreamer) {
+        warnings.push(`Dreamer ${dreamer.displayName} reached the ${maxPerDreamer} per-dreamer cap.`);
+      }
 
-        for (const doc of snap.docs) {
-          if (seen.has(doc.id)) continue;
-          seen.add(doc.id);
-          const d = doc.data();
-          allWindows.push({
-            id: doc.id, ...d,
-            // Normalize field names for consistent grouping
-            gameType:  resolveGameType(String(d.gameType ?? d.game_type ?? '')),
-            createdAt: d.createdAt?.toDate?.()?.toISOString?.() ?? d.createdAt ?? null,
-            updatedAt: d.updatedAt?.toDate?.()?.toISOString?.() ?? d.updatedAt ?? null,
-            lastCheckedAt: d.lastCheckedAt?.toDate?.()?.toISOString?.() ?? d.lastCheckedAt ?? null,
-          });
-        }
-      } catch { /* non-fatal — skip this dreamer */ }
-    }));
+      for (const doc of snap.docs) {
+        if (seen.has(doc.id)) continue;
+        seen.add(doc.id);
 
-    // ── Step 3: Group by dreamEntryId ─────────────────────────────────────
-    type Group = {
-      dreamEntryId:  string;
-      dreamerId:     string;
-      dreamerName:   string;
-      dreamDate:     string;
-      activeStart:   string;
-      activeEnd:     string;
-      isActive:      boolean;
-      windowCount:   number;
-      cash3Count:    number;
-      cash4Count:    number;
-      terms:         string[];
-      numbers:       string[];
-      boxedKeys:     string[];
-      sampleWindows: any[];
-      lastCheckedAt: string;
-      lastHitCount:  number;
-      gameTypeCounts:Record<string,number>;
-    };
+        const data = doc.data() || {};
+        const activeEnd = String(data.activeEnd ?? data.activeWindowEnd ?? '');
+        if (!includeExpired && activeEnd && activeEnd < today) continue;
 
-    const groupMap = new Map<string, Group>();
+        allWindows.push({
+          id: doc.id,
+          ...data,
+          dreamerId: data.dreamerId ?? dreamer.id,
+          dreamerName: data.dreamerName ?? dreamer.displayName,
+          activeStart: data.activeStart ?? data.activeWindowStart ?? data.dreamDate ?? null,
+          activeEnd: data.activeEnd ?? data.activeWindowEnd ?? null,
+          createdAt: isoDate(data.createdAt),
+          updatedAt: isoDate(data.updatedAt),
+          lastCheckedAt: isoDate(data.lastCheckedAt),
+        });
+      }
+    }
+
+    const groupMap = new Map<string, any>();
 
     for (const w of allWindows) {
-      const eid  = String(w.dreamEntryId ?? '');
-      const key  = eid || `${w.dreamerId ?? 'unknown'}__no-entry`;
+      const entryId = String(w.dreamEntryId ?? w.sourceDreamEntryId ?? 'missing');
+      const key = `${w.dreamerId ?? 'unknown'}__${entryId}`;
 
       if (!groupMap.has(key)) {
         groupMap.set(key, {
-          dreamEntryId:  eid,
-          dreamerId:     String(w.dreamerId  ?? 'owner-self'),
-          dreamerName:   String(w.dreamerName ?? w.dreamerId ?? 'Owner / Self'),
-          dreamDate:     String(w.dreamDate   ?? w.activeStart ?? ''),
-          activeStart:   String(w.activeStart ?? ''),
-          activeEnd:     String(w.activeEnd   ?? ''),
-          isActive:      String(w.activeEnd ?? '') >= today,
-          windowCount:   0,
-          cash3Count:    0,
-          cash4Count:    0,
-          terms:         [],
-          numbers:       [],
-          boxedKeys:     [],
+          dreamEntryId: entryId,
+          dreamerId: w.dreamerId ?? 'unknown',
+          dreamerName: w.dreamerName ?? 'Unknown Dreamer',
+          dreamDate: w.dreamDate ?? w.activeStart ?? null,
+          activeStart: w.activeStart ?? null,
+          activeEnd: w.activeEnd ?? null,
+          isActive: true,
+          windowCount: 0,
+          cash3Count: 0,
+          cash4Count: 0,
+          terms: [],
+          numbers: [],
+          boxedKeys: [],
           sampleWindows: [],
-          lastCheckedAt: String(w.lastCheckedAt ?? ''),
-          lastHitCount:  0,
-          gameTypeCounts:{},
+          lastCheckedAt: w.lastCheckedAt ?? null,
+          lastHitCount: 0,
+          newHitsSinceLastCheck: 0,
         });
       }
 
-      const g = groupMap.get(key)!;
-      g.windowCount++;
+      const g = groupMap.get(key);
+      g.windowCount += 1;
 
-      const gt  = String(w.gameType ?? '');
-      const num = String(w.number   ?? '').trim();
-      const tl  = String(w.termLabel ?? '').toLowerCase();
-      const bk  = num ? boxedKey(num) : '';
+      if (w.gameType === 'cash3') g.cash3Count += 1;
+      if (w.gameType === 'cash4') g.cash4Count += 1;
 
-      if (gt === 'cash3') g.cash3Count++;
-      else if (gt === 'cash4') g.cash4Count++;
-      g.gameTypeCounts[gt] = (g.gameTypeCounts[gt] ?? 0) + 1;
+      if (w.termLabel && !g.terms.includes(w.termLabel)) g.terms.push(w.termLabel);
+      if (w.number && !g.numbers.includes(w.number)) g.numbers.push(w.number);
 
-      if (num && !g.numbers.includes(num)) g.numbers.push(num);
-      if (bk  && !g.boxedKeys.includes(bk))g.boxedKeys.push(bk);
-      if (tl  && !g.terms.includes(tl))    g.terms.push(tl);
-      if (g.sampleWindows.length < 5)       g.sampleWindows.push({ id: w.id, number: num, gameType: gt, termLabel: tl, activeEnd: w.activeEnd });
-      if (String(w.lastCheckedAt ?? '') > g.lastCheckedAt) g.lastCheckedAt = String(w.lastCheckedAt ?? '');
-      if (Number(w.lastHitCount ?? 0) > 0) g.lastHitCount += Number(w.lastHitCount);
+      const bk = boxedKey(w.number);
+      if (bk && !g.boxedKeys.includes(bk)) g.boxedKeys.push(bk);
 
-      // Update activeEnd to latest of the group
-      if (String(w.activeEnd ?? '') > g.activeEnd) g.activeEnd = String(w.activeEnd ?? '');
-      if (!g.activeStart || String(w.activeStart ?? '') < g.activeStart) g.activeStart = String(w.activeStart ?? '');
-      if (!g.dreamDate && w.dreamDate) g.dreamDate = String(w.dreamDate);
+      if (g.sampleWindows.length < 12) g.sampleWindows.push(w);
+
+      g.lastHitCount += Number(w.lastHitCount ?? 0);
+      g.newHitsSinceLastCheck += Number(w.newHitsSinceLastCheck ?? 0);
+
+      if (w.lastCheckedAt && (!g.lastCheckedAt || String(w.lastCheckedAt) > String(g.lastCheckedAt))) {
+        g.lastCheckedAt = w.lastCheckedAt;
+      }
     }
 
-    // ── Step 4: Build summary stats ───────────────────────────────────────
     const groups = Array.from(groupMap.values())
-      .sort((a, b) => b.windowCount - a.windowCount)
-      .slice(0, groupLimit);
+      .sort((a, b) => String(b.dreamDate ?? '').localeCompare(String(a.dreamDate ?? '')));
 
-    const totalActiveWindows = allWindows.length;
     const dreamerBreakdown: Record<string, number> = {};
     const dreamEntryBreakdown: Record<string, number> = {};
-    let totalCash3 = 0, totalCash4 = 0;
+    const gameTypeBreakdown: Record<string, number> = { cash3: 0, cash4: 0 };
 
     for (const w of allWindows) {
-      const dn = String(w.dreamerName ?? w.dreamerId ?? 'unknown');
-      const de = String(w.dreamEntryId ?? '');
-      dreamerBreakdown[dn]  = (dreamerBreakdown[dn]  ?? 0) + 1;
-      if (de) dreamEntryBreakdown[de] = (dreamEntryBreakdown[de] ?? 0) + 1;
-      if (String(w.gameType ?? '') === 'cash3') totalCash3++;
-      else if (String(w.gameType ?? '') === 'cash4') totalCash4++;
+      const dreamerKey = String(w.dreamerName || w.dreamerId || 'unknown');
+      const entryKey = String(w.dreamEntryId || w.sourceDreamEntryId || 'missing');
+      dreamerBreakdown[dreamerKey] = (dreamerBreakdown[dreamerKey] || 0) + 1;
+      dreamEntryBreakdown[entryKey] = (dreamEntryBreakdown[entryKey] || 0) + 1;
+      if (w.gameType === 'cash3') gameTypeBreakdown.cash3 += 1;
+      if (w.gameType === 'cash4') gameTypeBreakdown.cash4 += 1;
     }
 
-    const res = NextResponse.json({
+    const capped = warnings.length > 0;
+
+    return NextResponse.json({
       ok: true,
       groups,
-      groupCount:              groupMap.size,
-      totalActiveWindows,
-      totalUniqueDreamers:     new Set(allWindows.map(w => w.dreamerId)).size,
-      totalUniqueDreamEntries: new Set(allWindows.map(w => w.dreamEntryId).filter(Boolean)).size,
-      totalCash3Windows:       totalCash3,
-      totalCash4Windows:       totalCash4,
+      windows: allWindows,
+      groupCount: groups.length,
+      totalActiveWindows: allWindows.length,
+      totalUniqueDreamers: Object.keys(dreamerBreakdown).length,
+      totalUniqueDreamEntries: groups.length,
+      totalCash3Windows: gameTypeBreakdown.cash3,
+      totalCash4Windows: gameTypeBreakdown.cash4,
       dreamerBreakdown,
       dreamEntryBreakdown,
-      gameTypeBreakdown: {
-        cash3: totalCash3,
-        cash4: totalCash4,
+      gameTypeBreakdown,
+      capped,
+      capWarning: capped ? warnings.join(' ') : '',
+      warnings,
+      filters: {
+        ownerUid,
+        dreamerId: dreamerIdFilter || null,
+        dreamEntryId: dreamEntryIdFilter || null,
+        includeExpired,
       },
-      capped: false,   // this route fetches all dreamers — no flat cap
-      capWarning: null,
-      // Also include flat windows array for pages that still need it
-      windows: allWindows,
     });
-    res.headers.set('Cache-Control', 'private, max-age=30');
-    return res;
-
   } catch (err) {
     console.error('[api/dreams/window-groups]', err);
     const q = isQuotaError(err);
     return NextResponse.json(
-      { ok: false, quota: q,
-        error: q ? 'Firebase quota exhausted.' : err instanceof Error ? err.message : 'Failed.' },
+      {
+        ok: false,
+        quota: q,
+        error: q
+          ? 'Firebase quota exhausted. Try again later.'
+          : err instanceof Error ? err.message : 'Failed.',
+      },
       { status: q ? 429 : 500 }
     );
   }
