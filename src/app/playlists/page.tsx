@@ -341,7 +341,7 @@ export default function PlaylistsPage() {
       try {
         const uid = encodeURIComponent(user.uid);
         const [winRes, fellRes, hitsRes, snapsRes] = await Promise.all([
-          fetch(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+          fetch(`/api/dreams/window-groups?ownerUid=${uid}&limit=50`),
           fetch(`/api/fell-before?ownerUid=${uid}&limit=250`),
           fetch(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
           fetch(`/api/admin/playlist-hits?ownerUid=${uid}&limit=50`).catch(() => null),
@@ -352,7 +352,9 @@ export default function PlaylistsPage() {
         ]);
         if (!winData.ok)  throw new Error(winData.error  || 'Windows load failed.');
         if (!fellData.ok) { setError(fellData.error || 'Fell-before load failed.'); return; }
-        setWindowsRaw(winData.windows  ?? []);
+        setWindowsRaw(winData.windows ?? []);
+        setWindowsCapped(false);  // window-groups covers all dreamers
+        setCapCount(winData.totalActiveWindows ?? (winData.windows ?? []).length);
         setWindowsCapped(winData.capped ?? false);
         setCapCount((winData.windows ?? []).length);
         setFellRows(fellData.rows      ?? []);

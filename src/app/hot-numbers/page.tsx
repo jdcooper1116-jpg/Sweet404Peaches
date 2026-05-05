@@ -246,6 +246,7 @@ export default function HotFamiliesPage() {
   const [windowsRaw, setWindowsRaw] = useState<any[]>([]);
   const [windowsCapped, setWindowsCapped] = useState(false);
   const [capCount,      setCapCount]      = useState(0);
+  const [groupSummaryHot, setGroupSummaryHot] = useState<any>(null);
   const [fellRows,   setFellRows]   = useState<FellBeforeRow[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState('');
@@ -262,7 +263,7 @@ export default function HotFamiliesPage() {
       try {
         const uid = encodeURIComponent(user.uid);
         const [winRes, fellRes] = await Promise.all([
-          fetch(`/api/dreams/windows?ownerUid=${uid}`),
+          fetch(`/api/dreams/window-groups?ownerUid=${uid}&limit=50`),
           fetch(`/api/fell-before?ownerUid=${uid}`),
         ]);
         const [winData, fellData] = await Promise.all([winRes.json(), fellRes.json()]);
@@ -437,6 +438,11 @@ export default function HotFamiliesPage() {
                         ✦ {family.terms.length} terms converge
                       </span>
                     )}
+                    {(family.dreamers?.length ?? 0) >= 2 && (
+                      <span style={{ padding: '4px 11px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,224,154,0.14)', border: '1px solid rgba(96,224,154,0.28)', color: '#60e09a', fontFamily: 'system-ui,sans-serif' }}>
+                        ⚡ Cross-Dream Convergence ({family.dreamers.length} dreamers)
+                      </span>
+                    )}
                     {family.fellBefore && (
                       <span style={{ padding: '4px 11px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,224,154,0.14)', border: '1px solid rgba(96,224,154,0.28)', color: '#60e09a', fontFamily: 'system-ui,sans-serif' }}>
                         ✓ Fell Before
@@ -445,6 +451,12 @@ export default function HotFamiliesPage() {
                   </div>
                   <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', textAlign: 'right' }}>
                     Strength: <strong style={{ color: 'rgba(255,255,255,0.70)' }}>{family.strength}</strong>
+                    {family.dreamers?.length > 0 && (
+                      <div style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)', marginTop:'3px' }}>
+                        {family.dreamers.slice(0, 3).join(', ')}
+                        {family.dreamers.length > 3 && ` +${family.dreamers.length - 3} more`}
+                      </div>
+                    )}
                   </div>
                 </div>
 

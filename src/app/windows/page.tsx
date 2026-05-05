@@ -140,8 +140,10 @@ function CapWarning({ capped, count, hasMore, dreamerBreakdown, onFilter }: {
 
 export default function ActiveWindowsPage() {
   const { user } = useAuth();
-  const [rows, setRows] = useState<ActiveWindow[]>([]);
-  const [dreamerFilter, setDreamerFilter] = useState('');
+  const [rows,         setRows]         = useState<ActiveWindow[]>([]);
+  const [groups,       setGroups]       = useState<any[]>([]);
+  const [groupSummary, setGroupSummary] = useState({ totalWindows:0, groupCount:0, dreamerBD:{} as Record<string,number>, cash3:0, cash4:0, dreamers:0 });
+  const [dreamerFilter,setDreamerFilter]= useState('');
   const [capped, setCapped] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [capCount, setCapCount] = useState(0);
@@ -153,12 +155,21 @@ export default function ActiveWindowsPage() {
     if (!user) { setRows([]); setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250' });
+      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '50' });
       if (dreamerFilter) qs.set('dreamerId', dreamerFilter);
-      const res = await fetch(`/api/dreams/windows?${qs}`);
+      const res = await fetch(`/api/dreams/window-groups?${qs}`);
       const data = await res.json();
       if (!data.ok) { setError(data.error || 'Failed to load windows.'); return; }
       setRows(Array.isArray(data.windows) ? data.windows : []);
+      setGroups(data.groups ?? []);
+      setGroupSummary({
+        totalWindows: data.totalActiveWindows ?? 0,
+        groupCount:   data.groupCount ?? 0,
+        dreamerBD:    data.dreamerBreakdown ?? {},
+        cash3:        data.totalCash3Windows ?? 0,
+        cash4:        data.totalCash4Windows ?? 0,
+        dreamers:     data.totalUniqueDreamers ?? 0,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load active windows.');
     } finally { setLoading(false); }
@@ -211,6 +222,69 @@ export default function ActiveWindowsPage() {
           console.log('Dreamer filter requires dreamerId; selected visible breakdown label:', name);
         }}
       />
+      {/* Summary tiles using full window-groups data */}
+      {!loading && groupSummary.totalWindows > 0 && (
+        <section style={{ display:'grid', gap:'10px', gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))' }}>
+          {[
+            { label:'Dream Groups',   val:groupSummary.groupCount,   color:'#a090ff' },
+            { label:'Total Watch Items', val:groupSummary.totalWindows, color:'#ff8a6a' },
+            { label:'Unique Dreamers',val:Object.keys(groupSummary.dreamerBD).length, color:'#ffcc50' },
+            { label:'Cash 3 Windows', val:groupSummary.cash3,         color:'#ff8a6a' },
+            { label:'Cash 4 Windows', val:groupSummary.cash4,         color:'#a090ff' },
+          ].map(({ label, val, color }) => (
+            <div key={label} style={{ background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.10)', borderRadius:'14px', padding:'12px 14px' }}>
+              <strong style={{ fontSize:'1.5rem', fontWeight:900, letterSpacing:'-0.04em', display:'block', lineHeight:1, color, fontFamily:'system-ui,sans-serif' }}>{val}</strong>
+              <span style={{ color:'rgba(255,255,255,0.40)', fontSize:'10px', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.08em', fontFamily:'system-ui,sans-serif' }}>{label}</span>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Dream group cards — one card per dream entry */}
+      {!loading && groups.length > 0 && (
+        <section style={{ display:'grid', gap:'12px' }}>
+          <h2 style={{ margin:0, fontSize:'1.0rem', fontWeight:900, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
+            Active Dream Groups
+          </h2>
+          {groups.map((g: any) => (
+            <div key={g.dreamEntryId || g.dreamerName} style={{ padding:'14px 16px', borderRadius:'18px',
+              background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.10)' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', gap:'12px', flexWrap:'wrap', alignItems:'flex-start', marginBottom:'10px' }}>
+                <div>
+                  <div style={{ fontSize:'14px', fontWeight:800, color:'#fff', fontFamily:'system-ui,sans-serif' }}>{g.dreamerName}</div>
+                  <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.40)', fontFamily:'monospace', marginTop:'2px' }}>
+                    {g.dreamDate || g.activeStart} → {g.activeEnd}
+                  </div>
+                </div>
+                <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center' }}>
+                  <span style={{ fontSize:'13px', fontWeight:700, color:'#60e09a' }}>{g.windowCount} watch items</span>
+                  {g.cash3Count > 0 && <span style={{ fontSize:'11px', padding:'2px 6px', borderRadius:'6px', background:'rgba(255,107,74,0.14)', color:'#ff8a6a', border:'1px solid rgba(255,107,74,0.26)' }}>{g.cash3Count}×C3</span>}
+                  {g.cash4Count > 0 && <span style={{ fontSize:'11px', padding:'2px 6px', borderRadius:'6px', background:'rgba(160,144,255,0.14)', color:'#a090ff', border:'1px solid rgba(160,144,255,0.26)' }}>{g.cash4Count}×C4</span>}
+                </div>
+              </div>
+              {g.terms.length > 0 && (
+                <div style={{ display:'flex', gap:'5px', flexWrap:'wrap', marginBottom:'7px' }}>
+                  <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)', marginRight:'3px', fontFamily:'system-ui,sans-serif', fontWeight:700 }}>TERMS</span>
+                  {g.terms.slice(0, 8).map((t: string) => (
+                    <span key={t} style={{ padding:'2px 7px', borderRadius:'6px', fontSize:'11px', fontWeight:700, background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.11)', color:'rgba(255,255,255,0.75)' }}>{t}</span>
+                  ))}
+                  {g.terms.length > 8 && <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>+{g.terms.length - 8} more</span>}
+                </div>
+              )}
+              {g.numbers.length > 0 && (
+                <div style={{ display:'flex', gap:'5px', flexWrap:'wrap' }}>
+                  <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)', marginRight:'3px', fontFamily:'system-ui,sans-serif', fontWeight:700 }}>NUMBERS</span>
+                  {g.numbers.slice(0, 10).map((n: string) => (
+                    <span key={n} style={{ fontFamily:'monospace', fontWeight:700, fontSize:'11px', padding:'2px 6px', borderRadius:'6px', background:'rgba(255,107,74,0.14)', border:'1px solid rgba(255,107,74,0.26)', color:'#ff8a6a' }}>{n}</span>
+                  ))}
+                  {g.numbers.length > 10 && <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>+{g.numbers.length - 10} more</span>}
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+
       {loading && <section className="journal-card"><p>Loading dream windows…</p></section>}
         {error && <ErrorBanner msg={error} />}
         {!loading && !grouped.length && <section className="journal-card"><p>No dream windows yet. <Link href="/dreams/new">Create your first dream entry →</Link></p></section>}

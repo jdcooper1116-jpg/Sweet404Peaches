@@ -133,7 +133,7 @@ export default function PerformancePage() {
       } catch (e) { errs.push(String(e)); return {}; }
     };
     Promise.all([
-      safe(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+      safe(`/api/dreams/window-groups?ownerUid=${uid}&limit=50`),
       safe(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
       safe(`/api/fell-before?ownerUid=${uid}&limit=250`),
       safe(`/api/dictionary/terms?ownerUid=${uid}&limit=500`),
