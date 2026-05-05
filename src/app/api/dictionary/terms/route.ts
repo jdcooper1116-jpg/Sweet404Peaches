@@ -70,6 +70,7 @@ function expandDoc(docId: string, data: Record<string, any>, ownerUid: string): 
   const updatedAt = data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null;
 
   const base = {
+    id: docId,
     sourceDocId: docId,
     ownerUid: data.ownerUid ?? ownerUid,
     termLabel,
@@ -134,13 +135,14 @@ export async function GET(req: NextRequest) {
     const db = getAdminDb();
 
     // termNumberMappings query.
-    // dreamerId is NOT applied here — older docs may lack the field entirely.
-    // expandDoc() assigns fallback dreamerId = "owner-self", so in-memory
-    // filtering (below) correctly matches those legacy rows.
+    // When dreamerId is provided, use a targeted Firestore query so that
+    // owner-self rows are not hidden behind a broad capped ownerUid query.
+    // Legacy rows without dreamerId can still be handled by the fallback broad path below.
     let tmQuery = db
       .collection('termNumberMappings')
       .where('ownerUid', '==', ownerUid);
 
+    if (dreamerId) tmQuery = tmQuery.where('dreamerId', '==', dreamerId) as any;
     if (source) tmQuery = tmQuery.where('source', '==', source) as any;
 
     // personalHitMappings join — only when includeHits=true (saves reads on most calls)
@@ -226,7 +228,7 @@ export async function POST(req: NextRequest) {
     const number      = String(body.number      || '').trim();
     const gameType    = String(body.gameType    || 'cash3').trim();
     const source      = String(body.source      || 'manual').trim();
-    const dreamerId   = String(body.dreamerId   || '').trim();
+    const dreamerId   = String(body.dreamerId   || 'owner-self').trim();
     const dreamerName = String(body.dreamerName || '').trim();
     const note        = String(body.note        || body.rawContext || '').trim();
     const dreamDate   = String(body.dreamDate   || '').trim();
@@ -256,7 +258,7 @@ export async function POST(req: NextRequest) {
     const now = Timestamp.now();
 
     // Deterministic doc ID — includes dreamerId so two dreamers get separate docs
-    const docId = [ownerUid, dreamerId || 'shared', termLabel, number, gameType]
+    const docId = [ownerUid, dreamerId || 'owner-self', termLabel, number, gameType]
       .map(v => String(v).replace(/[^a-zA-Z0-9_-]/g, '_'))
       .join('__');
 
@@ -271,8 +273,8 @@ export async function POST(req: NextRequest) {
       updatedAt: now,
     };
 
-    if (dreamerId)          payload.dreamerId          = dreamerId;
-    if (dreamerName)        payload.dreamerName        = dreamerName;
+    payload.dreamerId = dreamerId || 'owner-self';
+    payload.dreamerName = dreamerName || (dreamerId === 'owner-self' ? 'Owner / Self' : '');
     if (note)               payload.rawContext         = note;
     if (note)               payload.confidenceBasis    = note;
     if (dreamDate)          payload.dreamDate          = dreamDate;
