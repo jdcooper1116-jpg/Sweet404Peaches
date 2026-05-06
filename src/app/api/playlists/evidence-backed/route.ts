@@ -1,462 +1,494 @@
-/**
- * GET /api/playlists/evidence-backed?ownerUid=...
- *
- * Builds State Playlist candidates using STRICT past-window evidence.
- *
- * CORE RULE:
- *   A number is only promoted to the State Playlist if the active dream term
- *   has produced that same number / state / gameType in a COMPLETELY DIFFERENT
- *   past active dream window — not the current one.
- *
- *   "Sister dreamed today → 515/CA fell 2 years ago after an older sister dream"
- *   = 515/CA is a candidate.
- *
- *   "Sister dreamed today → 515/CA fell yesterday in this same window"
- *   = 515/CA is NOT a playlist candidate; it goes in Recent Hits.
- *
- * EVENT QUALIFICATION:
- *   A personalHitEvent qualifies as past evidence for term T only if ALL of:
- *     1. event.normalizedTerm == T
- *     2. event.activeWindowId  ∉ currentWindowIds[T]
- *     3. event.sourceDreamEntryId or dreamEntryId ∉ currentDreamEntryIds[T]
- *     4. event.drawDate < earliestActiveStart[T]  (pre-dates current windows)
- *     5. event is not deprecated
- *
- * STRENGTH TIERS (based on uniquePastDreamWindowCount):
- *   Strong Repeat Play    — 3+ separate past dream windows
- *   Watch Closely         — 2 separate past dream windows
- *   Soft Historical Signal — 1 separate past dream window
- *   Recent Hit Only       — current-window evidence only (separate section)
- *   No Evidence Yet       — no evidence at all (collapsed section)
- *
- * Params:
- *   ownerUid          required
- *   dreamerId         optional
- *   state             optional
- *   gameType          optional  cash3 | cash4
- *   includeNoEvidence optional  default false
- *   limit             optional  max terms to look up, default 30, max 50
- */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
-import { normalizeTerm, boxedKey as bk } from '@/lib/intelligence/hitClassification';
 
-export const dynamic     = 'force-dynamic';
-export const maxDuration = 30;
+export const dynamic = 'force-dynamic';
+export const maxDuration = 120;
+
+type Candidate = {
+  termLabel: string;
+  normalizedTerm: string;
+  number: string;
+  boxedKey: string;
+  state: string;
+  gameType: string;
+  strengthTier: string;
+  verifiedPastEventCount: number;
+  uniquePastDreamWindowCount: number;
+  uniquePastDreamEntryCount: number;
+  uniquePastDrawDateCount: number;
+  straightCount: number;
+  boxedCount: number;
+  firstPastHitDate: string;
+  lastPastHitDate: string;
+  activeDreamers: string[];
+  activeDreamerCount: number;
+  currentActiveWindowCount: number;
+  reason: string;
+};
 
 function isQuotaError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
-}
-function resolveGT(raw: string): string {
-  if (raw === 'pick3') return 'cash3';
-  if (raw === 'pick4') return 'cash4';
-  return raw;
+  return msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('429');
 }
 
-// Tier based strictly on unique past dream window count
-function pastWindowTier(uniquePastWindows: number): string {
-  if (uniquePastWindows >= 3) return 'Strong Repeat Play';
-  if (uniquePastWindows === 2) return 'Watch Closely';
-  if (uniquePastWindows === 1) return 'Soft Historical Signal';
+function normalizeTerm(term: unknown): string {
+  return String(term ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+}
+
+function displayTerm(term: unknown): string {
+  return String(term ?? '').trim().toLowerCase();
+}
+
+function boxedKey(n: unknown): string {
+  return String(n ?? '').split('').sort().join('');
+}
+
+function resolveGameType(raw: unknown): string {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'pick3') return 'cash3';
+  if (s === 'pick4') return 'cash4';
+  return s;
+}
+
+function strengthTier(pastWindowCount: number): string {
+  if (pastWindowCount >= 3) return 'Strong Repeat Play';
+  if (pastWindowCount === 2) return 'Watch Closely';
+  if (pastWindowCount === 1) return 'Soft Historical Signal';
   return 'No Evidence Yet';
 }
-function tierSort(tier: string): number {
-  return tier === 'Strong Repeat Play'     ? 5
-       : tier === 'Cross-Dream Convergence'? 4
-       : tier === 'Watch Closely'          ? 3
-       : tier === 'Soft Historical Signal' ? 2
-       : 1;
+
+function sortStrength(tier: string): number {
+  if (tier === 'Strong Repeat Play') return 4;
+  if (tier === 'Watch Closely') return 3;
+  if (tier === 'Soft Historical Signal') return 2;
+  if (tier === 'Recent Hit Only') return 1;
+  return 0;
+}
+
+function asDateString(value: any): string {
+  return String(value?.toDate?.()?.toISOString?.()?.slice(0, 10) ?? value ?? '').slice(0, 10);
 }
 
 export async function GET(req: NextRequest) {
   try {
-    const params        = req.nextUrl.searchParams;
-    const ownerUid      = resolveOwnerUid(params.get('ownerUid'));
-    const dreamerFilter = (params.get('dreamerId')         ?? '').trim();
-    const stateFilter   = (params.get('state')             ?? '').trim();
-    const gameFilter    = resolveGT((params.get('gameType') ?? '').trim());
-    const includeNoEv   = params.get('includeNoEvidence')  === 'true';
-    const termLimit     = Math.min(Number(params.get('limit') ?? 30), 50);
-    const today         = new Date().toISOString().slice(0, 10);
+    const params = req.nextUrl.searchParams;
+    const ownerUid = resolveOwnerUid(params.get('ownerUid'));
+    const dreamerFilter = String(params.get('dreamerId') ?? '').trim();
+    const stateFilter = String(params.get('state') ?? '').trim().toUpperCase();
+    const gameTypeFilter = resolveGameType(params.get('gameType') ?? '');
+    const includeNoEvidence = params.get('includeNoEvidence') === 'true';
+    const termLimit = Math.min(Math.max(Number(params.get('termLimit') ?? 60), 1), 100);
+    const perDreamerLimit = Math.min(Math.max(Number(params.get('limit') ?? 250), 1), 250);
+    const today = new Date().toISOString().slice(0, 10);
 
     const db = getAdminDb();
 
-    // ── Step 1: Load all active windows (per-dreamer to avoid flat cap) ───
+    // 1. Load active windows safely, per dreamer.
+    const dreamers: Array<{ id: string; displayName: string }> = [];
+
+    if (dreamerFilter) {
+      const d = await db.collection('dreamers').doc(dreamerFilter).get();
+      if (d.exists) {
+        const data = d.data() || {};
+        dreamers.push({ id: d.id, displayName: String(data.displayName ?? data.dreamerName ?? d.id) });
+      } else {
+        dreamers.push({ id: dreamerFilter, displayName: dreamerFilter });
+      }
+    } else {
+      const snap = await db.collection('dreamers').where('ownerUid', '==', ownerUid).limit(250).get();
+      for (const doc of snap.docs) {
+        const d = doc.data() || {};
+        dreamers.push({ id: doc.id, displayName: String(d.displayName ?? d.dreamerName ?? doc.id) });
+      }
+      if (!dreamers.some(d => d.id === 'owner-self')) {
+        dreamers.push({ id: 'owner-self', displayName: 'Sweet404Peaches' });
+      }
+    }
+
     const allWindows: any[] = [];
-    const seenWin = new Set<string>();
+    const seenWindows = new Set<string>();
+    const queryWarnings: string[] = [];
 
-    const dreamersSnap = await db.collection('dreamers')
-      .where('ownerUid', '==', ownerUid).limit(30).get();
-    const dreamerIds = dreamerFilter
-      ? [dreamerFilter]
-      : ['owner-self', ...dreamersSnap.docs.map(d => d.id)];
-
-    await Promise.allSettled(dreamerIds.map(async did => {
+    for (const dreamer of dreamers) {
       try {
         const snap = await db.collection('activeDreamWindows')
-          .where('ownerUid',  '==', ownerUid)
-          .where('dreamerId', '==', did)
-          .where('activeEnd', '>=', today)
-          .limit(200).get();
-        for (const doc of snap.docs) {
-          if (seenWin.has(doc.id)) continue;
-          seenWin.add(doc.id);
-          const d = doc.data();
-          allWindows.push({ id: doc.id, ...d, gameType: resolveGT(String(d.gameType ?? d.game_type ?? '')) });
+          .where('ownerUid', '==', ownerUid)
+          .where('dreamerId', '==', dreamer.id)
+          .limit(perDreamerLimit)
+          .get();
+
+        if (snap.docs.length >= perDreamerLimit) {
+          queryWarnings.push(`${dreamer.displayName} reached per-dreamer cap ${perDreamerLimit}.`);
         }
-      } catch { /* non-fatal */ }
-    }));
 
-    // ── Step 2: Build term metadata + CURRENT WINDOW EXCLUSION SETS ───────
-    // For each active term we track:
-    //   currentWindowIds    — window IDs active right now for this term
-    //   currentEntryIds     — dreamEntryIds active right now for this term
-    //   earliestActiveStart — earliest activeStart of current windows (cutoff date)
-    //
-    // An event is "past evidence" only if it predates ALL of these.
+        for (const doc of snap.docs) {
+          if (seenWindows.has(doc.id)) continue;
+          const d = doc.data() || {};
+          const activeEnd = String(d.activeEnd ?? d.activeWindowEnd ?? '');
+          if (activeEnd && activeEnd < today) continue;
 
+          const termLabel = String(d.termLabel ?? d.term ?? d.label ?? d.normalizedTerm ?? '').trim();
+          const normalizedTerm = normalizeTerm(d.normalizedTerm ?? termLabel);
+          const number = String(d.number ?? d.candidateNumber ?? d.candidate ?? d.playedNumber ?? '').trim();
+          const gameType = resolveGameType(d.gameType ?? d.game_type ?? d.lotteryGame ?? '');
+
+          if (!normalizedTerm || !number || !gameType) continue;
+
+          seenWindows.add(doc.id);
+          allWindows.push({
+            id: doc.id,
+            ...d,
+            termLabel,
+            normalizedTerm,
+            number,
+            gameType,
+            dreamerId: d.dreamerId ?? dreamer.id,
+            dreamerName: d.dreamerName ?? dreamer.displayName,
+            dreamEntryId: d.dreamEntryId ?? d.sourceDreamEntryId ?? '',
+            activeStart: String(d.activeStart ?? d.activeWindowStart ?? d.dreamDate ?? ''),
+            activeEnd,
+          });
+        }
+      } catch (e) {
+        queryWarnings.push(`Failed active window query for ${dreamer.displayName}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // 2. Build active term metadata.
     type TermMeta = {
-      rawTerm:            string;
-      normalizedTerm:     string;
-      activeDreamers:     Set<string>;
-      currentWindowIds:   Set<string>;   // IDs of windows active NOW for this term
-      currentEntryIds:    Set<string>;   // dreamEntryIds active NOW for this term
-      earliestActiveStart:string;        // earliest start of current windows
-      activeNumbers:      Map<string, Set<string>>; // num::gt → dreamers
+      rawTerm: string;
+      normalizedTerm: string;
+      activeDreamers: Set<string>;
+      currentWindowIds: Set<string>;
+      currentEntryIds: Set<string>;
+      currentActiveStarts: string[];
+      activeNumbers: Map<string, Set<string>>; // number::gameType -> dreamer names
+      currentActiveWindowCount: number;
     };
 
     const termMeta = new Map<string, TermMeta>();
 
     for (const w of allWindows) {
-      const dn  = String(w.dreamerName ?? w.dreamerId ?? 'unknown');
-      const tl  = String(w.termLabel   ?? '').trim().toLowerCase();
-      const nt  = normalizeTerm(tl);
-      const num = String(w.number      ?? '').trim();
-      const gt  = String(w.gameType    ?? '');
-      const astart = String(w.activeStart ?? w.dreamDate ?? '');
-      const eid = String(w.dreamEntryId ?? '');
-
-      if (!nt) continue;
-
+      const nt = String(w.normalizedTerm);
       if (!termMeta.has(nt)) {
         termMeta.set(nt, {
-          rawTerm: tl, normalizedTerm: nt,
-          activeDreamers:    new Set(),
-          currentWindowIds:  new Set(),
-          currentEntryIds:   new Set(),
-          earliestActiveStart: astart,
-          activeNumbers:     new Map(),
+          rawTerm: displayTerm(w.termLabel || nt),
+          normalizedTerm: nt,
+          activeDreamers: new Set(),
+          currentWindowIds: new Set(),
+          currentEntryIds: new Set(),
+          currentActiveStarts: [],
+          activeNumbers: new Map(),
+          currentActiveWindowCount: 0,
         });
       }
+
       const tm = termMeta.get(nt)!;
-      tm.activeDreamers.add(dn);
-      tm.currentWindowIds.add(w.id);
-      if (eid) tm.currentEntryIds.add(eid);
-      // Track earliest activeStart for this term's current windows
-      if (astart && (!tm.earliestActiveStart || astart < tm.earliestActiveStart)) {
-        tm.earliestActiveStart = astart;
+      tm.activeDreamers.add(String(w.dreamerName || w.dreamerId || 'unknown'));
+      tm.currentWindowIds.add(String(w.id));
+      if (w.dreamEntryId) tm.currentEntryIds.add(String(w.dreamEntryId));
+      if (w.activeStart) tm.currentActiveStarts.push(String(w.activeStart).slice(0, 10));
+      tm.currentActiveWindowCount += 1;
+
+      const numKey = `${w.number}::${w.gameType}`;
+      if (!tm.activeNumbers.has(numKey)) tm.activeNumbers.set(numKey, new Set());
+      tm.activeNumbers.get(numKey)!.add(String(w.dreamerName || w.dreamerId || 'unknown'));
+    }
+
+    const terms = Array.from(termMeta.values()).slice(0, termLimit);
+
+    // 3. Load event proof directly from personalHitEvents.
+    const evidenceGroups = new Map<string, {
+      termLabel: string;
+      normalizedTerm: string;
+      number: string;
+      state: string;
+      gameType: string;
+      straight: number;
+      boxed: number;
+      events: number;
+      pastWindows: Set<string>;
+      pastEntries: Set<string>;
+      pastDrawDates: Set<string>;
+      firstDate: string;
+      lastDate: string;
+      activeDreamers: Set<string>;
+      activeWindowCount: number;
+    }>();
+
+    const recentGroups = new Map<string, Candidate>();
+
+    let totalEventsChecked = 0;
+    let qualifiedPastEvents = 0;
+    let excludedSameWindowEvents = 0;
+    let excludedSameDreamEvents = 0;
+    let excludedCurrentPeriodEvents = 0;
+
+    for (const tm of terms) {
+      const earliestCurrentActiveStart = tm.currentActiveStarts.length
+        ? tm.currentActiveStarts.sort()[0]
+        : today;
+
+      let snaps: any[] = [];
+
+      try {
+        const snap1 = await db.collection('personalHitEvents')
+          .where('ownerUid', '==', ownerUid)
+          .where('normalizedTerm', '==', tm.normalizedTerm)
+          .limit(250)
+          .get();
+        snaps.push(snap1);
+      } catch (e) {
+        queryWarnings.push(`personalHitEvents normalizedTerm query failed for ${tm.normalizedTerm}: ${e instanceof Error ? e.message : String(e)}`);
       }
-      if (num && gt) {
-        const numKey = `${num}::${gt}`;
-        if (!tm.activeNumbers.has(numKey)) tm.activeNumbers.set(numKey, new Set());
-        tm.activeNumbers.get(numKey)!.add(dn);
+
+      // Fallback for legacy rows that may lack normalizedTerm.
+      try {
+        const snap2 = await db.collection('personalHitEvents')
+          .where('ownerUid', '==', ownerUid)
+          .where('termLabel', '==', tm.rawTerm)
+          .limit(250)
+          .get();
+        snaps.push(snap2);
+      } catch {
+        // Non-fatal.
+      }
+
+      const seenEventIds = new Set<string>();
+
+      for (const snap of snaps) {
+        for (const doc of snap.docs) {
+          if (seenEventIds.has(doc.id)) continue;
+          seenEventIds.add(doc.id);
+
+          const ev = doc.data() || {};
+          totalEventsChecked += 1;
+
+          const evNumber = String(ev.number ?? ev.candidateNumber ?? ev.candidate ?? '').trim();
+          const evGameType = resolveGameType(ev.gameType ?? ev.game_type ?? '');
+          const evState = String(ev.state ?? '').trim().toUpperCase();
+          const evDrawDate = asDateString(ev.drawDate ?? ev.draw_date ?? ev.lastHitDate ?? '');
+          const evWindowId = String(ev.activeWindowId ?? ev.dreamWindowId ?? '');
+          const evEntryId = String(ev.sourceDreamEntryId ?? ev.dreamEntryId ?? ev.backtestDreamId ?? '');
+          const evHitType = String(ev.hitType ?? ev.matchMode ?? ev.match_type ?? '').toLowerCase();
+
+          if (!evNumber || !evGameType || !evState) continue;
+          if (stateFilter && evState !== stateFilter) continue;
+          if (gameTypeFilter && evGameType !== gameTypeFilter) continue;
+
+          const activeNumKey = `${evNumber}::${evGameType}`;
+          if (!tm.activeNumbers.has(activeNumKey)) continue;
+
+          const isSameWindow = evWindowId && tm.currentWindowIds.has(evWindowId);
+          const isSameDream = evEntryId && tm.currentEntryIds.has(evEntryId);
+          const isCurrentPeriod = evDrawDate && evDrawDate >= earliestCurrentActiveStart;
+
+          const recentKey = `${tm.normalizedTerm}::${evNumber}::${evGameType}::${evState}`;
+
+          if (isSameWindow || isSameDream || isCurrentPeriod) {
+            if (isSameWindow) excludedSameWindowEvents += 1;
+            if (isSameDream) excludedSameDreamEvents += 1;
+            if (isCurrentPeriod) excludedCurrentPeriodEvents += 1;
+
+            if (!recentGroups.has(recentKey)) {
+              recentGroups.set(recentKey, {
+                termLabel: tm.rawTerm,
+                normalizedTerm: tm.normalizedTerm,
+                number: evNumber,
+                boxedKey: boxedKey(evNumber),
+                state: evState,
+                gameType: evGameType,
+                strengthTier: 'Recent Hit Only',
+                verifiedPastEventCount: 0,
+                uniquePastDreamWindowCount: 0,
+                uniquePastDreamEntryCount: 0,
+                uniquePastDrawDateCount: 0,
+                straightCount: 0,
+                boxedCount: 0,
+                firstPastHitDate: '',
+                lastPastHitDate: evDrawDate,
+                activeDreamers: Array.from(tm.activeDreamers),
+                activeDreamerCount: tm.activeDreamers.size,
+                currentActiveWindowCount: tm.currentActiveWindowCount,
+                reason: `"${tm.rawTerm}" hit ${evNumber} in ${evState} during the current active period. It is not promoted until it repeats in an independent future/past dream window.`,
+              });
+            }
+            continue;
+          }
+
+          qualifiedPastEvents += 1;
+
+          if (!evidenceGroups.has(recentKey)) {
+            evidenceGroups.set(recentKey, {
+              termLabel: tm.rawTerm,
+              normalizedTerm: tm.normalizedTerm,
+              number: evNumber,
+              state: evState,
+              gameType: evGameType,
+              straight: 0,
+              boxed: 0,
+              events: 0,
+              pastWindows: new Set(),
+              pastEntries: new Set(),
+              pastDrawDates: new Set(),
+              firstDate: '',
+              lastDate: '',
+              activeDreamers: new Set(tm.activeDreamers),
+              activeWindowCount: tm.currentActiveWindowCount,
+            });
+          }
+
+          const g = evidenceGroups.get(recentKey)!;
+          g.events += 1;
+          if (evHitType === 'straight' || evHitType === 'exact') g.straight += 1;
+          else g.boxed += 1;
+
+          const pastWindowKey = evWindowId || evEntryId || evDrawDate || doc.id;
+          if (pastWindowKey) g.pastWindows.add(pastWindowKey);
+          if (evEntryId) g.pastEntries.add(evEntryId);
+          if (evDrawDate) {
+            g.pastDrawDates.add(evDrawDate);
+            if (!g.firstDate || evDrawDate < g.firstDate) g.firstDate = evDrawDate;
+            if (!g.lastDate || evDrawDate > g.lastDate) g.lastDate = evDrawDate;
+          }
+        }
       }
     }
 
-    const uniqueTerms = Array.from(termMeta.values()).slice(0, termLimit);
-    if (uniqueTerms.length === 0) {
-      return NextResponse.json({
-        ok: true, candidates: [], noEvidenceCandidates: [], recentHitOnlyCandidates: [],
-        count: 0, noEvidenceCount: 0, recentHitOnlyCount: 0,
-        activeTermCount: 0, activeWindowCount: 0, dreamerBreakdown: {},
-        debug: { activeWindowCount: allWindows.length, activeTermCount: 0,
-          totalEventsChecked: 0, qualifiedPastEvents: 0,
-          excludedSameWindowEvents: 0, excludedSameDreamEvents: 0,
-          excludedCurrentPeriodEvents: 0, candidatesPromoted: 0,
-          recentHitOnlyCount: 0, noEvidenceCount: 0 },
+    // 4. Build candidates from qualified past-window evidence only.
+    const evidenceCandidates: Candidate[] = [];
+
+    for (const g of evidenceGroups.values()) {
+      const pastWindowCount = g.pastWindows.size;
+      if (pastWindowCount < 1) continue;
+
+      const tier = strengthTier(pastWindowCount);
+      const dateText = g.firstDate && g.lastDate && g.firstDate !== g.lastDate
+        ? ` (${g.firstDate} – ${g.lastDate})`
+        : g.lastDate ? ` (last: ${g.lastDate})` : '';
+
+      evidenceCandidates.push({
+        termLabel: g.termLabel,
+        normalizedTerm: g.normalizedTerm,
+        number: g.number,
+        boxedKey: boxedKey(g.number),
+        state: g.state,
+        gameType: g.gameType,
+        strengthTier: tier,
+        verifiedPastEventCount: g.events,
+        uniquePastDreamWindowCount: pastWindowCount,
+        uniquePastDreamEntryCount: g.pastEntries.size,
+        uniquePastDrawDateCount: g.pastDrawDates.size,
+        straightCount: g.straight,
+        boxedCount: g.boxed,
+        firstPastHitDate: g.firstDate,
+        lastPastHitDate: g.lastDate,
+        activeDreamers: Array.from(g.activeDreamers),
+        activeDreamerCount: g.activeDreamers.size,
+        currentActiveWindowCount: g.activeWindowCount,
+        reason: `"${g.termLabel}" has produced ${g.number} in ${g.state} across ${pastWindowCount} separate past dream window${pastWindowCount === 1 ? '' : 's'}${dateText}.`,
       });
     }
 
-    // ── Step 3: Load personalHitEvents per active term ────────────────────
-    // This is the ONLY truth source. personalHitMappings is not used for counts.
-    const allEventRows: any[] = [];
-    const seenEv = new Set<string>();
-
-    await Promise.allSettled(uniqueTerms.map(async tm => {
-      try {
-        let q: any = db.collection('personalHitEvents')
-          .where('ownerUid',      '==', ownerUid)
-          .where('normalizedTerm','==', tm.normalizedTerm);
-        if (stateFilter)   q = q.where('state',    '==', stateFilter);
-        if (gameFilter === 'cash3' || gameFilter === 'cash4') q = q.where('gameType', '==', gameFilter);
-        if (dreamerFilter) q = q.where('dreamerId','==', dreamerFilter);
-        const snap = await q.limit(200).get();
-        for (const doc of snap.docs) {
-          if (seenEv.has(doc.id) || doc.data()._deprecated) continue;
-          seenEv.add(doc.id);
-          allEventRows.push({ id: doc.id, ...doc.data() });
-        }
-      } catch { /* non-fatal */ }
-    }));
-
-    // ── Step 4: Qualify events — past vs current ──────────────────────────
-    type CandKey = string;  // nt::num::gt::state
-
-    type PastGroup = {
-      termLabel:               string;
-      normalizedTerm:          string;
-      number:                  string;
-      boxedKey:                string;
-      state:                   string;
-      gameType:                string;
-      verifiedPastEventCount:  number;
-      uniquePastDreamWindowCount: number;
-      uniquePastDreamEntryCount:  number;
-      uniquePastDrawDateCount:    number;
-      straightCount:           number;
-      boxedCount:              number;
-      firstPastHitDate:        string;
-      lastPastHitDate:         string;
-      pastWindowIds:           Set<string>;
-      pastEntryIds:            Set<string>;
-      pastDrawDates:           Set<string>;
-      // For Cross-Dream: dreamers whose PAST evidence included this candidate
-      pastEvidenceDreamers:    Set<string>;
-    };
-
-    type CurrentGroup = {
-      nt: string; num: string; gt: string; state: string;
-      eventCount: number;
-    };
-
-    const pastGroups    = new Map<CandKey, PastGroup>();
-    const currentGroups = new Map<CandKey, CurrentGroup>(); // recent-hit-only tracking
-
-    // Debug counters
-    let totalEventsChecked = 0;
-    let excludedSameWindow = 0;
-    let excludedSameDream  = 0;
-    let excludedCurrentPeriod = 0;
-    let qualifiedPastEvents = 0;
-
-    for (const ev of allEventRows) {
-      totalEventsChecked++;
-      const nt    = String(ev.normalizedTerm ?? '').trim();
-      const num   = String(ev.number ?? ev.candidateNumber ?? '').trim();
-      const gt    = resolveGT(String(ev.gameType ?? ''));
-      const state = String(ev.state ?? '').trim();
-      if (!nt || !num || !state || !gt) continue;
-
-      const tm = termMeta.get(nt);
-      if (!tm) continue;  // event for a non-active term — skip
-
-      const ck: CandKey       = `${nt}::${num}::${gt}::${state}`;
-      const evWindowId        = String(ev.activeWindowId          ?? '');
-      const evEntryId         = String(ev.sourceDreamEntryId ?? ev.dreamEntryId ?? '');
-      const evDrawDate        = String(ev.drawDate                ?? '');
-      const evDreamerName     = String(ev.dreamerName             ?? '');
-      const hitType           = String(ev.hitType                 ?? 'boxed');
-
-      // ── Qualification checks ──────────────────────────────────────────
-      const isSameWindow  = evWindowId  && tm.currentWindowIds.has(evWindowId);
-      const isSameEntry   = evEntryId   && tm.currentEntryIds.has(evEntryId);
-      // Conservative date check: event must predate the EARLIEST start of current windows for this term
-      const isCurrentPeriod = tm.earliestActiveStart
-        && evDrawDate
-        && evDrawDate >= tm.earliestActiveStart;
-
-      if (isSameWindow) { excludedSameWindow++; /* fall through to track as current */ }
-      else if (isSameEntry) { excludedSameDream++;  /* fall through to track as current */ }
-      else if (isCurrentPeriod && !evWindowId && !evEntryId) {
-        // No window/entry ID but drew during current period — exclude cautiously
-        excludedCurrentPeriod++;
-        // fall through to track as current
-      } else if (!isSameWindow && !isSameEntry && (!isCurrentPeriod || evDrawDate < tm.earliestActiveStart)) {
-        // ── QUALIFIED PAST EVENT ─────────────────────────────────────────
-        qualifiedPastEvents++;
-        if (!pastGroups.has(ck)) {
-          pastGroups.set(ck, {
-            termLabel: String(ev.termLabel ?? nt), normalizedTerm: nt,
-            number: num, boxedKey: bk(num), state, gameType: gt,
-            verifiedPastEventCount: 0,
-            uniquePastDreamWindowCount: 0,
-            uniquePastDreamEntryCount: 0,
-            uniquePastDrawDateCount: 0,
-            straightCount: 0, boxedCount: 0,
-            firstPastHitDate: '', lastPastHitDate: '',
-            pastWindowIds: new Set(), pastEntryIds: new Set(), pastDrawDates: new Set(),
-            pastEvidenceDreamers: new Set(),
-          });
-        }
-        const pg = pastGroups.get(ck)!;
-        pg.verifiedPastEventCount++;
-        if (hitType === 'straight') pg.straightCount++; else pg.boxedCount++;
-        if (evWindowId)  pg.pastWindowIds.add(evWindowId);
-        if (evEntryId)   pg.pastEntryIds.add(evEntryId);
-        if (evDrawDate) {
-          pg.pastDrawDates.add(evDrawDate);
-          if (!pg.firstPastHitDate || evDrawDate < pg.firstPastHitDate) pg.firstPastHitDate = evDrawDate;
-          if (evDrawDate > pg.lastPastHitDate)                           pg.lastPastHitDate  = evDrawDate;
-        }
-        if (evDreamerName) pg.pastEvidenceDreamers.add(evDreamerName);
-        continue;
-      }
-
-      // Track as current-window evidence (for Recent Hit Only bucket)
-      if (!currentGroups.has(ck)) currentGroups.set(ck, { nt, num, gt, state, eventCount: 0 });
-      currentGroups.get(ck)!.eventCount++;
-    }
-
-    // Compute unique counts from sets
-    for (const pg of pastGroups.values()) {
-      pg.uniquePastDreamWindowCount = pg.pastWindowIds.size  || (pg.verifiedPastEventCount > 0 ? 1 : 0);
-      pg.uniquePastDreamEntryCount  = pg.pastEntryIds.size   || (pg.verifiedPastEventCount > 0 ? 1 : 0);
-      pg.uniquePastDrawDateCount    = pg.pastDrawDates.size;
-    }
-
-    // ── Step 5: Apply tiers, build output buckets ─────────────────────────
-    type Candidate = PastGroup & {
-      strengthTier:            string;
-      activeDreamers:          string[];
-      activeDreamerCount:      number;
-      currentActiveWindowCount:number;
-      hasCurrentWindowHit:     boolean;
-      qualifiedPastEvents:     number;
-      excludedCurrentWindowEvents: number;
-      reason:                  string;
-    };
-
-    const withEvidence: Candidate[]     = [];
-    const recentHitOnly: Candidate[]    = [];
-    const noEvidence:   any[]           = [];
-
-    // Candidates with past evidence
-    for (const [ck, pg] of pastGroups.entries()) {
-      const tm = termMeta.get(pg.normalizedTerm);
-      if (!tm) continue;
-
-      const crossDream = pg.pastEvidenceDreamers.size >= 2 ||
-        (tm.activeDreamers.size >= 2 && pg.uniquePastDreamWindowCount >= 1);
-
-      const tier = crossDream && pg.uniquePastDreamWindowCount >= 1
-        ? 'Cross-Dream Convergence'
-        : pastWindowTier(pg.uniquePastDreamWindowCount);
-
-      const hasCurrentHit = currentGroups.has(ck);
-      const excl = currentGroups.get(ck)?.eventCount ?? 0;
-
-      const windowWord = pg.uniquePastDreamWindowCount === 1 ? 'past dream window' : 'separate past dream windows';
-      const dateRange = pg.firstPastHitDate && pg.lastPastHitDate && pg.firstPastHitDate !== pg.lastPastHitDate
-        ? ` (${pg.firstPastHitDate} – ${pg.lastPastHitDate})`
-        : pg.lastPastHitDate ? ` (last: ${pg.lastPastHitDate})` : '';
-      const dreamerNote = crossDream ? ` across ${pg.pastEvidenceDreamers.size || tm.activeDreamers.size} dreamers` : '';
-
-      const cand: Candidate = {
-        ...pg,
-        strengthTier:             tier,
-        activeDreamers:           Array.from(tm.activeDreamers),
-        activeDreamerCount:       tm.activeDreamers.size,
-        currentActiveWindowCount: tm.currentWindowIds.size,
-        hasCurrentWindowHit:      hasCurrentHit,
-        qualifiedPastEvents:      pg.verifiedPastEventCount,
-        excludedCurrentWindowEvents: excl,
-        reason: `"${pg.termLabel}" has produced ${pg.number} in ${pg.state} across ${pg.uniquePastDreamWindowCount} ${windowWord}${dateRange}${dreamerNote}.`,
-      };
-
-      withEvidence.push(cand);
-    }
-
-    // Recent-hit-only candidates (current-window evidence, no past windows)
-    for (const [ck, cg] of currentGroups.entries()) {
-      if (pastGroups.has(ck)) continue;  // already in withEvidence
-      const tm = termMeta.get(cg.nt);
-      if (!tm) continue;
-      recentHitOnly.push({
-        termLabel: cg.nt, normalizedTerm: cg.nt,
-        number: cg.num, boxedKey: bk(cg.num), state: cg.state, gameType: cg.gt,
-        strengthTier: 'Recent Hit Only',
-        verifiedPastEventCount: 0, uniquePastDreamWindowCount: 0,
-        uniquePastDreamEntryCount: 0, uniquePastDrawDateCount: 0,
-        straightCount: 0, boxedCount: 0,
-        firstPastHitDate: '', lastPastHitDate: '',
-        pastWindowIds: new Set(), pastEntryIds: new Set(), pastDrawDates: new Set(),
-        pastEvidenceDreamers: new Set(),
-        activeDreamers: Array.from(tm.activeDreamers),
-        activeDreamerCount: tm.activeDreamers.size,
-        currentActiveWindowCount: tm.currentWindowIds.size,
-        hasCurrentWindowHit: true,
-        qualifiedPastEvents: 0,
-        excludedCurrentWindowEvents: cg.eventCount,
-        reason: `Current-window hit detected. No past independent window evidence yet.`,
-      } as any);
-    }
-
-    // No-evidence active numbers (if requested)
-    if (includeNoEv) {
-      for (const tm of uniqueTerms) {
-        for (const [numKey, dreamers] of tm.activeNumbers.entries()) {
-          const [num, gt] = numKey.split('::');
-          const hasPast    = [...pastGroups.keys()].some(k => k.startsWith(`${tm.normalizedTerm}::${num}::${gt}::`));
-          const hasCurrent = [...currentGroups.keys()].some(k => k.startsWith(`${tm.normalizedTerm}::${num}::${gt}::`));
-          if (hasPast || hasCurrent) continue;
-          noEvidence.push({
-            termLabel: tm.rawTerm, normalizedTerm: tm.normalizedTerm,
-            number: num, boxedKey: bk(num), state: '', gameType: gt,
-            strengthTier: 'No Evidence Yet',
-            verifiedPastEventCount: 0, uniquePastDreamWindowCount: 0,
-            activeDreamers: Array.from(dreamers),
-            activeDreamerCount: dreamers.size,
-            currentActiveWindowCount: tm.currentWindowIds.size,
-            reason: 'Active window number with no fell-before evidence from any past dream window.',
-          });
-        }
-      }
-    }
-
-    withEvidence.sort((a, b) =>
-      (tierSort(b.strengthTier) - tierSort(a.strengthTier)) ||
+    evidenceCandidates.sort((a, b) =>
+      (sortStrength(b.strengthTier) - sortStrength(a.strengthTier)) ||
       (b.uniquePastDreamWindowCount - a.uniquePastDreamWindowCount) ||
       (b.verifiedPastEventCount - a.verifiedPastEventCount)
     );
 
-    const dreamerBreakdown = Object.fromEntries(
-      [...new Set(allWindows.map(w => String(w.dreamerName ?? w.dreamerId ?? 'unknown')))]
-        .map(dn => [dn, allWindows.filter(w => (w.dreamerName ?? w.dreamerId) === dn).length])
+    const recentHitOnlyCandidates = Array.from(recentGroups.values())
+      .sort((a, b) => String(a.termLabel).localeCompare(String(b.termLabel)));
+
+    const evidenceKeySet = new Set(
+      evidenceCandidates.map(c => `${c.normalizedTerm}::${c.number}::${c.gameType}`)
     );
 
-    const res = NextResponse.json({
-      ok: true,
-      candidates:               withEvidence,
-      noEvidenceCandidates:     noEvidence,
-      recentHitOnlyCandidates:  recentHitOnly,
-      count:                    withEvidence.length,
-      noEvidenceCount:          noEvidence.length,
-      recentHitOnlyCount:       recentHitOnly.length,
-      activeTermCount:          uniqueTerms.length,
-      activeWindowCount:        allWindows.length,
-      dreamerBreakdown,
-      debug: {
-        activeWindowCount:           allWindows.length,
-        activeTermCount:             uniqueTerms.length,
-        totalEventsChecked,
-        qualifiedPastEvents,
-        excludedSameWindowEvents:    excludedSameWindow,
-        excludedSameDreamEvents:     excludedSameDream,
-        excludedCurrentPeriodEvents: excludedCurrentPeriod,
-        candidatesPromoted:          withEvidence.length,
-        recentHitOnlyCount:          recentHitOnly.length,
-        noEvidenceCount:             noEvidence.length,
-      },
-    });
-    res.headers.set('Cache-Control', 'private, max-age=20');
-    return res;
+    const noEvidenceCandidates: Candidate[] = [];
+    if (includeNoEvidence) {
+      for (const tm of terms) {
+        for (const [numKey, dreamers] of tm.activeNumbers.entries()) {
+          const [num, gt] = numKey.split('::');
+          if (evidenceKeySet.has(`${tm.normalizedTerm}::${num}::${gt}`)) continue;
 
+          noEvidenceCandidates.push({
+            termLabel: tm.rawTerm,
+            normalizedTerm: tm.normalizedTerm,
+            number: num,
+            boxedKey: boxedKey(num),
+            state: '',
+            gameType: gt,
+            strengthTier: 'No Evidence Yet',
+            verifiedPastEventCount: 0,
+            uniquePastDreamWindowCount: 0,
+            uniquePastDreamEntryCount: 0,
+            uniquePastDrawDateCount: 0,
+            straightCount: 0,
+            boxedCount: 0,
+            firstPastHitDate: '',
+            lastPastHitDate: '',
+            activeDreamers: Array.from(dreamers),
+            activeDreamerCount: dreamers.size,
+            currentActiveWindowCount: tm.currentActiveWindowCount,
+            reason: `Active number with no qualified past-window evidence yet.`,
+          });
+        }
+      }
+    }
+
+    const debug = {
+      activeWindowCount: allWindows.length,
+      activeTermCount: terms.length,
+      totalEventsChecked,
+      qualifiedPastEvents,
+      excludedSameWindowEvents,
+      excludedSameDreamEvents,
+      excludedCurrentPeriodEvents,
+      candidatesPromoted: evidenceCandidates.length,
+      recentHitOnlyCount: recentHitOnlyCandidates.length,
+      noEvidenceCount: noEvidenceCandidates.length,
+      queryWarnings,
+      activeTermsSample: terms.slice(0, 15).map(t => t.rawTerm),
+      activeWindowsSample: allWindows.slice(0, 5).map(w => ({
+        dreamerName: w.dreamerName,
+        termLabel: w.termLabel,
+        normalizedTerm: w.normalizedTerm,
+        number: w.number,
+        gameType: w.gameType,
+        activeStart: w.activeStart,
+        activeEnd: w.activeEnd,
+      })),
+    };
+
+    return NextResponse.json({
+      ok: true,
+      candidates: evidenceCandidates,
+      evidenceCandidates,
+      convergenceCandidates: evidenceCandidates.filter(c => c.activeDreamerCount >= 2 && c.uniquePastDreamWindowCount >= 1),
+      recentHitOnlyCandidates,
+      noEvidenceCandidates,
+      count: evidenceCandidates.length,
+      noEvidenceCount: noEvidenceCandidates.length,
+      activeWindowCount: allWindows.length,
+      activeTermCount: terms.length,
+      dreamerBreakdown: Object.fromEntries(
+        Array.from(new Set(allWindows.map(w => String(w.dreamerName || w.dreamerId || 'unknown'))))
+          .map(name => [name, allWindows.filter(w => String(w.dreamerName || w.dreamerId || 'unknown') === name).length])
+      ),
+      debug,
+    });
   } catch (err) {
+    console.error('[api/playlists/evidence-backed]', err);
     const q = isQuotaError(err);
     return NextResponse.json(
-      { ok: false, quota: q, candidates: [], noEvidenceCandidates: [], recentHitOnlyCandidates: [],
-        error: q ? 'Firebase quota exhausted.' : err instanceof Error ? err.message : 'Failed.' },
+      {
+        ok: false,
+        quota: q,
+        candidates: [],
+        evidenceCandidates: [],
+        noEvidenceCandidates: [],
+        recentHitOnlyCandidates: [],
+        error: q ? 'Firebase quota exhausted.' : err instanceof Error ? err.message : 'Failed.',
+      },
       { status: q ? 429 : 500 }
     );
   }
