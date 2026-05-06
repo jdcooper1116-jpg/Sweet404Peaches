@@ -202,3 +202,109 @@ export function canonicalPmDocIdFromRow(row: Record<string, any>): string {
     String(row.state     ?? '')
   );
 }
+
+// ─── resolveDreamerScope ──────────────────────────────────────────────────────
+
+export type DreamerScope = {
+  dreamerId:    string;
+  dreamerName:  string;
+  resolvedFrom: 'explicit' | 'backtestDream' | 'dreamEntry' | 'activeWindow' | 'owner-self';
+};
+
+/**
+ * Canonical dreamer scope resolution for all write paths.
+ *
+ * Resolution order (first non-empty wins):
+ *   1. Explicit dreamerId from the request/payload
+ *   2. Looked up from source backtestDream doc
+ *   3. Looked up from source dreamEntry doc
+ *   4. Looked up from source activeWindow doc
+ *   5. Fallback to owner-self only if no source had a different dreamer
+ *
+ * Pass the Firestore db and the relevant IDs; the function does the lookups
+ * that are necessary. Pass null for IDs that are not available.
+ *
+ * IMPORTANT: Never call this with only owner-self available when a backtestDreamId
+ * or sourceDreamEntryId is present — always resolve from the source first.
+ */
+export async function resolveDreamerScope(
+  db: any,
+  opts: {
+    explicitDreamerId?:   string | null;
+    explicitDreamerName?: string | null;
+    backtestDreamId?:     string | null;
+    dreamEntryId?:        string | null;
+    sourceDreamEntryId?:  string | null;
+    activeWindowId?:      string | null;
+    ownerUid:             string;
+  }
+): Promise<DreamerScope> {
+  const { explicitDreamerId, explicitDreamerName, backtestDreamId,
+          dreamEntryId, sourceDreamEntryId, activeWindowId, ownerUid } = opts;
+
+  // 1. Explicit dreamer passed in
+  if (explicitDreamerId && explicitDreamerId.trim()) {
+    return {
+      dreamerId:   explicitDreamerId.trim(),
+      dreamerName: (explicitDreamerName ?? '').trim(),
+      resolvedFrom: 'explicit',
+    };
+  }
+
+  // 2. Source backtestDream
+  const btid = backtestDreamId?.trim();
+  if (btid) {
+    try {
+      const doc = await db.collection('backtestDreams').doc(btid).get();
+      if (doc.exists) {
+        const d = doc.data();
+        const did = String(d.dreamerId ?? '').trim();
+        if (did) return { dreamerId: did, dreamerName: String(d.dreamerName ?? ''), resolvedFrom: 'backtestDream' };
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // 3. Source dreamEntry
+  const deid = (dreamEntryId ?? sourceDreamEntryId ?? '')?.trim();
+  if (deid && !deid.startsWith('backtest:')) {
+    try {
+      const doc = await db.collection('dreamEntries').doc(deid).get();
+      if (doc.exists) {
+        const d = doc.data();
+        const did = String(d.dreamerId ?? '').trim();
+        if (did) return { dreamerId: did, dreamerName: String(d.dreamerName ?? ''), resolvedFrom: 'dreamEntry' };
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // 4. Source activeWindow
+  const wid = activeWindowId?.trim();
+  if (wid) {
+    try {
+      const doc = await db.collection('activeDreamWindows').doc(wid).get();
+      if (doc.exists) {
+        const d = doc.data();
+        const did = String(d.dreamerId ?? '').trim();
+        if (did) return { dreamerId: did, dreamerName: String(d.dreamerName ?? ''), resolvedFrom: 'activeWindow' };
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // 5. Final fallback — owner-self
+  return { dreamerId: 'owner-self', dreamerName: '', resolvedFrom: 'owner-self' };
+}
+
+/**
+ * Canonical termNumberMappings document ID.
+ * One row per ownerUid + dreamerId + normalizedTerm + number + gameType.
+ * Prevents duplicate dictionary rows for the same term/number/gameType combination.
+ */
+export function canonicalDictDocId(
+  ownerUid:      string,
+  dreamerId:     string,
+  normalizedTerm:string,
+  number:        string,
+  gameType:      string
+): string {
+  return [ownerUid, dreamerId, normalizedTerm, number, gameType].map(safeId).join('__');
+}
