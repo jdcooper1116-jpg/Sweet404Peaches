@@ -187,14 +187,23 @@ export async function POST(req: NextRequest) {
         const hitType  = String(d.hitType   ?? 'boxed');
         if (!num) continue;
 
-        // Mark old row
-        bw.set(db.collection(col).doc(oldId), {
+        // Mark old row. For backtestHits, correct in place because the doc ID
+        // does not include dreamerId and dream-detail reads this collection directly.
+        const oldRowPatch: Record<string, any> = {
           _suspectedMisattributed:  true,
           _repairedToDreamerId:     correctDid,
           _repairedToDreamerName:   correctName,
           _repairedAt:              now,
           _repairSource:            'dreamer-attribution-repair',
-        }, { merge: true });
+        };
+
+        if (col === 'backtestHits') {
+          oldRowPatch.dreamerId = correctDid;
+          oldRowPatch.dreamerName = correctName;
+          oldRowPatch._correctedInPlace = true;
+        }
+
+        bw.set(db.collection(col).doc(oldId), oldRowPatch, { merge: true });
 
         if (col === 'personalHitEvents') {
           // Write corrected event
