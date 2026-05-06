@@ -296,6 +296,7 @@ export default function PlaylistsPage() {
   const [fellRows,    setFellRows]    = useState<FellBeforeRow[]>([]);
   const [ebCandidates,  setEbCandidates]  = useState<any[]>([]);
   const [ebNoEvidence,  setEbNoEvidence]  = useState<any[]>([]);
+  const [ebRecentOnly,  setEbRecentOnly]  = useState<any[]>([]);
   const [ebMeta,        setEbMeta]        = useState<{ activeTermCount: number; activeWindowCount: number; dreamerBreakdown: Record<string,number> }>({ activeTermCount: 0, activeWindowCount: 0, dreamerBreakdown: {} });
   const [recentHits,     setRecentHits]    = useState<any[]>([]);
   const [playlistHits,   setPlaylistHits]  = useState<any[]>([]);
@@ -347,6 +348,7 @@ export default function PlaylistsPage() {
         if (ebData?.ok) {
           setEbCandidates(ebData.candidates ?? []);
           setEbNoEvidence(ebData.noEvidenceCandidates ?? []);
+          setEbRecentOnly(ebData.recentHitOnlyCandidates ?? []);
           setEbMeta({ activeTermCount: ebData.activeTermCount ?? 0, activeWindowCount: ebData.activeWindowCount ?? 0, dreamerBreakdown: ebData.dreamerBreakdown ?? {} });
         }
         // Still set fellRows from ebData for backward compat with any helpers that use it
@@ -584,7 +586,7 @@ export default function PlaylistsPage() {
                 Evidence-Backed State Playlist
               </h2>
               <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', marginTop:'3px' }}>
-                {ebCandidates.length} candidate{ebCandidates.length !== 1 ? 's' : ''} · {ebMeta.activeWindowCount} active windows · {ebMeta.activeTermCount} active terms
+                {ebCandidates.length} candidate{ebCandidates.length !== 1 ? 's' : ''} · {ebMeta.activeWindowCount} active windows · {ebMeta.activeTermCount} active terms · past-window evidence only
               </div>
             </div>
           </div>
@@ -620,7 +622,7 @@ export default function PlaylistsPage() {
                   <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)', lineHeight:1.5, minWidth:'120px' }}>
                     <span style={{ fontWeight:700, color:'rgba(255,255,255,0.80)' }}>{c.termLabel}</span>
                     {' · '}
-                    {c.verifiedEventCount} event{c.verifiedEventCount !== 1 ? 's' : ''}
+                    {c.verifiedPastEventCount ?? c.verifiedEventCount ?? 0} verified past event{(c.verifiedPastEventCount ?? c.verifiedEventCount ?? 0) !== 1 ? 's' : ''}
                     {c.straightCount > 0 && ` · ${c.straightCount}S`}
                     {c.boxedCount > 0   && ` · ${c.boxedCount}B`}
                     {c.lastHitDate && <span style={{ color:'rgba(255,255,255,0.35)', marginLeft:'6px', fontFamily:'monospace', fontSize:'11px' }}>{c.lastHitDate}</span>}
@@ -667,7 +669,7 @@ export default function PlaylistsPage() {
                 <div style={{ flex:1, fontSize:'12px', color:'rgba(255,255,255,0.55)' }}>
                   <span style={{ fontWeight:700, color:'rgba(255,255,255,0.80)' }}>{c.termLabel}</span>
                   {' · '}{c.activeDreamerCount} dreamers: {c.activeDreamers.slice(0,3).join(', ')}
-                  {' · '}{c.verifiedEventCount} verified event{c.verifiedEventCount !== 1 ? 's' : ''}
+                  {' · '}{c.verifiedPastEventCount ?? 0} verified past event{(c.verifiedPastEventCount ?? 0) !== 1 ? 's' : ''}
                 </div>
               </div>
             ))}
@@ -676,11 +678,28 @@ export default function PlaylistsPage() {
       )}
 
       {/* ── Section 3: Recent Confirmed Hits From Active Windows ── */}
-      {!loading && recentHits.length > 0 && (
+      {!loading && (recentHits.length > 0 || ebRecentOnly.length > 0) && (
         <section className="journal-card">
-          <h2 style={{ margin:'0 0 12px', fontSize:'1.0rem', fontWeight:900, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
+          <h2 style={{ margin:'0 0 4px', fontSize:'1.0rem', fontWeight:900, color:'#fff', fontFamily:'system-ui,sans-serif' }}>
             Recent Confirmed Hits From Active Windows
           </h2>
+          <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.40)', marginBottom:'12px' }}>
+            Current-window hits. These are not State Playlist candidates until they recur in a future independent dream window.
+          </div>
+          {ebRecentOnly.length > 0 && (
+            <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', marginBottom:'10px' }}>
+              {ebRecentOnly.slice(0, 10).map((c: any) => (
+                <span key={`rh::${c.normalizedTerm}::${c.number}::${c.state}`}
+                  style={{ fontFamily:'monospace', fontWeight:700, fontSize:'11px', padding:'2px 7px', borderRadius:'7px',
+                    background: c.gameType === 'cash4' ? 'rgba(160,144,255,0.14)' : 'rgba(255,107,74,0.12)',
+                    color: c.gameType === 'cash4' ? '#a090ff' : '#ff8a6a',
+                    border:`1px solid ${c.gameType === 'cash4' ? 'rgba(160,144,255,0.24)' : 'rgba(255,107,74,0.22)'}` }}>
+                  {c.number}
+                  {c.state && <span style={{ fontSize:'9px', marginLeft:'3px', opacity:0.6 }}>{c.state}</span>}
+                </span>
+              ))}
+            </div>
+          )}
           <div style={{ display:'grid', gap:'6px' }}>
             {recentHits.slice(0, 8).map((h: any, i: number) => {
               const isS = h.hitType === 'exact' || h.hitType === 'straight' || h.matchType === 'exact';
