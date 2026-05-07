@@ -187,23 +187,14 @@ export async function POST(req: NextRequest) {
         const hitType  = String(d.hitType   ?? 'boxed');
         if (!num) continue;
 
-        // Mark old row. For backtestHits, correct in place because the doc ID
-        // does not include dreamerId and dream-detail reads this collection directly.
-        const oldRowPatch: Record<string, any> = {
+        // Mark old row
+        bw.set(db.collection(col).doc(oldId), {
           _suspectedMisattributed:  true,
           _repairedToDreamerId:     correctDid,
           _repairedToDreamerName:   correctName,
           _repairedAt:              now,
           _repairSource:            'dreamer-attribution-repair',
-        };
-
-        if (col === 'backtestHits') {
-          oldRowPatch.dreamerId = correctDid;
-          oldRowPatch.dreamerName = correctName;
-          oldRowPatch._correctedInPlace = true;
-        }
-
-        bw.set(db.collection(col).doc(oldId), oldRowPatch, { merge: true });
+        }, { merge: true });
 
         if (col === 'personalHitEvents') {
           // Write corrected event
@@ -254,6 +245,35 @@ export async function POST(req: NextRequest) {
           _rebuiltAt:       now,
           _repairSource:    'dreamer-attribution-repair',
           updatedAt:        now,
+        }, { merge: true });
+        repairedMappings++;
+      }
+      await bw.commit();
+    }
+
+    // ── Shadow old misattributed personalHitMappings rows ──────────────────
+    // These were under owner-self but belong to another dreamer.
+    // We built the correct canonical pm docs above from event truth.
+    // Now mark the old ones as shadowed so fell-before excludes them.
+    const pmRows = toFix.filter(r => r.col === 'personalHitMappings');
+    for (let i = 0; i < pmRows.length; i += BATCH) {
+      const bw = db.batch();
+      for (const { id: oldId, data: d, correctDid, correctName } of pmRows.slice(i, i + BATCH)) {
+        const nt    = normalizeTerm(String(d.termLabel ?? ''));
+        const num   = String(d.number ?? d.candidateNumber ?? '').trim();
+        const gt    = resolveGT(String(d.gameType ?? ''));
+        const state = String(d.state ?? '');
+        const correctedPmId = canonicalPmDocId(ownerUid, correctDid, nt, num, gt, state);
+
+        bw.set(db.collection('personalHitMappings').doc(oldId), {
+          _suspectedMisattributed:      true,
+          _shadowedByCorrectedMapping:  true,
+          _correctedMappingDocId:       correctedPmId,
+          _repairedToDreamerId:         correctDid,
+          _repairedToDreamerName:       correctName,
+          _shadowedAt:                  now,
+          _repairedAt:                  now,
+          _repairSource:                'dreamer-attribution-repair',
         }, { merge: true });
         repairedMappings++;
       }

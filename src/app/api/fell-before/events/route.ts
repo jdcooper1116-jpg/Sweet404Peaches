@@ -165,6 +165,8 @@ export async function GET(req: NextRequest) {
       for (const doc of result.value.docs) {
         if (seen.has(doc.id)) continue;
         seen.add(doc.id);
+        const ddata = doc.data();
+        if (ddata._suspectedMisattributed || ddata._shadowedByCorrectedMapping || ddata._deprecated) continue;
         const mapped = mapHitDoc(doc);
         // Post-filter by number (since Firestore equality on a renamed field is tricky)
         if (numParam && mapped.number !== numParam) continue;

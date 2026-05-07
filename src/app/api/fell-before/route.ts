@@ -51,10 +51,19 @@ function mapDoc(doc: any): any {
   };
 }
 
+/** Returns true if a row should be excluded from user-visible fell-before results. */
+function isExcludedRow(data: Record<string, any>): boolean {
+  // Rows marked by audit/repair as belonging to a different dreamer
+  if (data._suspectedMisattributed)     return true;
+  if (data._shadowedByCorrectedMapping) return true;
+  // Rows deprecated by audit-hit-counts repair
+  if (data._deprecated)                 return true;
+  return false;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const params      = req.nextUrl.searchParams;
-    const includeDeprecated = params.get('includeDeprecated') === 'true';
     const ownerUid    = resolveOwnerUid(params.get('ownerUid'));
     const dreamerId   = (params.get('dreamerId')     ?? '').trim();
     const termRaw     = (params.get('term')          ?? '').trim().toLowerCase();
@@ -108,7 +117,11 @@ export async function GET(req: NextRequest) {
       const merged: any[] = [];
       for (const snap of [snapA, snapB]) {
         for (const doc of snap.docs) {
-          if (!seen.has(doc.id)) { seen.add(doc.id); merged.push(mapDoc(doc)); }
+          if (!seen.has(doc.id)) {
+            seen.add(doc.id);
+            const mapped = mapDoc(doc);
+            if (!isExcludedRow(doc.data())) merged.push(mapped);
+          }
         }
       }
       rows = merged;
@@ -120,7 +133,7 @@ export async function GET(req: NextRequest) {
       lookupMode = 'targeted-number';
       const q = constrain(col.where('ownerUid', '==', ownerUid).where('number', '==', numberParam));
       const snap = await q.limit(500).get();
-      rows = snap.docs.map(mapDoc);
+      rows = snap.docs.filter((doc: any) => !isExcludedRow(doc.data())).map(mapDoc);
       totalSampled = rows.length;
       filtersApplied.push(`number=${numberParam}`);
 
@@ -129,28 +142,18 @@ export async function GET(req: NextRequest) {
       lookupMode = 'browse-sample';
       const q = constrain(col.where('ownerUid', '==', ownerUid));
       const snap = await q.limit(browseLimit).get();
-      rows = snap.docs.map(mapDoc);
+      rows = snap.docs.filter((doc: any) => !isExcludedRow(doc.data())).map(mapDoc);
       totalSampled = rows.length;
       if (numberParam) {
-        rows = rows.filter(r => String(r.number ?? r.candidateNumber ?? '').includes(numberParam));
+        rows = rows.filter((r: any) => String(r.number ?? r.candidateNumber ?? '').includes(numberParam));
         filtersApplied.push(`number=${numberParam}`);
       }
-    }
-
-
-    // If a term lookup also includes a numeric filter, apply the number filter too.
-    // Previously term=crying&number=088 returned all crying rows instead of only 088.
-    if (numberParam && /^\d+$/.test(numberParam) && termRaw) {
-      rows = rows.filter((r: any) =>
-        String(r.number ?? r.candidateNumber ?? '').trim() === numberParam
-      );
-      filtersApplied.push(`number=${numberParam}`);
     }
 
     // ── Common in-memory filters ──────────────────────────────────────────────
     if (sourceParam) {
       const want = sourceParam.toLowerCase();
-      rows = rows.filter(r => {
+      rows = rows.filter((r: any) => {
         const sc = r._sourceClass as string;
         if (want === 'backtest-replay' || want === 'backtest') return sc === 'backtest-replay';
         if (want === 'live-dream-refresh' || want === 'live')  return sc === 'live-dream-refresh';
@@ -161,7 +164,7 @@ export async function GET(req: NextRequest) {
       filtersApplied.push(`source=${sourceParam}`);
     }
     if (btidParam) {
-      rows = rows.filter(r => String(r.backtestDreamId ?? '') === btidParam);
+      rows = rows.filter((r: any) => String(r.backtestDreamId ?? '') === btidParam);
       filtersApplied.push(`backtestDreamId=${btidParam}`);
     }
     if (dreamerId)  filtersApplied.push(`dreamerId=${dreamerId}`);
@@ -173,15 +176,9 @@ export async function GET(req: NextRequest) {
     for (const r of rows) deduped.set(r.id, r);
     rows = Array.from(deduped.values());
 
-    // Deprecated duplicate memory rows are preserved for audit history,
-    // but excluded from active prediction/scoring by default.
-    const visibleRows = includeDeprecated
-      ? rows
-      : rows.filter((r: any) => !r?._deprecated);
-
     const res = NextResponse.json({
-      ok: true, rows: visibleRows,
-      count: visibleRows.length, totalSampled, lookupMode,
+      ok: true, rows,
+      count: rows.length, totalSampled, lookupMode,
       filtersApplied: [...new Set(filtersApplied)],
       limit: browseLimit, dreamerId: dreamerId || 'ALL',
     });

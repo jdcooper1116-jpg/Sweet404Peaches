@@ -132,7 +132,9 @@ export default function BacktestArchivePage() {
   const uniqueDreamers= new Set(dreams.map(d => d.dreamerId ?? 'owner-self')).size;
 
   const dreamerName = (id: string, storedName: string) => {
+    // storedName is now populated from list-dreams with lookup fallback
     if (storedName) return storedName;
+    if (id === 'owner-self') return 'Owner / Self';
     const found = dreamers.find((d: any) => d.id === id);
     return found?.displayName ?? id;
   };

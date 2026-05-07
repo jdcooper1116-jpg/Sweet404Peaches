@@ -5,7 +5,7 @@
  */
 // import { rowSemanticKey } from './hitClassification';
 // (Inline below to keep helper self-contained — copy must match hitClassification.ts)
-/*
+/**
  * Pure analysis helpers for As They Fell Before.
  * No Firestore, no fetch, no writes.
  */
@@ -47,7 +47,7 @@ function rowSemKey(row: Record<string, any>): string {
 export function dedupeAggregateRows(rows: any[]): DedupedRow[] {
   // Exclude rows marked deprecated by audit-hit-counts repair.
   // Deprecated docs represent legacy duplicate doc IDs — canonical doc holds the truth.
-  const activeRows = rows.filter(r => !r._deprecated);
+  const activeRows = rows.filter(r => !r._deprecated && !r._suspectedMisattributed && !r._shadowedByCorrectedMapping);
   const map = new Map<string, DedupedRow>();
 
   for (const r of activeRows) {
@@ -156,7 +156,7 @@ export type PowerRepeat = {
   events:           FellBeforeRow[];  // individual event rows (populated by populateGroupEvents)
 };
 
-export function buildPowerRepeats(rows: any[] = [], rawRows: any[]): PowerRepeat[] {
+export function buildPowerRepeats(rows: any[]): PowerRepeat[] {
   const map = new Map<string, PowerRepeat>();
 
   for (const r of rows) {
@@ -251,7 +251,7 @@ export type BoxedRepeat = {
   events:           FellBeforeRow[];
 };
 
-export function buildBoxedRepeats(rows: any[] = [], rawRows: any[]): BoxedRepeat[] {
+export function buildBoxedRepeats(rows: any[]): BoxedRepeat[] {
   const map = new Map<string, BoxedRepeat>();
 
   for (const r of rows) {
@@ -266,9 +266,9 @@ export function buildBoxedRepeats(rows: any[] = [], rawRows: any[]): BoxedRepeat
     if (!map.has(key)) {
       map.set(key, {
         termLabel: term, boxedKey: bk, gameType: gt, state,
-        numbers: [], totalHitCount: 0, straightCount: 0, boxedCount: 0,
-        uniqueDreamCount: 0, uniqueWindowCount: 0, events: [],
-        firstHitDate: '', lastHitDate: '', sourceClasses: [],
+        numbers: [] as string[], totalHitCount: 0, straightCount: 0, boxedCount: 0,
+        firstHitDate: '', lastHitDate: '', sourceClasses: [] as string[],
+        uniqueDreamCount: 0, uniqueWindowCount: 0, events: [] as any[],
       });
     }
     const e = map.get(key)!;
@@ -305,7 +305,7 @@ export type StateHotspot = {
   strengthTier:  EvidenceStrength;
 };
 
-export function buildStateHotspots(rows: any[] = [], rawRows: any[]): StateHotspot[] {
+export function buildStateHotspots(rows: any[]): StateHotspot[] {
   const map = new Map<string, StateHotspot>();
 
   for (const r of rows) {
@@ -320,7 +320,7 @@ export function buildStateHotspots(rows: any[] = [], rawRows: any[]): StateHotsp
         termLabel: term, state, totalHitCount: 0, straightCount: 0,
         boxedCount: 0, numbers: [], uniqueDrawDates: [],
         uniqueDreamCount: 0, uniqueWindowCount: 0,
-        firstHitDate: '', lastHitDate: '', strengthTier: 'Single Evidence' as EvidenceStrength,
+        firstHitDate: '', lastHitDate: '', strengthTier: 'Single Evidence',
       });
     }
     const e = map.get(key)!;
@@ -337,9 +337,10 @@ export function buildStateHotspots(rows: any[] = [], rawRows: any[]): StateHotsp
   return Array.from(map.values())
     .map(e => ({
       ...e,
-      strengthTier: evidenceStrengthFrom(e.totalHitCount, e.uniqueDrawDates.length >= 2 ? 2 : 0),
+      strengthTier: (e.totalHitCount >= 3 || e.uniqueDrawDates.length >= 2)
+        ? 'Power Repeat' : e.totalHitCount >= 2 ? 'Strong Repeat' : 'Single Evidence',
     }))
-    .sort((a, b) => b.totalHitCount - a.totalHitCount);
+    .sort((a, b) => b.totalHitCount - a.totalHitCount) as StateHotspot[];
 }
 
 // ─── Day-window distribution ──────────────────────────────────────────────────

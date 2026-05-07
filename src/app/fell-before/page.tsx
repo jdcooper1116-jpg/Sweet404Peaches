@@ -297,11 +297,11 @@ function FellBeforeInner() {
 
   // ── Pattern analysis (only when rows are loaded) ──────────────────────────
   const powerRepeats: PowerRepeat[] = useMemo(() =>
-    rows.length > 0 ? buildPowerRepeats(rows, []) : [], [rows]);
+    rows.length > 0 ? buildPowerRepeats(rows) : [], [rows]);
   const boxedRepeats: BoxedRepeat[] = useMemo(() =>
-    rows.length > 0 ? buildBoxedRepeats(rows, []) : [], [rows]);
+    rows.length > 0 ? buildBoxedRepeats(rows) : [], [rows]);
   const stateHotspots: StateHotspot[] = useMemo(() =>
-    rows.length > 0 ? buildStateHotspots(rows, []) : [], [rows]);
+    rows.length > 0 ? buildStateHotspots(rows) : [], [rows]);
   const dayWindows = useMemo(() =>
     rows.length > 0 ? buildDayWindows(rows) : [], [rows]);
   const fellSummary: FellSummary = useMemo(() =>
