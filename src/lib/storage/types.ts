@@ -80,6 +80,117 @@ export interface TermNumberMappingInput {
   rawContext?: string;
 }
 
+export interface BacktestHitEvidenceInput {
+  dreamerId: string;
+  dreamerName?: string;
+  dreamDate?: string;
+  termLabel: string;
+  normalizedTerm?: string;
+  numberText: string;
+  boxedKey?: string;
+  gameType: GameType | string;
+  state: string;
+  drawDate: string;
+  drawTime: string;
+  rawResult?: string;
+  normalizedResult: string;
+  resultBoxedKey?: string;
+  hitType: 'exact' | 'box' | 'straight' | 'boxed' | 'both' | string;
+  daysFromDream?: number;
+  sameDay?: boolean;
+  isVerified?: boolean;
+  sourceName?: string;
+  replaySource?: string;
+  metadata?: UnknownRecord;
+}
+
+export interface PersonalHitEventEvidenceInput {
+  dreamerId: string;
+  dreamerName?: string;
+  sourceType: 'live' | 'backtest' | 'replay';
+  dreamEntryId?: string;
+  sourceDreamEntryId?: string;
+  activeWindowId?: string;
+  backtestDreamId?: string;
+  sourceContextId?: string;
+  termLabel: string;
+  normalizedTerm?: string;
+  numberText: string;
+  boxedKey?: string;
+  gameType: GameType | string;
+  state: string;
+  drawDate: string;
+  drawTime: string;
+  rawResult?: string;
+  normalizedResult: string;
+  resultBoxedKey?: string;
+  hitType: 'exact' | 'box' | 'straight' | 'boxed' | 'both' | string;
+  daysFromDream?: number;
+  sameDay?: boolean;
+  metadata?: UnknownRecord;
+}
+
+export interface HitEvidenceWriteResult {
+  attempted: number;
+  created: number;
+}
+
+export interface HitEvidenceStorage {
+  bulkUpsertBacktestHits(
+    ownerUid: string,
+    backtestDreamId: string,
+    hits: BacktestHitEvidenceInput[]
+  ): Promise<HitEvidenceWriteResult>;
+  listBacktestHitsForDream(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord[]>;
+  bulkUpsertPersonalHitEvents(
+    ownerUid: string,
+    events: PersonalHitEventEvidenceInput[]
+  ): Promise<HitEvidenceWriteResult>;
+  listHitEventsForDreamer(
+    ownerUid: string,
+    dreamerId: string,
+    options?: { limit?: number }
+  ): Promise<UnknownRecord[]>;
+  listHitEventsForTerm(
+    ownerUid: string,
+    normalizedTerm: string,
+    options?: { dreamerId?: string; limit?: number }
+  ): Promise<UnknownRecord[]>;
+  listHitEventsForBacktestDream(
+    ownerUid: string,
+    backtestDreamId: string,
+    options?: { limit?: number }
+  ): Promise<UnknownRecord[]>;
+  listHitEventsForDreamEntry(
+    ownerUid: string,
+    dreamEntryId: string,
+    options?: { limit?: number }
+  ): Promise<UnknownRecord[]>;
+  rebuildPersonalHitMappingsFromEvents(
+    ownerUid: string,
+    options?: { dreamerId?: string }
+  ): Promise<HitEvidenceWriteResult>;
+  upsertPersonalHitMappingsFromEvents(
+    ownerUid: string,
+    options?: { dreamerId?: string }
+  ): Promise<HitEvidenceWriteResult>;
+  listFellBeforeMappings(
+    ownerUid: string,
+    options?: { dreamerId?: string; normalizedTerm?: string; limit?: number }
+  ): Promise<UnknownRecord[]>;
+  upsertBacktestSummary(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord | null>;
+  rebuildBacktestSummary(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord | null>;
+}
+
 export interface DreamersStorage {
   createDreamer(ownerUid: string, input: DreamerInput): Promise<StorageId>;
   updateDreamer(id: string, patch: Partial<DreamerInput>): Promise<void>;
