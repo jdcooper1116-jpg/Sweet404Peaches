@@ -3,42 +3,40 @@
  * POST /api/dreamers  { ownerUid, displayName, alias?, preferredStates, preferredGames,
  *                       preferredDrawTimes, isGuest, notes? }
  *
- * Server-side Firebase Admin read/write for dreamers collection.
- * Replaces listDreamers() / createDreamer() client Firestore calls.
+ * Storage-adapter backed dreamers collection.
+ * Defaults to Firebase and can switch to Postgres with DREAM_DB_PROVIDER=postgres.
  *
  * GET returns all dreamers for the owner sorted alphabetically.
  * POST creates a new dreamer and returns the new dreamerId.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { Timestamp } from 'firebase-admin/firestore';
-import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { resolveOwnerUid } from '@/lib/firebase/admin';
+import { createDreamer, getDreamer, listDreamers } from '@/lib/storage/dreamers';
 
 export const dynamic = 'force-dynamic';
+
+function serializeTimestamp(value: any) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  return value.toDate?.()?.toISOString?.() ?? value;
+}
+
+function serializeDreamer(dreamer: any) {
+  return {
+    ...dreamer,
+    createdAt: serializeTimestamp(dreamer.createdAt),
+    updatedAt: serializeTimestamp(dreamer.updatedAt),
+  };
+}
 
 // ─── GET ─────────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   try {
     const ownerUid = resolveOwnerUid(req.nextUrl.searchParams.get('ownerUid'));
-    const db = getAdminDb();
+    const dreamers = (await listDreamers(ownerUid)).map(serializeDreamer);
 
-    const snap = await db
-      .collection('dreamers')
-      .where('ownerUid', '==', ownerUid)
-      .limit(100)    // dreamers collections are small; 100 is ample
-      .get();
-
-    const dreamers = snap.docs.map((doc: any) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        createdAt: data.createdAt?.toDate?.()?.toISOString?.() ?? data.createdAt ?? null,
-        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null,
-      };
-    });
-
-    dreamers.sort((a: any, b: any) =>
+    dreamers.sort((a, b) =>
       String(a.displayName ?? '').localeCompare(String(b.displayName ?? ''))
     );
 
@@ -78,29 +76,22 @@ export async function POST(req: NextRequest) {
     if (!ownerUid)    return NextResponse.json({ ok: false, error: 'ownerUid is required.'    }, { status: 400 });
     if (!displayName) return NextResponse.json({ ok: false, error: 'displayName is required.' }, { status: 400 });
 
-    const db  = getAdminDb();
-    const now = Timestamp.now();
-
-    const payload: Record<string, unknown> = {
-      ownerUid,
+    const dreamerInput = {
       displayName,
       preferredStates,
-      preferredGames,
-      preferredDrawTimes,
+      preferredGames: preferredGames as any,
+      preferredDrawTimes: preferredDrawTimes as any,
       isGuest,
       notes,
-      createdAt: now,
-      updatedAt: now,
     };
 
-    if (alias) payload.alias = alias;
-
-    const ref = await db.collection('dreamers').add(payload);
+    const dreamerId = await createDreamer(ownerUid, alias ? { ...dreamerInput, alias } : dreamerInput);
+    const dreamer = await getDreamer(dreamerId);
 
     return NextResponse.json({
       ok:        true,
-      dreamerId: ref.id,
-      dreamer:   { id: ref.id, ...payload },
+      dreamerId,
+      dreamer:   dreamer ? serializeDreamer(dreamer) : { id: dreamerId, ownerUid, ...dreamerInput },
     });
   } catch (err) {
     console.error('[api/dreamers POST] error:', err);

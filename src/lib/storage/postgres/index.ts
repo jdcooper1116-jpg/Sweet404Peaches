@@ -1,3 +1,4 @@
+import { postgresDreamersStorage } from '@/lib/storage/postgres/dreamers';
 import type { Sweet404StorageAdapter } from '@/lib/storage/types';
 
 function unsupportedStorageOperation(operation: string): never {
@@ -8,13 +9,7 @@ function unsupportedStorageOperation(operation: string): never {
 
 export const postgresStorageAdapter: Sweet404StorageAdapter = {
   provider: 'postgres',
-  dreamers: {
-    createDreamer: async () => unsupportedStorageOperation('dreamers.createDreamer'),
-    updateDreamer: async () => unsupportedStorageOperation('dreamers.updateDreamer'),
-    listDreamers: async () => unsupportedStorageOperation('dreamers.listDreamers'),
-    getDreamer: async () => unsupportedStorageOperation('dreamers.getDreamer'),
-    deleteDreamerCascade: async () => unsupportedStorageOperation('dreamers.deleteDreamerCascade'),
-  },
+  dreamers: postgresDreamersStorage,
   dreamEntries: {
     createDreamEntry: async () => unsupportedStorageOperation('dreamEntries.createDreamEntry'),
     createDreamEntryWithWindows: async () =>
