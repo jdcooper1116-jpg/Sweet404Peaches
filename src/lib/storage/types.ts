@@ -92,9 +92,15 @@ export interface DreamEntriesStorage {
     ownerUid: string,
     input: Omit<DreamEntryInput, 'allNumbers' | 'activeWindowStart' | 'activeWindowEnd'>
   ): Promise<StorageId>;
-  listDreamEntries(ownerUid: string): Promise<DreamEntry[]>;
+  listDreamEntries(
+    ownerUid: string,
+    options?: { dreamerId?: string; limit?: number }
+  ): Promise<DreamEntry[]>;
   getDreamEntry(id: string): Promise<DreamEntry | null>;
-  getLatestDreamEntry(ownerUid: string): Promise<UnknownRecord | null>;
+  getLatestDreamEntry(
+    ownerUid: string,
+    options?: { dreamerId?: string }
+  ): Promise<UnknownRecord | null>;
   deleteDreamEntryCascade(dreamEntryId: string): Promise<void>;
 }
 

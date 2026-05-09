@@ -1,8 +1,8 @@
 /**
  * GET /api/dreams/entries?ownerUid=...&dreamerId=...&limit=...
  *
- * Server-side Firebase Admin read for dreamEntries collection.
- * Replaces listDreamEntries() client Firestore calls.
+ * Storage-adapter read for dreamEntries collection.
+ * Defaults to Firebase and can switch to Postgres with DREAM_DB_PROVIDER=postgres.
  *
  * Query params:
  *   ownerUid   required
@@ -10,9 +10,25 @@
  *   limit      optional — max rows, default 200
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { resolveOwnerUid } from '@/lib/firebase/admin';
+import { listDreamEntries } from '@/lib/storage/dreamEntries';
 
 export const dynamic = 'force-dynamic';
+
+function serializeTimestamp(value: any) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  return value.toDate?.()?.toISOString?.() ?? value;
+}
+
+function serializeEntry(entry: any) {
+  return {
+    ...entry,
+    uploadedAt: serializeTimestamp(entry.uploadedAt),
+    createdAt: serializeTimestamp(entry.createdAt),
+    updatedAt: serializeTimestamp(entry.updatedAt),
+  };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -21,29 +37,10 @@ export async function GET(req: NextRequest) {
     const dreamerId = params.get('dreamerId') ?? '';
     const maxRows   = Math.min(Number(params.get('limit') ?? 200), 1000);
 
-    const db = getAdminDb();
-
-    let query = db
-      .collection('dreamEntries')
-      .where('ownerUid', '==', ownerUid);
-
-    if (dreamerId) {
-      query = query.where('dreamerId', '==', dreamerId) as any;
-    }
-
-    const snap = await (query as any).limit(maxRows).get();
-
-    const entries = snap.docs.map((doc: any) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        // Serialize Firestore Timestamps → ISO strings
-        uploadedAt: data.uploadedAt?.toDate?.()?.toISOString?.() ?? data.uploadedAt ?? null,
-        createdAt:  data.createdAt?.toDate?.()?.toISOString?.()  ?? data.createdAt  ?? null,
-        updatedAt:  data.updatedAt?.toDate?.()?.toISOString?.()  ?? data.updatedAt  ?? null,
-      };
-    });
+    const entries = (await listDreamEntries(ownerUid, {
+      dreamerId: dreamerId || undefined,
+      limit: maxRows,
+    })).map(serializeEntry);
 
     // Sort by dreamDate desc, then uploadedAt desc
     entries.sort((a: any, b: any) => {

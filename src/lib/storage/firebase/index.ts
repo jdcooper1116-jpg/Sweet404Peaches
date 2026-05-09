@@ -1,18 +1,12 @@
 import * as firestore from '@/lib/firebase/firestore';
+import { firebaseDreamEntriesStorage } from '@/lib/storage/firebase/dreamEntries';
 import { firebaseDreamersStorage } from '@/lib/storage/firebase/dreamers';
 import type { Sweet404StorageAdapter } from '@/lib/storage/types';
 
 export const firebaseStorageAdapter: Sweet404StorageAdapter = {
   provider: 'firebase',
   dreamers: firebaseDreamersStorage,
-  dreamEntries: {
-    createDreamEntry: firestore.createDreamEntry,
-    createDreamEntryWithWindows: firestore.createDreamEntryWithWindows,
-    listDreamEntries: firestore.listDreamEntries,
-    getDreamEntry: firestore.getDreamEntry,
-    getLatestDreamEntry: firestore.getLatestDreamEntry,
-    deleteDreamEntryCascade: firestore.deleteDreamEntryCascade,
-  },
+  dreamEntries: firebaseDreamEntriesStorage,
   dreamWindows: {
     listActiveDreamWindows: firestore.listActiveDreamWindows,
     listActiveDreamWindowsForDate: firestore.listActiveDreamWindowsForDate,
