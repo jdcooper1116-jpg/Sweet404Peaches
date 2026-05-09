@@ -1,0 +1,603 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Owner {
+  uid         String   @id @map("uid")
+  displayName String?  @map("display_name")
+  email       String?
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  dreamers            Dreamer[]
+  dreamEntries        DreamEntry[]
+  dreamTerms          DreamTerm[]
+  dreamCandidates     DreamCandidate[]
+  activeDreamWindows  ActiveDreamWindow[]
+  dreamHits           DreamHit[]
+  backtestDreams      BacktestDream[]
+  backtestWindows     BacktestWindow[]
+  backtestResults     BacktestResult[]
+  backtestHits        BacktestHit[]
+  backtestSummaries   BacktestSummary[]
+  personalHitEvents   PersonalHitEvent[]
+  personalHitMappings PersonalHitMapping[]
+  termNumberMappings  TermNumberMapping[]
+  engineRequestLogs   EngineRequestLog[]
+  auditLogs           AuditLog[]
+
+  @@map("owners")
+}
+
+model Dreamer {
+  id                  String   @id @default(cuid())
+  ownerUid            String   @map("owner_uid")
+  displayName         String   @map("display_name")
+  alias               String?
+  preferredStates     Json?    @map("preferred_states")
+  preferredGames      Json?    @map("preferred_games")
+  preferredDrawTimes  Json?    @map("preferred_draw_times")
+  isGuest             Boolean  @default(false) @map("is_guest")
+  notes               String?  @db.Text
+  metadata            Json?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, displayName])
+  @@map("dreamers")
+}
+
+model DreamEntry {
+  id                String   @id @default(cuid())
+  ownerUid          String   @map("owner_uid")
+  dreamerId         String   @map("dreamer_id")
+  dreamerName       String?  @map("dreamer_name")
+  dreamDate         String   @map("dream_date") @db.VarChar(10)
+  rawText           String   @map("raw_text") @db.Text
+  cleanedText       String?  @map("cleaned_text") @db.Text
+  sourceType        String?  @map("source_type")
+  notes             String?  @db.Text
+  allNumbers        Json?    @map("all_numbers")
+  termMappings      Json?    @map("term_mappings")
+  activeWindowStart String?  @map("active_window_start") @db.VarChar(10)
+  activeWindowEnd   String?  @map("active_window_end") @db.VarChar(10)
+  isReviewed        Boolean  @default(true) @map("is_reviewed")
+  importedFrom      String?  @map("imported_from")
+  metadata          Json?
+  uploadedAt        DateTime @default(now()) @map("uploaded_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  owner       Owner            @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  terms       DreamTerm[]
+  candidates  DreamCandidate[]
+  windows     ActiveDreamWindow[]
+  hits        DreamHit[]
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamDate])
+  @@index([ownerUid, dreamerId, dreamDate])
+  @@map("dream_entries")
+}
+
+model DreamTerm {
+  id             String   @id @default(cuid())
+  ownerUid       String   @map("owner_uid")
+  dreamEntryId   String   @map("dream_entry_id")
+  dreamerId      String   @map("dreamer_id")
+  termLabel      String   @map("term_label")
+  normalizedTerm String   @map("normalized_term")
+  relatedTerms   Json?    @map("related_terms")
+  lineContexts   Json?    @map("line_contexts")
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  owner      Owner       @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  dreamEntry DreamEntry  @relation(fields: [dreamEntryId], references: [id], onDelete: Cascade)
+  candidates DreamCandidate[]
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamEntryId])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, dreamEntryId, normalizedTerm])
+  @@map("dream_terms")
+}
+
+model DreamCandidate {
+  id             String   @id @default(cuid())
+  ownerUid       String   @map("owner_uid")
+  dreamEntryId   String   @map("dream_entry_id")
+  dreamTermId    String?  @map("dream_term_id")
+  dreamerId      String   @map("dreamer_id")
+  termLabel      String?  @map("term_label")
+  normalizedTerm String?  @map("normalized_term")
+  numberText     String   @map("number_text")
+  boxedKey       String   @map("boxed_key")
+  gameType       String   @map("game_type")
+  source         String?
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  owner      Owner      @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  dreamEntry DreamEntry @relation(fields: [dreamEntryId], references: [id], onDelete: Cascade)
+  dreamTerm  DreamTerm? @relation(fields: [dreamTermId], references: [id], onDelete: SetNull)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamEntryId])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@unique([ownerUid, dreamEntryId, normalizedTerm, numberText, gameType])
+  @@map("dream_candidates")
+}
+
+model ActiveDreamWindow {
+  id                  String   @id @default(cuid())
+  ownerUid            String   @map("owner_uid")
+  dreamEntryId        String   @map("dream_entry_id")
+  dreamerId           String   @map("dreamer_id")
+  dreamerName         String?  @map("dreamer_name")
+  termLabel           String   @map("term_label")
+  normalizedTerm      String?  @map("normalized_term")
+  numberText          String   @map("number_text")
+  boxedKey            String   @map("boxed_key")
+  gameType            String   @map("game_type")
+  activeStart         String   @map("active_start") @db.VarChar(10)
+  activeEnd           String   @map("active_end") @db.VarChar(10)
+  isActive            Boolean  @default(true) @map("is_active")
+  statesTracked       Json?    @map("states_tracked")
+  lastCheckedAt       DateTime? @map("last_checked_at")
+  lastHitCount        Int      @default(0) @map("last_hit_count")
+  newHitsSinceLastCheck Int    @default(0) @map("new_hits_since_last_check")
+  metadata            Json?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  owner      Owner      @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  dreamEntry DreamEntry @relation(fields: [dreamEntryId], references: [id], onDelete: Cascade)
+  dreamHits  DreamHit[]
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamEntryId])
+  @@index([ownerUid, isActive, activeEnd])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, dreamEntryId, dreamerId, normalizedTerm, numberText, gameType, activeStart, activeEnd])
+  @@map("active_dream_windows")
+}
+
+model DreamHit {
+  id                    String   @id @default(cuid())
+  ownerUid              String   @map("owner_uid")
+  dreamEntryId          String?  @map("dream_entry_id")
+  sourceDreamEntryId    String?  @map("source_dream_entry_id")
+  activeWindowId        String?  @map("active_window_id")
+  dreamerId             String   @map("dreamer_id")
+  dreamerName           String?  @map("dreamer_name")
+  termLabel             String   @map("term_label")
+  normalizedTerm        String?  @map("normalized_term")
+  numberText            String   @map("number_text")
+  boxedKey              String?  @map("boxed_key")
+  gameType              String   @map("game_type")
+  state                 String
+  drawDate              String   @map("draw_date") @db.VarChar(10)
+  drawTime              String   @map("draw_time")
+  rawResult             String?  @map("raw_result")
+  normalizedResult      String   @map("normalized_result")
+  resultBoxedKey        String?  @map("result_boxed_key")
+  hitType               String   @map("hit_type")
+  daysFromDream         Int?     @map("days_from_dream")
+  sameDay               Boolean  @default(false) @map("same_day")
+  detectedAt            DateTime? @map("detected_at")
+  metadata              Json?
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  owner        Owner              @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  dreamEntry   DreamEntry?        @relation(fields: [dreamEntryId], references: [id], onDelete: SetNull)
+  activeWindow ActiveDreamWindow? @relation(fields: [activeWindowId], references: [id], onDelete: SetNull)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamEntryId])
+  @@index([ownerUid, sourceDreamEntryId])
+  @@index([ownerUid, activeWindowId])
+  @@index([ownerUid, state])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, drawDate])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, sourceDreamEntryId, dreamerId, numberText, gameType, state, drawDate, drawTime, hitType, normalizedResult])
+  @@map("dream_hits")
+}
+
+model BacktestDream {
+  id                 String   @id @default(cuid())
+  ownerUid           String   @map("owner_uid")
+  dreamerId          String   @map("dreamer_id")
+  dreamerName        String?  @map("dreamer_name")
+  dreamDate          String   @map("dream_date") @db.VarChar(10)
+  rawText            String   @map("raw_text") @db.Text
+  cleanedText        String?  @map("cleaned_text") @db.Text
+  source             String?
+  confidence         String?
+  notes              String?  @db.Text
+  parseResult        Json?    @map("parse_result")
+  parsedTermMappings Json?    @map("parsed_term_mappings")
+  cash3Numbers       Json?    @map("cash3_numbers")
+  cash4Numbers       Json?    @map("cash4_numbers")
+  archivedNumbers    Json?    @map("archived_numbers")
+  activeWindowStart  String?  @map("active_window_start") @db.VarChar(10)
+  activeWindowEnd    String?  @map("active_window_end") @db.VarChar(10)
+  status             String   @default("intake-saved")
+  replaySource       String?  @map("replay_source")
+  metadata           Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  owner    Owner             @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  window   BacktestWindow?
+  results  BacktestResult[]
+  hits     BacktestHit[]
+  summary  BacktestSummary?
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamDate])
+  @@index([ownerUid, status])
+  @@map("backtest_dreams")
+}
+
+model BacktestWindow {
+  id                String   @id @default(cuid())
+  ownerUid          String   @map("owner_uid")
+  backtestDreamId   String   @unique @map("backtest_dream_id")
+  dreamerId         String   @map("dreamer_id")
+  dreamerName       String?  @map("dreamer_name")
+  dreamDate         String   @map("dream_date") @db.VarChar(10)
+  activeWindowStart String?  @map("active_window_start") @db.VarChar(10)
+  activeWindowEnd   String?  @map("active_window_end") @db.VarChar(10)
+  lookaheadDays     Int      @default(7) @map("lookahead_days")
+  termMappings      Json?    @map("term_mappings")
+  cash3Numbers      Json?    @map("cash3_numbers")
+  cash4Numbers      Json?    @map("cash4_numbers")
+  status            String   @default("pending-results")
+  metadata          Json?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  owner         Owner         @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  backtestDream BacktestDream @relation(fields: [backtestDreamId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, dreamDate])
+  @@map("backtest_windows")
+}
+
+model BacktestResult {
+  id                String   @id @default(cuid())
+  ownerUid          String   @map("owner_uid")
+  backtestDreamId   String   @map("backtest_dream_id")
+  state             String
+  date              String   @db.VarChar(10)
+  gameType          String   @map("game_type")
+  drawTime          String   @map("draw_time")
+  rawResult         String?  @map("raw_result")
+  normalizedResult  String   @map("normalized_result")
+  boxedKey          String   @map("boxed_key")
+  sourceType        String?  @map("source_type")
+  gameLabel         String?  @map("game_label")
+  bonusText         String?  @map("bonus_text")
+  metadata          Json?
+  importedAt        DateTime @default(now()) @map("imported_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  owner         Owner         @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  backtestDream BacktestDream @relation(fields: [backtestDreamId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, state])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, date])
+  @@index([ownerUid, normalizedResult])
+  @@index([ownerUid, boxedKey])
+  @@unique([ownerUid, backtestDreamId, state, date, drawTime, gameType, normalizedResult])
+  @@map("backtest_results")
+}
+
+model BacktestHit {
+  id                 String   @id @default(cuid())
+  ownerUid           String   @map("owner_uid")
+  backtestDreamId    String   @map("backtest_dream_id")
+  dreamerId          String   @map("dreamer_id")
+  dreamerName        String?  @map("dreamer_name")
+  dreamDate          String?  @map("dream_date") @db.VarChar(10)
+  termLabel          String   @map("term_label")
+  normalizedTerm     String?  @map("normalized_term")
+  numberText         String   @map("number_text")
+  boxedKey           String?  @map("boxed_key")
+  gameType           String   @map("game_type")
+  state              String
+  drawDate           String   @map("draw_date") @db.VarChar(10)
+  drawTime           String   @map("draw_time")
+  rawResult          String?  @map("raw_result")
+  normalizedResult   String   @map("normalized_result")
+  resultBoxedKey     String?  @map("result_boxed_key")
+  hitType            String   @map("hit_type")
+  daysFromDream      Int?     @map("days_from_dream")
+  sameDay            Boolean  @default(false) @map("same_day")
+  isVerified         Boolean? @map("is_verified")
+  sourceName         String?  @map("source_name")
+  replaySource       String?  @map("replay_source")
+  canonicalKey       String?  @map("canonical_key")
+  isSuspectedMisattributed Boolean @default(false) @map("is_suspected_misattributed")
+  isShadowedByCorrectedMapping Boolean @default(false) @map("is_shadowed_by_corrected_mapping")
+  isDeprecated       Boolean  @default(false) @map("is_deprecated")
+  correctedTo        Json?    @map("corrected_to")
+  repairMetadata     Json?    @map("repair_metadata")
+  metadata           Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  owner         Owner         @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  backtestDream BacktestDream @relation(fields: [backtestDreamId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, state])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, drawDate])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, backtestDreamId, dreamerId, normalizedTerm, numberText, gameType, state, drawDate, drawTime, hitType, normalizedResult])
+  @@map("backtest_hits")
+}
+
+model BacktestSummary {
+  id                String   @id @default(cuid())
+  ownerUid          String   @map("owner_uid")
+  backtestDreamId   String   @unique @map("backtest_dream_id")
+  dreamerId         String?  @map("dreamer_id")
+  dreamDate         String?  @map("dream_date") @db.VarChar(10)
+  totalHits         Int      @default(0) @map("total_hits")
+  straightHits      Int      @default(0) @map("straight_hits")
+  boxedHits         Int      @default(0) @map("boxed_hits")
+  uniqueStates      Json?    @map("unique_states")
+  bestState         String?  @map("best_state")
+  bestTerm          String?  @map("best_term")
+  status            String?
+  replaySource      String?  @map("replay_source")
+  metadata          Json?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  owner         Owner         @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+  backtestDream BacktestDream @relation(fields: [backtestDreamId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, status])
+  @@map("backtest_summaries")
+}
+
+model PersonalHitEvent {
+  id                 String   @id @default(cuid())
+  ownerUid           String   @map("owner_uid")
+  dreamerId          String   @map("dreamer_id")
+  dreamerName        String?  @map("dreamer_name")
+  termLabel          String   @map("term_label")
+  normalizedTerm     String   @map("normalized_term")
+  numberText         String   @map("number_text")
+  boxedKey           String?  @map("boxed_key")
+  gameType           String   @map("game_type")
+  state              String
+  drawDate           String   @map("draw_date") @db.VarChar(10)
+  drawTime           String   @map("draw_time")
+  hitType            String   @map("hit_type")
+  winningNumber      String?  @map("winning_number")
+  normalizedResult   String?  @map("normalized_result")
+  source             String?
+  sourceContextId    String   @map("source_context_id")
+  sourceDreamEntryId String?  @map("source_dream_entry_id")
+  activeWindowId     String?  @map("active_window_id")
+  backtestDreamId    String?  @map("backtest_dream_id")
+  daysFromDream      Int?     @map("days_from_dream")
+  sameDay            Boolean  @default(false) @map("same_day")
+  isSuspectedMisattributed Boolean @default(false) @map("is_suspected_misattributed")
+  isShadowedByCorrectedMapping Boolean @default(false) @map("is_shadowed_by_corrected_mapping")
+  isDeprecated       Boolean  @default(false) @map("is_deprecated")
+  correctedTo        Json?    @map("corrected_to")
+  repairMetadata     Json?    @map("repair_metadata")
+  metadata           Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, sourceDreamEntryId])
+  @@index([ownerUid, activeWindowId])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, state])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, drawDate])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, dreamerId, normalizedTerm, numberText, gameType, state, drawDate, drawTime, hitType, sourceContextId])
+  @@map("personal_hit_events")
+}
+
+model PersonalHitMapping {
+  id                 String   @id @default(cuid())
+  ownerUid           String   @map("owner_uid")
+  dreamerId          String   @map("dreamer_id")
+  dreamerName        String?  @map("dreamer_name")
+  termLabel          String   @map("term_label")
+  normalizedTerm     String   @map("normalized_term")
+  numberText         String   @map("number_text")
+  boxedKey           String?  @map("boxed_key")
+  gameType           String   @map("game_type")
+  state              String
+  drawTime           String?  @map("draw_time")
+  drawDate           String?  @map("draw_date") @db.VarChar(10)
+  lastHitDate        String?  @map("last_hit_date") @db.VarChar(10)
+  hitType            String?  @map("hit_type")
+  hitCount           Int      @default(0) @map("hit_count")
+  straightCount      Int      @default(0) @map("straight_count")
+  boxedCount         Int      @default(0) @map("boxed_count")
+  stateStrengthScore Int      @default(0) @map("state_strength_score")
+  source             String?
+  sourceDreamEntryId String?  @map("source_dream_entry_id")
+  activeWindowId     String?  @map("active_window_id")
+  backtestDreamId    String?  @map("backtest_dream_id")
+  daysFromDream      Int?     @map("days_from_dream")
+  sameDay            Boolean  @default(false) @map("same_day")
+  isSuspectedMisattributed Boolean @default(false) @map("is_suspected_misattributed")
+  isShadowedByCorrectedMapping Boolean @default(false) @map("is_shadowed_by_corrected_mapping")
+  isDeprecated       Boolean  @default(false) @map("is_deprecated")
+  correctedTo        Json?    @map("corrected_to")
+  repairMetadata     Json?    @map("repair_metadata")
+  metadata           Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, sourceDreamEntryId])
+  @@index([ownerUid, activeWindowId])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, state])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, drawDate])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, dreamerId, normalizedTerm, numberText, gameType, state])
+  @@map("personal_hit_mappings")
+}
+
+model TermNumberMapping {
+  id                 String   @id @default(cuid())
+  ownerUid           String   @map("owner_uid")
+  dreamerId          String   @map("dreamer_id")
+  dreamerName        String?  @map("dreamer_name")
+  termLabel          String   @map("term_label")
+  normalizedTerm     String   @map("normalized_term")
+  numberText         String   @map("number_text")
+  boxedKey           String?  @map("boxed_key")
+  gameType           String   @map("game_type")
+  source             String?
+  confidenceBasis    String?  @map("confidence_basis") @db.Text
+  rawContext         String?  @map("raw_context") @db.Text
+  dreamEntryId       String?  @map("dream_entry_id")
+  sourceDreamEntryId String?  @map("source_dream_entry_id")
+  backtestDreamId    String?  @map("backtest_dream_id")
+  dreamDate          String?  @map("dream_date") @db.VarChar(10)
+  isSuspectedMisattributed Boolean @default(false) @map("is_suspected_misattributed")
+  isShadowedByCorrectedMapping Boolean @default(false) @map("is_shadowed_by_corrected_mapping")
+  isDeprecated       Boolean  @default(false) @map("is_deprecated")
+  correctedTo        Json?    @map("corrected_to")
+  repairMetadata     Json?    @map("repair_metadata")
+  metadata           Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerUid], references: [uid], onDelete: Cascade)
+
+  @@index([ownerUid])
+  @@index([ownerUid, dreamerId])
+  @@index([ownerUid, dreamEntryId])
+  @@index([ownerUid, sourceDreamEntryId])
+  @@index([ownerUid, backtestDreamId])
+  @@index([ownerUid, gameType])
+  @@index([ownerUid, numberText])
+  @@index([ownerUid, boxedKey])
+  @@index([ownerUid, normalizedTerm])
+  @@unique([ownerUid, dreamerId, normalizedTerm, numberText, gameType])
+  @@map("term_number_mappings")
+}
+
+model EngineRequestLog {
+  id              String   @id @default(cuid())
+  ownerUid        String?  @map("owner_uid")
+  requestType     String   @map("request_type")
+  route           String?
+  engineUrl       String?  @map("engine_url")
+  state           String?
+  gameType        String?  @map("game_type")
+  anchorDate      String?  @map("anchor_date") @db.VarChar(10)
+  lookaheadDays   Int?     @map("lookahead_days")
+  candidateCount  Int?     @map("candidate_count")
+  status          String
+  statusCode      Int?     @map("status_code")
+  durationMs      Int?     @map("duration_ms")
+  errorMessage    String?  @map("error_message") @db.Text
+  requestPayload  Json?    @map("request_payload")
+  responseSummary Json?    @map("response_summary")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  owner Owner? @relation(fields: [ownerUid], references: [uid], onDelete: SetNull)
+
+  @@index([ownerUid])
+  @@index([requestType])
+  @@index([state])
+  @@index([gameType])
+  @@index([anchorDate])
+  @@index([createdAt])
+  @@map("engine_request_logs")
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  ownerUid       String?  @map("owner_uid")
+  actorUid       String?  @map("actor_uid")
+  action         String
+  scope          String?
+  targetTable    String?  @map("target_table")
+  targetId       String?  @map("target_id")
+  route          String?
+  dryRun         Boolean  @default(true) @map("dry_run")
+  before         Json?
+  after          Json?
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  owner Owner? @relation(fields: [ownerUid], references: [uid], onDelete: SetNull)
+
+  @@index([ownerUid])
+  @@index([actorUid])
+  @@index([action])
+  @@index([scope])
+  @@index([targetTable])
+  @@index([targetId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
