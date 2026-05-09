@@ -9,7 +9,8 @@
  *   gameType        — optional cash3/cash4 filter
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { resolveOwnerUid } from '@/lib/firebase/admin';
+import { listActiveDreamWindows } from '@/lib/storage/dreamWindows';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,7 @@ function isQuotaError(err: unknown): boolean {
 }
 
 function isoDate(value: any): string | null {
+  if (value instanceof Date) return value.toISOString();
   return value?.toDate?.()?.toISOString?.() ?? value ?? null;
 }
 
@@ -34,48 +36,20 @@ export async function GET(req: NextRequest) {
     const maxRows = Math.min(Math.max(Number(params.get('limit') ?? 100), 1), 250);
     const today = new Date().toISOString().slice(0, 10);
 
-    const db = getAdminDb();
-
-    let query: any = db.collection('activeDreamWindows').where('ownerUid', '==', ownerUid);
-
-    // Apply the most selective filters before limit so one large dream cannot hide others.
-    if (dreamerId) {
-      query = query.where('dreamerId', '==', dreamerId);
-    }
-
-    if (dreamEntryId) {
-      query = query.where('dreamEntryId', '==', dreamEntryId);
-    }
-
-    if (gameType === 'cash3' || gameType === 'cash4') {
-      query = query.where('gameType', '==', gameType);
-    }
-
-    // Keep activeEnd as a server-side filter only for the broad/global query.
-    // For filtered dreamer/dreamEntry views, filter active/expired in memory to avoid
-    // index issues while still respecting the dreamer/dreamEntry filter before limit.
-    const shouldUseActiveEndQuery = !includeExpired && !dreamerId && !dreamEntryId && !gameType;
-    if (shouldUseActiveEndQuery) {
-      query = query.where('activeEnd', '>=', today);
-    }
-
-    const snap = await query.limit(maxRows).get();
-
-    let windows = snap.docs.map((doc: any) => {
-      const data = doc.data();
+    const windows = (await listActiveDreamWindows(ownerUid, {
+      dreamerId: dreamerId || undefined,
+      dreamEntryId: dreamEntryId || undefined,
+      gameType: gameType === 'cash3' || gameType === 'cash4' ? gameType : undefined,
+      includeExpired,
+      limit: maxRows,
+    })).map((data: any) => {
       return {
-        id: doc.id,
         ...data,
         createdAt: isoDate(data.createdAt),
         updatedAt: isoDate(data.updatedAt),
         lastCheckedAt: isoDate(data.lastCheckedAt),
       };
     });
-
-    // For filtered queries, apply active-only filtering after selective query.
-    if (!includeExpired && !shouldUseActiveEndQuery) {
-      windows = windows.filter((w: any) => String(w.activeEnd ?? '') >= today);
-    }
 
     const dreamerBreakdown: Record<string, number> = {};
     const dreamEntryBreakdown: Record<string, number> = {};
@@ -91,7 +65,7 @@ export async function GET(req: NextRequest) {
       gameTypeBreakdown[gameKey] = (gameTypeBreakdown[gameKey] || 0) + 1;
     }
 
-    const hasMore = snap.docs.length >= maxRows;
+    const hasMore = windows.length >= maxRows;
 
     const res = NextResponse.json({
       ok: true,

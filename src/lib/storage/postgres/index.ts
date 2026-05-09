@@ -1,5 +1,6 @@
 import { postgresDreamEntriesStorage } from '@/lib/storage/postgres/dreamEntries';
 import { postgresDreamersStorage } from '@/lib/storage/postgres/dreamers';
+import { postgresDreamWindowsStorage } from '@/lib/storage/postgres/dreamWindows';
 import type { Sweet404StorageAdapter } from '@/lib/storage/types';
 
 function unsupportedStorageOperation(operation: string): never {
@@ -12,12 +13,7 @@ export const postgresStorageAdapter: Sweet404StorageAdapter = {
   provider: 'postgres',
   dreamers: postgresDreamersStorage,
   dreamEntries: postgresDreamEntriesStorage,
-  dreamWindows: {
-    listActiveDreamWindows: async () =>
-      unsupportedStorageOperation('dreamWindows.listActiveDreamWindows'),
-    listActiveDreamWindowsForDate: async () =>
-      unsupportedStorageOperation('dreamWindows.listActiveDreamWindowsForDate'),
-  },
+  dreamWindows: postgresDreamWindowsStorage,
   dreamHits: {
     createDreamHit: async () => unsupportedStorageOperation('dreamHits.createDreamHit'),
     listDreamHits: async () => unsupportedStorageOperation('dreamHits.listDreamHits'),

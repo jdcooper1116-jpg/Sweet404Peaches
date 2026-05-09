@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { resolveOwnerUid } from '@/lib/firebase/admin';
+import { listActiveDreamWindows } from '@/lib/storage/dreamWindows';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,7 @@ function isQuotaError(err: unknown): boolean {
 }
 
 function isoDate(value: any): string | null {
+  if (value instanceof Date) return value.toISOString();
   return value?.toDate?.()?.toISOString?.() ?? value ?? null;
 }
 
@@ -26,72 +28,38 @@ export async function GET(req: NextRequest) {
     const maxPerDreamer = Math.min(Math.max(Number(params.get('limit') ?? 250), 1), 250);
     const today = new Date().toISOString().slice(0, 10);
 
-    const db = getAdminDb();
-
-    let dreamersSnap: any;
-
-    if (dreamerIdFilter) {
-      const doc = await db.collection('dreamers').doc(dreamerIdFilter).get();
-      dreamersSnap = { docs: doc.exists ? [doc] : [] };
-    } else {
-      dreamersSnap = await db.collection('dreamers')
-        .where('ownerUid', '==', ownerUid)
-        .limit(250)
-        .get();
-    }
-
-    const dreamers = dreamersSnap.docs.map((doc: any) => {
-      const d = doc.data() || {};
-      return {
-        id: doc.id,
-        displayName: d.displayName ?? d.dreamerName ?? d.name ?? doc.id,
-      };
-    });
-
-    // Include owner-self as a fallback in case any windows were saved without a dreamer doc.
-    if (!dreamerIdFilter && !dreamers.some((d: any) => d.id === 'owner-self')) {
-      dreamers.push({ id: 'owner-self', displayName: 'Sweet404Peaches' });
-    }
-
-    const allWindows: any[] = [];
-    const seen = new Set<string>();
     const warnings: string[] = [];
+    const maxRows = dreamerIdFilter ? maxPerDreamer : 1000;
 
-    for (const dreamer of dreamers) {
-      let q: any = db.collection('activeDreamWindows')
-        .where('ownerUid', '==', ownerUid)
-        .where('dreamerId', '==', dreamer.id);
+    let allWindows: any[] = (await listActiveDreamWindows(ownerUid, {
+      dreamerId: dreamerIdFilter || undefined,
+      dreamEntryId: dreamEntryIdFilter || undefined,
+      includeExpired,
+      limit: maxRows,
+    })).map((data: any) => ({
+      ...data,
+      dreamerId: data.dreamerId ?? 'unknown',
+      dreamerName: data.dreamerName ?? data.dreamerId ?? 'Unknown Dreamer',
+      activeStart: data.activeStart ?? data.activeWindowStart ?? data.dreamDate ?? null,
+      activeEnd: data.activeEnd ?? data.activeWindowEnd ?? null,
+      createdAt: isoDate(data.createdAt),
+      updatedAt: isoDate(data.updatedAt),
+      lastCheckedAt: isoDate(data.lastCheckedAt),
+    }));
 
-      if (dreamEntryIdFilter) {
-        q = q.where('dreamEntryId', '==', dreamEntryIdFilter);
-      }
+    if (!includeExpired) {
+      allWindows = allWindows.filter((w: any) => {
+        const activeEnd = String(w.activeEnd ?? '');
+        return !activeEnd || activeEnd >= today;
+      });
+    }
 
-      const snap = await q.limit(maxPerDreamer).get();
-
-      if (snap.docs.length >= maxPerDreamer) {
-        warnings.push(`Dreamer ${dreamer.displayName} reached the ${maxPerDreamer} per-dreamer cap.`);
-      }
-
-      for (const doc of snap.docs) {
-        if (seen.has(doc.id)) continue;
-        seen.add(doc.id);
-
-        const data = doc.data() || {};
-        const activeEnd = String(data.activeEnd ?? data.activeWindowEnd ?? '');
-        if (!includeExpired && activeEnd && activeEnd < today) continue;
-
-        allWindows.push({
-          id: doc.id,
-          ...data,
-          dreamerId: data.dreamerId ?? dreamer.id,
-          dreamerName: data.dreamerName ?? dreamer.displayName,
-          activeStart: data.activeStart ?? data.activeWindowStart ?? data.dreamDate ?? null,
-          activeEnd: data.activeEnd ?? data.activeWindowEnd ?? null,
-          createdAt: isoDate(data.createdAt),
-          updatedAt: isoDate(data.updatedAt),
-          lastCheckedAt: isoDate(data.lastCheckedAt),
-        });
-      }
+    if (allWindows.length >= maxRows) {
+      warnings.push(
+        dreamerIdFilter
+          ? `Dreamer ${dreamerIdFilter} reached the ${maxRows} per-dreamer cap.`
+          : `Returned ${maxRows} rows. More windows may exist; use dreamerId or dreamEntryId filters.`
+      );
     }
 
     const groupMap = new Map<string, any>();

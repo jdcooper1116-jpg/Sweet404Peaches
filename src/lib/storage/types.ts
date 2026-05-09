@@ -105,10 +105,25 @@ export interface DreamEntriesStorage {
 }
 
 export interface DreamWindowsStorage {
-  listActiveDreamWindows(ownerUid: string): Promise<ActiveDreamWindow[]>;
+  listActiveDreamWindows(
+    ownerUid: string,
+    options?: {
+      dreamerId?: string;
+      dreamEntryId?: string;
+      gameType?: GameType;
+      includeExpired?: boolean;
+      limit?: number;
+    }
+  ): Promise<ActiveDreamWindow[]>;
   listActiveDreamWindowsForDate(
     ownerUid: string,
-    date: string
+    date: string,
+    options?: {
+      dreamerId?: string;
+      dreamEntryId?: string;
+      gameType?: GameType;
+      limit?: number;
+    }
   ): Promise<ActiveDreamWindow[]>;
 }
 
