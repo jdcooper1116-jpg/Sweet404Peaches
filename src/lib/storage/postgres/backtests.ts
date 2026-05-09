@@ -36,7 +36,11 @@ async function ensureOwner(ownerUid: string, tx: Prisma.TransactionClient): Prom
 
 export const postgresBacktestsStorage: Pick<
   BacktestsStorage,
-  'createBacktestDreamIntake' | 'listBacktestDreams'
+  | 'createBacktestDreamIntake'
+  | 'listBacktestDreams'
+  | 'getBacktestDreamById'
+  | 'listBacktestHitsForDream'
+  | 'getBacktestSummaryForDream'
 > = {
   async createBacktestDreamIntake(
     ownerUid: string,
@@ -183,5 +187,112 @@ export const postgresBacktestsStorage: Pick<
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }));
+  },
+
+  async getBacktestDreamById(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord | null> {
+    const row = await prisma.backtestDream.findFirst({
+      where: { ownerUid, id: backtestDreamId },
+    });
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      ownerUid: row.ownerUid,
+      backtestDreamId: row.id,
+      dreamerId: row.dreamerId,
+      dreamerName: row.dreamerName ?? '',
+      dreamDate: row.dreamDate,
+      rawText: row.rawText,
+      cleanedText: row.cleanedText ?? '',
+      source: row.source ?? '',
+      confidence: row.confidence ?? '',
+      notes: row.notes ?? '',
+      parseResult: row.parseResult,
+      parsedTermMappings: row.parsedTermMappings,
+      cash3Numbers: row.cash3Numbers,
+      cash4Numbers: row.cash4Numbers,
+      archivedNumbers: row.archivedNumbers,
+      activeWindowStart: row.activeWindowStart,
+      activeWindowEnd: row.activeWindowEnd,
+      status: row.status,
+      replaySource: row.replaySource ?? '',
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  },
+
+  async listBacktestHitsForDream(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord[]> {
+    const rows = await prisma.backtestHit.findMany({
+      where: { ownerUid, backtestDreamId },
+      orderBy: [{ drawDate: 'asc' }, { drawTime: 'asc' }],
+      take: 2000,
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      ownerUid: row.ownerUid,
+      backtestDreamId: row.backtestDreamId,
+      dreamerId: row.dreamerId,
+      dreamerName: row.dreamerName ?? '',
+      dreamDate: row.dreamDate ?? '',
+      termLabel: row.termLabel,
+      normalizedTerm: row.normalizedTerm ?? '',
+      number: row.numberText,
+      numberText: row.numberText,
+      boxedKey: row.boxedKey ?? '',
+      gameType: row.gameType,
+      state: row.state,
+      drawDate: row.drawDate,
+      drawTime: row.drawTime,
+      rawResult: row.rawResult ?? '',
+      normalizedResult: row.normalizedResult,
+      resultBoxedKey: row.resultBoxedKey ?? '',
+      hitType: row.hitType,
+      daysFromDream: row.daysFromDream ?? 0,
+      sameDay: row.sameDay,
+      is_verified: row.isVerified ?? false,
+      isVerified: row.isVerified ?? false,
+      source_name: row.sourceName ?? '',
+      sourceName: row.sourceName ?? '',
+      replaySource: row.replaySource ?? '',
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+  },
+
+  async getBacktestSummaryForDream(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord | null> {
+    const row = await prisma.backtestSummary.findFirst({
+      where: { ownerUid, backtestDreamId },
+    });
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      ownerUid: row.ownerUid,
+      backtestDreamId: row.backtestDreamId,
+      dreamerId: row.dreamerId ?? '',
+      dreamDate: row.dreamDate ?? '',
+      totalHits: row.totalHits,
+      straightHits: row.straightHits,
+      boxedHits: row.boxedHits,
+      uniqueStates: Array.isArray(row.uniqueStates) ? row.uniqueStates.map(String) : [],
+      bestState: row.bestState ?? '',
+      bestTerm: row.bestTerm ?? '',
+      status: row.status ?? '',
+      replaySource: row.replaySource ?? '',
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
   },
 };

@@ -63,7 +63,11 @@ const unsupported: BacktestsStorage = {
 
 export const firebaseBacktestsStorage: Pick<
   BacktestsStorage,
-  'createBacktestDreamIntake' | 'listBacktestDreams'
+  | 'createBacktestDreamIntake'
+  | 'listBacktestDreams'
+  | 'getBacktestDreamById'
+  | 'listBacktestHitsForDream'
+  | 'getBacktestSummaryForDream'
 > = {
   async createBacktestDreamIntake(
     ownerUid: string,
@@ -214,6 +218,53 @@ export const firebaseBacktestsStorage: Pick<
       createdAt: isoDate(row.createdAt),
       updatedAt: isoDate(row.updatedAt),
     }));
+  },
+
+  async getBacktestDreamById(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord | null> {
+    const db = getAdminDb();
+    const snap = await db.collection('backtestDreams').doc(backtestDreamId).get();
+    if (!snap.exists) return null;
+
+    const row = { id: snap.id, ...snap.data() } as any;
+    if (row.ownerUid !== ownerUid) return null;
+    return row;
+  },
+
+  async listBacktestHitsForDream(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord[]> {
+    const db = getAdminDb();
+    const snap = await db
+      .collection('backtestHits')
+      .where('ownerUid', '==', ownerUid)
+      .where('backtestDreamId', '==', backtestDreamId)
+      .limit(2000)
+      .get();
+
+    return snap.docs
+      .map((doc: any) => ({ id: doc.id, ...doc.data() }))
+      .sort((a: any, b: any) => {
+        const ak = `${a.drawDate ?? ''} ${a.drawTime ?? ''}`;
+        const bk = `${b.drawDate ?? ''} ${b.drawTime ?? ''}`;
+        return ak < bk ? -1 : ak > bk ? 1 : 0;
+      });
+  },
+
+  async getBacktestSummaryForDream(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord | null> {
+    const db = getAdminDb();
+    const snap = await db.collection('backtestSummaries').doc(backtestDreamId).get();
+    if (!snap.exists) return null;
+
+    const row = { id: snap.id, ...snap.data() } as any;
+    if (row.ownerUid !== ownerUid) return null;
+    return row;
   },
 };
 

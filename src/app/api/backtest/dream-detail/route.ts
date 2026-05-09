@@ -1,12 +1,17 @@
 /**
  * GET /api/backtest/dream-detail?ownerUid=...&backtestDreamId=...
  *
- * Server-side Firebase Admin read.
+ * Storage-adapter read.
  * Returns full detail for one backtest dream: hits sorted chrono, summary.
  * Used by: Replay Lab (hit display after dream is selected).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { resolveOwnerUid } from '@/lib/firebase/admin';
+import {
+  getBacktestDreamById,
+  getBacktestSummaryForDream,
+  listBacktestHitsForDream,
+} from '@/lib/storage/backtests';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,45 +24,31 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'backtestDreamId is required.' }, { status: 400 });
     }
 
-    const db = getAdminDb();
-
-    // Fetch dream, hits, and summary in parallel.
-    const [dreamDoc, hitsSnap, summaryDoc] = await Promise.all([
-      db.collection('backtestDreams').doc(backtestDreamId).get(),
-      db.collection('backtestHits')
-        .where('backtestDreamId', '==', backtestDreamId)
-        .limit(2000)
-        .get(),
-      db.collection('backtestSummaries').doc(backtestDreamId).get(),
+    const [dream, hits, summary] = await Promise.all([
+      getBacktestDreamById(ownerUid, backtestDreamId),
+      listBacktestHitsForDream(ownerUid, backtestDreamId),
+      getBacktestSummaryForDream(ownerUid, backtestDreamId),
     ]);
 
-    if (!dreamDoc.exists) {
+    if (!dream) {
       return NextResponse.json({ ok: false, error: 'Dream not found.' }, { status: 404 });
     }
 
-    const dreamData = dreamDoc.data()!;
-    if (dreamData.ownerUid !== ownerUid) {
+    if (dream.ownerUid !== ownerUid) {
       return NextResponse.json({ ok: false, error: 'Not authorized.' }, { status: 403 });
     }
 
-    // Build hits array sorted chronologically.
-    const hits = hitsSnap.docs
-      .map(doc => ({ id: doc.id, ...doc.data() }))
-      .sort((a: any, b: any) => {
-        const ak = `${a.drawDate ?? ''} ${a.drawTime ?? ''}`;
-        const bk = `${b.drawDate ?? ''} ${b.drawTime ?? ''}`;
-        return ak < bk ? -1 : ak > bk ? 1 : 0;
-      });
-
-    const summary = summaryDoc.exists
-      ? { id: summaryDoc.id, ...summaryDoc.data() }
-      : null;
+    const sortedHits = [...hits].sort((a: any, b: any) => {
+      const ak = `${a.drawDate ?? ''} ${a.drawTime ?? ''}`;
+      const bk = `${b.drawDate ?? ''} ${b.drawTime ?? ''}`;
+      return ak < bk ? -1 : ak > bk ? 1 : 0;
+    });
 
     return NextResponse.json({
       ok:     true,
-      dream:  { id: dreamDoc.id, ...dreamData },
-      hits,
-      hitCount: hits.length,
+      dream,
+      hits: sortedHits,
+      hitCount: sortedHits.length,
       summary,
     });
   } catch (err) {
