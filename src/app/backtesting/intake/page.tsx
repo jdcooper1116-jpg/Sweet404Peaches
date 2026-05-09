@@ -238,7 +238,7 @@ export default function BacktestingIntakePage() {
       const engineData = await stageRunEngine(backtestDreamId, pr);
 
       // Stage 3 — save hits + personalHitMappings
-      setMessage(`Step 3/3: Saving ${engineData.totalHits} hit(s) to Firestore…`);
+      setMessage(`Step 3/3: Saving ${engineData.totalHits} hit(s) to evidence database…`);
       await stageSaveHits(backtestDreamId, engineData);
 
       // Build final message.

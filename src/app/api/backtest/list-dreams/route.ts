@@ -85,6 +85,13 @@ export async function GET(req: NextRequest) {
         status:       String(d.status       ?? ''),
         hitCount:     Number(d.hitCount     ?? 0),
         termCount:    Number(d.termCount    ?? (d.termMappings?.length ?? 0)),
+        cash3Numbers: Array.isArray(d.cash3Numbers) ? d.cash3Numbers : [],
+        cash4Numbers: Array.isArray(d.cash4Numbers) ? d.cash4Numbers : [],
+        parsedTermMappings: Array.isArray(d.parsedTermMappings) ? d.parsedTermMappings : [],
+        archivedNumbers: Array.isArray(d.archivedNumbers) ? d.archivedNumbers : [],
+        activeWindowStart: String(d.activeWindowStart ?? ''),
+        activeWindowEnd: String(d.activeWindowEnd ?? ''),
+        parseResult: d.parseResult ?? null,
         createdAt:    isoDate(d.createdAt),
         updatedAt:    isoDate(d.updatedAt),
       };
