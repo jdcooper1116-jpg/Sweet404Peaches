@@ -88,6 +88,26 @@ export interface DreamersStorage {
   deleteDreamerCascade(dreamerId: string): Promise<void>;
 }
 
+export interface OwnerProfileRecord {
+  ownerUid: string;
+  displayName: string;
+  email?: string;
+  metadata?: UnknownRecord | null;
+  createdAt?: unknown;
+  updatedAt: unknown;
+}
+
+export interface OwnerProfileInput {
+  displayName: string;
+  email?: string;
+  metadata?: UnknownRecord;
+}
+
+export interface OwnerProfilesStorage {
+  getOwnerProfile(ownerUid: string): Promise<OwnerProfileRecord | null>;
+  upsertOwnerProfile(ownerUid: string, input: OwnerProfileInput): Promise<void>;
+}
+
 export interface DreamEntriesStorage {
   createDreamEntry(ownerUid: string, input: DreamEntryInput): Promise<StorageId>;
   createDreamEntryWithWindows(
@@ -218,6 +238,7 @@ export interface DictionariesStorage {
 
 export interface Sweet404StorageAdapter {
   provider: DreamDbProvider;
+  ownerProfiles: OwnerProfilesStorage;
   dreamers: DreamersStorage;
   dreamEntries: DreamEntriesStorage;
   dreamWindows: DreamWindowsStorage;

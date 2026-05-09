@@ -4,10 +4,12 @@ import { firebaseDictionariesStorage } from '@/lib/storage/firebase/dictionaries
 import { firebaseDreamEntriesStorage } from '@/lib/storage/firebase/dreamEntries';
 import { firebaseDreamersStorage } from '@/lib/storage/firebase/dreamers';
 import { firebaseDreamWindowsStorage } from '@/lib/storage/firebase/dreamWindows';
+import { firebaseOwnerProfilesStorage } from '@/lib/storage/firebase/ownerProfiles';
 import type { Sweet404StorageAdapter } from '@/lib/storage/types';
 
 export const firebaseStorageAdapter: Sweet404StorageAdapter = {
   provider: 'firebase',
+  ownerProfiles: firebaseOwnerProfilesStorage,
   dreamers: firebaseDreamersStorage,
   dreamEntries: firebaseDreamEntriesStorage,
   dreamWindows: firebaseDreamWindowsStorage,

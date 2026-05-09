@@ -3,6 +3,7 @@ import { postgresBacktestsStorage } from '@/lib/storage/postgres/backtests';
 import { postgresDreamEntriesStorage } from '@/lib/storage/postgres/dreamEntries';
 import { postgresDreamersStorage } from '@/lib/storage/postgres/dreamers';
 import { postgresDreamWindowsStorage } from '@/lib/storage/postgres/dreamWindows';
+import { postgresOwnerProfilesStorage } from '@/lib/storage/postgres/ownerProfiles';
 import type { Sweet404StorageAdapter } from '@/lib/storage/types';
 
 function unsupportedStorageOperation(operation: string): never {
@@ -13,6 +14,7 @@ function unsupportedStorageOperation(operation: string): never {
 
 export const postgresStorageAdapter: Sweet404StorageAdapter = {
   provider: 'postgres',
+  ownerProfiles: postgresOwnerProfilesStorage,
   dreamers: postgresDreamersStorage,
   dreamEntries: postgresDreamEntriesStorage,
   dreamWindows: postgresDreamWindowsStorage,

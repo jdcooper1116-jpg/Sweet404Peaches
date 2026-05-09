@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminDb } from '@/lib/firebase/admin';
+import { getOwnerProfile, upsertOwnerProfile } from '@/lib/storage/ownerProfiles';
+import type { UnknownRecord } from '@/lib/storage/types';
 
 // ─── GET /api/owner-profile?ownerUid=... ─────────────────────────────────────
 // Returns the owner profile for the given UID.
@@ -12,10 +13,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const db   = getAdminDb();
-    const snap = await db.collection('ownerProfiles').doc(ownerUid).get();
+    const profile = await getOwnerProfile(ownerUid);
 
-    if (!snap.exists) {
+    if (!profile) {
       return NextResponse.json({
         ok: true,
         profile: {
@@ -26,13 +26,12 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const data = snap.data() ?? {};
     return NextResponse.json({
       ok: true,
       profile: {
         ownerUid,
-        displayName: data.displayName ?? '',
-        updatedAt:   data.updatedAt   ?? null,
+        displayName: profile.displayName ?? '',
+        updatedAt:   profile.updatedAt   ?? null,
       },
     });
   } catch (err) {
@@ -47,21 +46,28 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const body: { ownerUid?: string; displayName?: string } = await req.json();
+    const body: {
+      ownerUid?: string;
+      displayName?: string;
+      email?: string;
+      [key: string]: unknown;
+    } = await req.json();
     const { ownerUid, displayName } = body;
 
     if (!ownerUid)    return NextResponse.json({ ok: false, error: 'ownerUid required' }, { status: 400 });
     if (!displayName?.trim()) return NextResponse.json({ ok: false, error: 'displayName required' }, { status: 400 });
 
-    const db = getAdminDb();
-    await db.collection('ownerProfiles').doc(ownerUid).set(
-      {
-        ownerUid,
-        displayName: displayName.trim(),
-        updatedAt:   new Date().toISOString(),
-      },
-      { merge: true }
-    );
+    const { ownerUid: _ownerUid, displayName: _displayName, email, ...metadata } = body;
+    const metadataPatch: UnknownRecord = {};
+    for (const [key, value] of Object.entries(metadata)) {
+      if (value !== undefined) metadataPatch[key] = value;
+    }
+
+    await upsertOwnerProfile(ownerUid, {
+      displayName: displayName.trim(),
+      ...(typeof email === 'string' ? { email } : {}),
+      ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
+    });
 
     return NextResponse.json({ ok: true, displayName: displayName.trim() });
   } catch (err) {
