@@ -1,0 +1,89 @@
+import type { Sweet404StorageAdapter } from '@/lib/storage/types';
+
+function unsupportedStorageOperation(operation: string): never {
+  throw new Error(
+    `Postgres storage adapter is not implemented for ${operation}. Keep DREAM_DB_PROVIDER=firebase until this route is migrated.`
+  );
+}
+
+export const postgresStorageAdapter: Sweet404StorageAdapter = {
+  provider: 'postgres',
+  dreamers: {
+    createDreamer: async () => unsupportedStorageOperation('dreamers.createDreamer'),
+    updateDreamer: async () => unsupportedStorageOperation('dreamers.updateDreamer'),
+    listDreamers: async () => unsupportedStorageOperation('dreamers.listDreamers'),
+    getDreamer: async () => unsupportedStorageOperation('dreamers.getDreamer'),
+    deleteDreamerCascade: async () => unsupportedStorageOperation('dreamers.deleteDreamerCascade'),
+  },
+  dreamEntries: {
+    createDreamEntry: async () => unsupportedStorageOperation('dreamEntries.createDreamEntry'),
+    createDreamEntryWithWindows: async () =>
+      unsupportedStorageOperation('dreamEntries.createDreamEntryWithWindows'),
+    listDreamEntries: async () => unsupportedStorageOperation('dreamEntries.listDreamEntries'),
+    getDreamEntry: async () => unsupportedStorageOperation('dreamEntries.getDreamEntry'),
+    getLatestDreamEntry: async () =>
+      unsupportedStorageOperation('dreamEntries.getLatestDreamEntry'),
+    deleteDreamEntryCascade: async () =>
+      unsupportedStorageOperation('dreamEntries.deleteDreamEntryCascade'),
+  },
+  dreamWindows: {
+    listActiveDreamWindows: async () =>
+      unsupportedStorageOperation('dreamWindows.listActiveDreamWindows'),
+    listActiveDreamWindowsForDate: async () =>
+      unsupportedStorageOperation('dreamWindows.listActiveDreamWindowsForDate'),
+  },
+  dreamHits: {
+    createDreamHit: async () => unsupportedStorageOperation('dreamHits.createDreamHit'),
+    listDreamHits: async () => unsupportedStorageOperation('dreamHits.listDreamHits'),
+    upsertPersonalHitMapping: async () =>
+      unsupportedStorageOperation('dreamHits.upsertPersonalHitMapping'),
+    listPersonalHitMappings: async () =>
+      unsupportedStorageOperation('dreamHits.listPersonalHitMappings'),
+    deletePersonalHitMappingById: async () =>
+      unsupportedStorageOperation('dreamHits.deletePersonalHitMappingById'),
+  },
+  backtests: {
+    createBacktestDreamIntake: async () =>
+      unsupportedStorageOperation('backtests.createBacktestDreamIntake'),
+    listBacktestDreams: async () => unsupportedStorageOperation('backtests.listBacktestDreams'),
+    bulkCreateBacktestResults: async () =>
+      unsupportedStorageOperation('backtests.bulkCreateBacktestResults'),
+    listBacktestResultsForDream: async () =>
+      unsupportedStorageOperation('backtests.listBacktestResultsForDream'),
+    getBacktestDreamById: async () =>
+      unsupportedStorageOperation('backtests.getBacktestDreamById'),
+    listBacktestHitsForDream: async () =>
+      unsupportedStorageOperation('backtests.listBacktestHitsForDream'),
+    listAllBacktestHits: async () =>
+      unsupportedStorageOperation('backtests.listAllBacktestHits'),
+    getBacktestSummaryForDream: async () =>
+      unsupportedStorageOperation('backtests.getBacktestSummaryForDream'),
+    runBacktestReplayForDream: async () =>
+      unsupportedStorageOperation('backtests.runBacktestReplayForDream'),
+    listSafeBacktestSummariesForDreams: async () =>
+      unsupportedStorageOperation('backtests.listSafeBacktestSummariesForDreams'),
+    saveEngineReplayHits: async () =>
+      unsupportedStorageOperation('backtests.saveEngineReplayHits'),
+  },
+  fellBefore: {
+    listLotteryResults: async () => unsupportedStorageOperation('fellBefore.listLotteryResults'),
+    listLotteryResultsByDateRange: async () =>
+      unsupportedStorageOperation('fellBefore.listLotteryResultsByDateRange'),
+    createLotteryResult: async () =>
+      unsupportedStorageOperation('fellBefore.createLotteryResult'),
+    bulkCreateLotteryResults: async () =>
+      unsupportedStorageOperation('fellBefore.bulkCreateLotteryResults'),
+    deleteLotteryResultById: async () =>
+      unsupportedStorageOperation('fellBefore.deleteLotteryResultById'),
+  },
+  dictionaries: {
+    listTermNumberMappings: async () =>
+      unsupportedStorageOperation('dictionaries.listTermNumberMappings'),
+    createTermNumberMapping: async () =>
+      unsupportedStorageOperation('dictionaries.createTermNumberMapping'),
+    deleteTermNumberMappingById: async () =>
+      unsupportedStorageOperation('dictionaries.deleteTermNumberMappingById'),
+    bulkDeleteManualDictionaryEntries: async () =>
+      unsupportedStorageOperation('dictionaries.bulkDeleteManualDictionaryEntries'),
+  },
+};
