@@ -29,10 +29,8 @@ export const postgresStorageAdapter: Sweet404StorageAdapter = {
   backtests: {
     createBacktestDreamIntake: postgresBacktestsStorage.createBacktestDreamIntake,
     listBacktestDreams: postgresBacktestsStorage.listBacktestDreams,
-    bulkCreateBacktestResults: async () =>
-      unsupportedStorageOperation('backtests.bulkCreateBacktestResults'),
-    listBacktestResultsForDream: async () =>
-      unsupportedStorageOperation('backtests.listBacktestResultsForDream'),
+    bulkCreateBacktestResults: postgresBacktestsStorage.bulkCreateBacktestResults,
+    listBacktestResultsForDream: postgresBacktestsStorage.listBacktestResultsForDream,
     getBacktestDreamById: postgresBacktestsStorage.getBacktestDreamById,
     listBacktestHitsForDream: postgresBacktestsStorage.listBacktestHitsForDream,
     listAllBacktestHits: async () =>

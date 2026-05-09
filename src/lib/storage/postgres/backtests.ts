@@ -38,6 +38,8 @@ export const postgresBacktestsStorage: Pick<
   BacktestsStorage,
   | 'createBacktestDreamIntake'
   | 'listBacktestDreams'
+  | 'bulkCreateBacktestResults'
+  | 'listBacktestResultsForDream'
   | 'getBacktestDreamById'
   | 'listBacktestHitsForDream'
   | 'getBacktestSummaryForDream'
@@ -184,6 +186,77 @@ export const postgresBacktestsStorage: Pick<
       termMappings: row.parsedTermMappings,
       termCount: Array.isArray(row.parsedTermMappings) ? row.parsedTermMappings.length : 0,
       hitCount: 0,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+  },
+
+  async bulkCreateBacktestResults(
+    ownerUid: string,
+    backtestDreamId: string,
+    rows
+  ): Promise<void> {
+    if (!rows.length) return;
+
+    const dream = await prisma.backtestDream.findFirst({
+      where: { ownerUid, id: backtestDreamId },
+      select: { id: true },
+    });
+
+    if (!dream) {
+      throw new Error('Backtest dream not found for owner.');
+    }
+
+    for (let i = 0; i < rows.length; i += 1000) {
+      const chunk = rows.slice(i, i + 1000);
+      await prisma.backtestResult.createMany({
+        data: chunk.map((row) => {
+          const normalizedResult = String(row.normalizedResult ?? '').trim();
+          return {
+            ownerUid,
+            backtestDreamId,
+            state: String(row.state ?? ''),
+            date: String(row.date ?? ''),
+            gameType: String(row.gameType ?? ''),
+            drawTime: String(row.drawTime ?? ''),
+            rawResult: row.rawResult ? String(row.rawResult) : null,
+            normalizedResult,
+            boxedKey: sortedDigits(normalizedResult),
+            sourceType: row.sourceType ? String(row.sourceType) : null,
+            gameLabel: row.gameLabel ? String(row.gameLabel) : null,
+            bonusText: row.bonusText ? String(row.bonusText) : null,
+          };
+        }),
+        skipDuplicates: true,
+      });
+    }
+  },
+
+  async listBacktestResultsForDream(
+    ownerUid: string,
+    backtestDreamId: string
+  ): Promise<UnknownRecord[]> {
+    const rows = await prisma.backtestResult.findMany({
+      where: { ownerUid, backtestDreamId },
+      orderBy: [{ date: 'asc' }, { drawTime: 'asc' }],
+      take: 1000,
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      ownerUid: row.ownerUid,
+      backtestDreamId: row.backtestDreamId,
+      state: row.state,
+      date: row.date,
+      gameType: row.gameType,
+      drawTime: row.drawTime,
+      rawResult: row.rawResult ?? '',
+      normalizedResult: row.normalizedResult,
+      boxedKey: row.boxedKey,
+      sourceType: row.sourceType ?? '',
+      gameLabel: row.gameLabel ?? '',
+      bonusText: row.bonusText ?? '',
+      importedAt: row.importedAt.toISOString(),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }));
