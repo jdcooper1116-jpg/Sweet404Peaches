@@ -1,4 +1,5 @@
 import * as firestore from '@/lib/firebase/firestore';
+import { firebaseDictionariesStorage } from '@/lib/storage/firebase/dictionaries';
 import { firebaseDreamEntriesStorage } from '@/lib/storage/firebase/dreamEntries';
 import { firebaseDreamersStorage } from '@/lib/storage/firebase/dreamers';
 import { firebaseDreamWindowsStorage } from '@/lib/storage/firebase/dreamWindows';
@@ -36,10 +37,5 @@ export const firebaseStorageAdapter: Sweet404StorageAdapter = {
     bulkCreateLotteryResults: firestore.bulkCreateLotteryResults,
     deleteLotteryResultById: firestore.deleteLotteryResultById,
   },
-  dictionaries: {
-    listTermNumberMappings: firestore.listTermNumberMappings,
-    createTermNumberMapping: firestore.createTermNumberMapping,
-    deleteTermNumberMappingById: firestore.deleteTermNumberMappingById,
-    bulkDeleteManualDictionaryEntries: firestore.bulkDeleteManualDictionaryEntries,
-  },
+  dictionaries: firebaseDictionariesStorage,
 };

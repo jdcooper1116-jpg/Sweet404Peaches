@@ -1,3 +1,4 @@
+import { postgresDictionariesStorage } from '@/lib/storage/postgres/dictionaries';
 import { postgresDreamEntriesStorage } from '@/lib/storage/postgres/dreamEntries';
 import { postgresDreamersStorage } from '@/lib/storage/postgres/dreamers';
 import { postgresDreamWindowsStorage } from '@/lib/storage/postgres/dreamWindows';
@@ -58,14 +59,5 @@ export const postgresStorageAdapter: Sweet404StorageAdapter = {
     deleteLotteryResultById: async () =>
       unsupportedStorageOperation('fellBefore.deleteLotteryResultById'),
   },
-  dictionaries: {
-    listTermNumberMappings: async () =>
-      unsupportedStorageOperation('dictionaries.listTermNumberMappings'),
-    createTermNumberMapping: async () =>
-      unsupportedStorageOperation('dictionaries.createTermNumberMapping'),
-    deleteTermNumberMappingById: async () =>
-      unsupportedStorageOperation('dictionaries.deleteTermNumberMappingById'),
-    bulkDeleteManualDictionaryEntries: async () =>
-      unsupportedStorageOperation('dictionaries.bulkDeleteManualDictionaryEntries'),
-  },
+  dictionaries: postgresDictionariesStorage,
 };

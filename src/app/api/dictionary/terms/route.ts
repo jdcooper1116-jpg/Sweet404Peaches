@@ -19,8 +19,9 @@
  *   When no dreamerId            → all dreamers fetched, joined by their own dreamerId.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { getDreamDbProvider } from '@/lib/storage/provider';
+import { createTermNumberMapping, listTermNumberMappings } from '@/lib/storage/dictionaries';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,8 +67,12 @@ function expandDoc(docId: string, data: Record<string, any>, ownerUid: string): 
   const backtestDreamId    = String(data.backtestDreamId    ?? '');
   const confidenceBasis    = String(data.confidenceBasis    ?? '');
   const rawContext          = String(data.rawContext         ?? '');
-  const createdAt = data.createdAt?.toDate?.()?.toISOString?.() ?? data.createdAt ?? null;
-  const updatedAt = data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null;
+  const createdAt = data.createdAt instanceof Date
+    ? data.createdAt.toISOString()
+    : data.createdAt?.toDate?.()?.toISOString?.() ?? data.createdAt ?? null;
+  const updatedAt = data.updatedAt instanceof Date
+    ? data.updatedAt.toISOString()
+    : data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null;
 
   const base = {
     id: docId,
@@ -88,7 +93,7 @@ function expandDoc(docId: string, data: Record<string, any>, ownerUid: string): 
   };
 
   // ── Shape A: flat row with number + gameType ──────────────────────────────
-  const flatNumber   = String(data.number   ?? '').trim();
+  const flatNumber   = String(data.number ?? data.numberText ?? '').trim();
   const flatGameType = String(data.gameType ?? '').trim();
 
   if (flatNumber && flatGameType) {
@@ -127,37 +132,34 @@ export async function GET(req: NextRequest) {
     const ownerUid    = resolveOwnerUid(params.get('ownerUid'));
     const dreamerId   = params.get('dreamerId')  ?? '';
     const source      = params.get('source')     ?? '';
+    const term        = params.get('term')       ?? params.get('q') ?? '';
+    const number      = params.get('number')     ?? '';
+    const gameType    = params.get('gameType')   ?? '';
     const maxDocs     = Math.min(Number(params.get('limit') ?? 500), 1000);
     // includeHits=true joins personalHitMappings — expensive, opt-in only.
     // The dictionary page needs this; other consumers (playlists, hot-numbers) do not.
     const includeHits = params.get('includeHits') === 'true';
 
-    const db = getAdminDb();
+    const provider = getDreamDbProvider();
 
-    // termNumberMappings query.
-    // When dreamerId is provided, use a targeted Firestore query so that
-    // owner-self rows are not hidden behind a broad capped ownerUid query.
-    // Legacy rows without dreamerId can still be handled by the fallback broad path below.
-    let tmQuery = db
-      .collection('termNumberMappings')
-      .where('ownerUid', '==', ownerUid);
-
-    if (dreamerId) tmQuery = tmQuery.where('dreamerId', '==', dreamerId) as any;
-    if (source) tmQuery = tmQuery.where('source', '==', source) as any;
+    const mappings = await listTermNumberMappings(ownerUid, {
+      dreamerId: dreamerId || undefined,
+      source: source || undefined,
+      term: term || undefined,
+      number: number || undefined,
+      gameType: gameType === 'cash3' || gameType === 'cash4' ? gameType : undefined,
+      limit: maxDocs,
+    });
 
     // personalHitMappings join — only when includeHits=true (saves reads on most calls)
     const hitMap = new Map<string, number>();
 
-    let tmSnap: any;
-    if (includeHits) {
+    if (includeHits && provider === 'firebase') {
+      const db = getAdminDb();
       let hitQuery = db.collection('personalHitMappings').where('ownerUid', '==', ownerUid);
       if (dreamerId) hitQuery = hitQuery.where('dreamerId', '==', dreamerId) as any;
 
-      const [tm, ht] = await Promise.all([
-        (tmQuery as any).limit(maxDocs).get(),
-        (hitQuery as any).limit(500).get(),
-      ]);
-      tmSnap = tm;
+      const ht = await (hitQuery as any).limit(500).get();
 
       for (const doc of ht.docs) {
         const d   = doc.data();
@@ -169,8 +171,6 @@ export async function GET(req: NextRequest) {
         const key = `${did}::${tl}::${num}::${gt}`;
         hitMap.set(key, (hitMap.get(key) ?? 0) + (Number(d.hitCount) || 1));
       }
-    } else {
-      tmSnap = await (tmQuery as any).limit(maxDocs).get();
     }
 
     // Expand all documents into flat rows, then apply dreamerId filter in-memory.
@@ -179,8 +179,9 @@ export async function GET(req: NextRequest) {
     // .where("dreamerId", "==", ...) query would exclude those docs entirely.
     const terms: Array<FlatRow & { hasHit: boolean; hitCount: number }> = [];
 
-    for (const doc of tmSnap.docs) {
-      const expanded = expandDoc(doc.id, doc.data() as Record<string, any>, ownerUid);
+    for (const mapping of mappings as any[]) {
+      const docId = String(mapping.id ?? mapping.sourceDocId ?? '');
+      const expanded = expandDoc(docId, mapping as Record<string, any>, ownerUid);
       for (const row of expanded) {
         // Apply dreamer filter in-memory after fallback assignment
         if (dreamerId && row.dreamerId !== dreamerId) continue;
@@ -254,36 +255,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const db  = getAdminDb();
-    const now = Timestamp.now();
-
-    // Deterministic doc ID — includes dreamerId so two dreamers get separate docs
-    const docId = [ownerUid, dreamerId || 'owner-self', termLabel, number, gameType]
-      .map(v => String(v).replace(/[^a-zA-Z0-9_-]/g, '_'))
-      .join('__');
-
-    const payload: Record<string, unknown> = {
-      ownerUid,
+    const id = await createTermNumberMapping(ownerUid, {
       termLabel,
-      normalizedTerm: termLabel.toLowerCase().trim(),
       number,
-      gameType,
-      source,
-      createdAt: now,
-      updatedAt: now,
-    };
+      gameType: gameType as any,
+      source: source as any,
+      rawContext: note,
+      confidenceBasis: note,
+      dreamerId: dreamerId || 'owner-self',
+      dreamerName: dreamerName || (dreamerId === 'owner-self' ? 'Owner / Self' : ''),
+      dreamDate,
+      sourceDreamEntryId,
+      backtestDreamId,
+    } as any);
 
-    payload.dreamerId = dreamerId || 'owner-self';
-    payload.dreamerName = dreamerName || (dreamerId === 'owner-self' ? 'Owner / Self' : '');
-    if (note)               payload.rawContext         = note;
-    if (note)               payload.confidenceBasis    = note;
-    if (dreamDate)          payload.dreamDate          = dreamDate;
-    if (sourceDreamEntryId) payload.sourceDreamEntryId = sourceDreamEntryId;
-    if (backtestDreamId)    payload.backtestDreamId    = backtestDreamId;
-
-    await db.collection('termNumberMappings').doc(docId).set(payload, { merge: true });
-
-    return NextResponse.json({ ok: true, id: docId, termLabel, number, gameType });
+    return NextResponse.json({ ok: true, id, termLabel, number, gameType });
   } catch (err) {
     console.error('[api/dictionary/terms POST] error:', err);
     return NextResponse.json(

@@ -192,13 +192,23 @@ export interface FellBeforeStorage {
 }
 
 export interface DictionariesStorage {
-  listTermNumberMappings(ownerUid: string): Promise<TermNumberMapping[]>;
+  listTermNumberMappings(
+    ownerUid: string,
+    options?: {
+      dreamerId?: string;
+      term?: string;
+      number?: string;
+      gameType?: GameType;
+      source?: string;
+      limit?: number;
+    }
+  ): Promise<TermNumberMapping[]>;
   createTermNumberMapping(
     ownerUid: string,
     input: TermNumberMappingInput
   ): Promise<StorageId>;
-  deleteTermNumberMappingById(mappingId: string): Promise<void>;
-  bulkDeleteManualDictionaryEntries(): Promise<void>;
+  deleteTermNumberMappingById(ownerUid: string, mappingId: string): Promise<void>;
+  bulkDeleteManualDictionaryEntries(ownerUid: string): Promise<void>;
 }
 
 export interface Sweet404StorageAdapter {
