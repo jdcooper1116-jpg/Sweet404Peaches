@@ -1,4 +1,5 @@
 import { postgresDictionariesStorage } from '@/lib/storage/postgres/dictionaries';
+import { postgresBacktestsStorage } from '@/lib/storage/postgres/backtests';
 import { postgresDreamEntriesStorage } from '@/lib/storage/postgres/dreamEntries';
 import { postgresDreamersStorage } from '@/lib/storage/postgres/dreamers';
 import { postgresDreamWindowsStorage } from '@/lib/storage/postgres/dreamWindows';
@@ -26,9 +27,8 @@ export const postgresStorageAdapter: Sweet404StorageAdapter = {
       unsupportedStorageOperation('dreamHits.deletePersonalHitMappingById'),
   },
   backtests: {
-    createBacktestDreamIntake: async () =>
-      unsupportedStorageOperation('backtests.createBacktestDreamIntake'),
-    listBacktestDreams: async () => unsupportedStorageOperation('backtests.listBacktestDreams'),
+    createBacktestDreamIntake: postgresBacktestsStorage.createBacktestDreamIntake,
+    listBacktestDreams: postgresBacktestsStorage.listBacktestDreams,
     bulkCreateBacktestResults: async () =>
       unsupportedStorageOperation('backtests.bulkCreateBacktestResults'),
     listBacktestResultsForDream: async () =>

@@ -10,11 +10,18 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { listBacktestDreams } from '@/lib/storage/backtests';
+import { getDreamDbProvider } from '@/lib/storage/provider';
 
 export const dynamic = 'force-dynamic';
 
 function isQuotaError(e: unknown) {
   return String(e).includes('RESOURCE_EXHAUSTED') || String(e).includes('quota');
+}
+
+function isoDate(value: any): string | null {
+  if (value instanceof Date) return value.toISOString();
+  return value?.toDate?.()?.toISOString?.() ?? value ?? null;
 }
 
 export async function GET(req: NextRequest) {
@@ -24,17 +31,14 @@ export async function GET(req: NextRequest) {
     const dreamerFilter = (params.get('dreamerId') ?? '').trim();
     const limit    = Math.min(Number(params.get('limit') ?? 100), 300);
 
-    const db = getAdminDb();
-
-    // ── 1. Load backtest dreams ──────────────────────────────────────────
-    let q: any = db.collection('backtestDreams').where('ownerUid', '==', ownerUid);
-    if (dreamerFilter) q = q.where('dreamerId', '==', dreamerFilter);
-    const snap = await q.limit(limit).get();
+    const rows = await listBacktestDreams(ownerUid, {
+      dreamerId: dreamerFilter || undefined,
+      limit,
+    });
 
     // ── 2. Collect unique dreamerIds needing a name lookup ──────────────
     const dreamerIds = new Set<string>();
-    for (const doc of snap.docs) {
-      const d = doc.data();
+    for (const d of rows as any[]) {
       const did = String(d.dreamerId ?? '');
       if (did && did !== 'owner-self' && !d.dreamerName) {
         dreamerIds.add(did);
@@ -45,23 +49,25 @@ export async function GET(req: NextRequest) {
     const dreamerNameCache = new Map<string, string>();
     // Also load owner profile display name
     let ownerDisplayName = 'Owner / Self';
-    try {
-      const ownerDoc = await db.collection('ownerProfiles').doc(ownerUid).get();
-      if (ownerDoc.exists) ownerDisplayName = String(ownerDoc.data()?.displayName ?? 'Owner / Self');
-    } catch { /* non-fatal */ }
-
-    await Promise.allSettled([...dreamerIds].map(async did => {
+    if (getDreamDbProvider() === 'firebase') {
+      const db = getAdminDb();
       try {
-        const d = await db.collection('dreamers').doc(did).get();
-        if (d.exists) {
-          dreamerNameCache.set(did, String(d.data()?.displayName ?? d.data()?.dreamerName ?? d.data()?.name ?? did));
-        }
+        const ownerDoc = await db.collection('ownerProfiles').doc(ownerUid).get();
+        if (ownerDoc.exists) ownerDisplayName = String(ownerDoc.data()?.displayName ?? 'Owner / Self');
       } catch { /* non-fatal */ }
-    }));
+
+      await Promise.allSettled([...dreamerIds].map(async did => {
+        try {
+          const d = await db.collection('dreamers').doc(did).get();
+          if (d.exists) {
+            dreamerNameCache.set(did, String(d.data()?.displayName ?? d.data()?.dreamerName ?? d.data()?.name ?? did));
+          }
+        } catch { /* non-fatal */ }
+      }));
+    }
 
     // ── 4. Build response ────────────────────────────────────────────────
-    const dreams = snap.docs.map((doc: any) => {
-      const d   = doc.data();
+    const dreams = (rows as any[]).map((d: any) => {
       const did = String(d.dreamerId ?? 'owner-self');
       let dreamerName = String(d.dreamerName ?? '');
       if (!dreamerName) {
@@ -70,7 +76,7 @@ export async function GET(req: NextRequest) {
       }
 
       return {
-        id:           doc.id,
+        id:           String(d.id ?? d.backtestDreamId ?? ''),
         ownerUid:     String(d.ownerUid     ?? ownerUid),
         dreamerId:    did,
         dreamerName,
@@ -79,8 +85,8 @@ export async function GET(req: NextRequest) {
         status:       String(d.status       ?? ''),
         hitCount:     Number(d.hitCount     ?? 0),
         termCount:    Number(d.termCount    ?? (d.termMappings?.length ?? 0)),
-        createdAt:    d.createdAt?.toDate?.()?.toISOString?.() ?? d.createdAt ?? null,
-        updatedAt:    d.updatedAt?.toDate?.()?.toISOString?.() ?? d.updatedAt ?? null,
+        createdAt:    isoDate(d.createdAt),
+        updatedAt:    isoDate(d.updatedAt),
       };
     });
 

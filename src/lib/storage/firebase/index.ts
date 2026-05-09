@@ -1,4 +1,5 @@
 import * as firestore from '@/lib/firebase/firestore';
+import { firebaseBacktestsStorage } from '@/lib/storage/firebase/backtests';
 import { firebaseDictionariesStorage } from '@/lib/storage/firebase/dictionaries';
 import { firebaseDreamEntriesStorage } from '@/lib/storage/firebase/dreamEntries';
 import { firebaseDreamersStorage } from '@/lib/storage/firebase/dreamers';
@@ -18,8 +19,8 @@ export const firebaseStorageAdapter: Sweet404StorageAdapter = {
     deletePersonalHitMappingById: firestore.deletePersonalHitMappingById,
   },
   backtests: {
-    createBacktestDreamIntake: firestore.createBacktestDreamIntake,
-    listBacktestDreams: firestore.listBacktestDreams,
+    createBacktestDreamIntake: firebaseBacktestsStorage.createBacktestDreamIntake,
+    listBacktestDreams: firebaseBacktestsStorage.listBacktestDreams,
     bulkCreateBacktestResults: firestore.bulkCreateBacktestResults,
     listBacktestResultsForDream: firestore.listBacktestResultsForDream,
     getBacktestDreamById: firestore.getBacktestDreamById,

@@ -37,6 +37,8 @@ export interface BacktestDreamIntakeInput {
   confidence: string;
   notes?: string;
   parseResult: unknown;
+  dreamerId?: string;
+  dreamerName?: string;
 }
 
 export interface BacktestResultInput extends LotteryResultInput {
@@ -143,7 +145,10 @@ export interface BacktestsStorage {
     ownerUid: string,
     input: BacktestDreamIntakeInput
   ): Promise<StorageId>;
-  listBacktestDreams(ownerUid: string): Promise<UnknownRecord[]>;
+  listBacktestDreams(
+    ownerUid: string,
+    options?: { dreamerId?: string; limit?: number }
+  ): Promise<UnknownRecord[]>;
   bulkCreateBacktestResults(
     ownerUid: string,
     backtestDreamId: string,

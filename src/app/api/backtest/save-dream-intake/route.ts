@@ -19,8 +19,7 @@
  *   Numbers are stored as strings. String(num ?? '').trim() — never coerced to int.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { Timestamp } from 'firebase-admin/firestore';
-import { getAdminDb } from '@/lib/firebase/admin';
+import { createBacktestDreamIntake } from '@/lib/storage/backtests';
 
 export const dynamic  = 'force-dynamic';
 export const maxDuration = 60;
@@ -32,18 +31,6 @@ function addDays(dateString: string, days: number): string {
   if (Number.isNaN(d.getTime())) return '';
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
-}
-
-function normalizeTerm(term: string): string {
-  return String(term || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9_-]/g, '');
-}
-
-function safeId(value: unknown): string {
-  return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -69,9 +56,6 @@ export async function POST(req: NextRequest) {
     if (!dreamDate)      return NextResponse.json({ ok: false, error: 'dreamDate is required.'  }, { status: 400 });
     if (!rawText.trim()) return NextResponse.json({ ok: false, error: 'rawText is required.'    }, { status: 400 });
 
-    const db  = getAdminDb();
-    const now = Timestamp.now();
-
     const cash3Numbers       = Array.isArray(parseResult.cash3Numbers)   ? parseResult.cash3Numbers   : [];
     const cash4Numbers       = Array.isArray(parseResult.cash4Numbers)   ? parseResult.cash4Numbers   : [];
     const archivedNumbers    = Array.isArray(parseResult.archivedNumbers) ? parseResult.archivedNumbers : [];
@@ -80,14 +64,8 @@ export async function POST(req: NextRequest) {
     const activeWindowStart = dreamDate;
     const activeWindowEnd   = addDays(dreamDate, 6);
 
-    // ── 1. Write backtestDreams ───────────────────────────────────────────────
-
-    const dreamRef       = db.collection('backtestDreams').doc();
-    const backtestDreamId = dreamRef.id;
-
     const dreamDoc = {
       ownerUid,
-      backtestDreamId,
       dreamerId,
       dreamerName,
       dreamDate,
@@ -104,110 +82,32 @@ export async function POST(req: NextRequest) {
       activeWindowEnd,
       status:       'intake-saved',
       replaySource: '',
-      createdAt:    now,
-      updatedAt:    now,
     };
 
-    await dreamRef.set(dreamDoc, { merge: true });
+    const termMappingsWritten = parsedTermMappings.reduce((sum: number, mapping: any) => {
+      return sum +
+        (Array.isArray(mapping?.cash3Numbers) ? mapping.cash3Numbers.filter((n: any) => String(n ?? '').trim()).length : 0) +
+        (Array.isArray(mapping?.cash4Numbers) ? mapping.cash4Numbers.filter((n: any) => String(n ?? '').trim()).length : 0);
+    }, 0);
 
-    // ── 2. Write backtestWindows ──────────────────────────────────────────────
-
-    await db.collection('backtestWindows').doc(backtestDreamId).set(
-      {
-        ownerUid,
-        backtestDreamId,
-        dreamerId,
-        dreamerName,
-        dreamDate,
-        activeWindowStart,
-        activeWindowEnd,
-        lookaheadDays: 7,
-        cash3Numbers,
-        cash4Numbers,
-        status:    'intake-saved',
-        createdAt: now,
-        updatedAt: now,
-      },
-      { merge: true }
-    );
-
-    // ── 3. Write termNumberMappings (Universal Dream Dictionary) ──────────────
-    //
-    // SHAPE: flat, one doc per (ownerUid, dreamerId, normalizedTerm, number, gameType).
-    // This matches the shape expected by /api/dictionary/terms route (Shape A in expandDoc).
-    //
-    // DEDUP: deterministic doc ID.  merge:true means re-saving the same dream
-    //        just refreshes updatedAt — no duplicate rows.
-    //
-    // LEADING ZEROS: numbers stored as String(num).trim(), never coerced to int.
-    //
-    // Batch size: 400 (Firestore limit per batch.commit()).
-    const BATCH_SIZE = 400;
-
-    // Collect all flat rows first
-    type TermRow = {
-      docId:      string;
-      termLabel:  string;
-      normalizedTerm: string;
-      number:     string;
-      gameType:   'cash3' | 'cash4';
-    };
-
-    const rows: TermRow[] = [];
-
-    for (const mapping of parsedTermMappings) {
-      const termRaw   = String(mapping.term || '').trim();
-      if (!termRaw) continue;
-      const termLabel     = termRaw;
-      const normalizedTerm = normalizeTerm(termRaw);
-
-      for (const raw of (Array.isArray(mapping.cash3Numbers) ? mapping.cash3Numbers : [])) {
-        const number = String(raw ?? '').trim();
-        if (!number) continue;
-        const docId = [ownerUid, dreamerId, normalizedTerm, number, 'cash3'].map(safeId).join('__');
-        rows.push({ docId, termLabel, normalizedTerm, number, gameType: 'cash3' });
-      }
-
-      for (const raw of (Array.isArray(mapping.cash4Numbers) ? mapping.cash4Numbers : [])) {
-        const number = String(raw ?? '').trim();
-        if (!number) continue;
-        const docId = [ownerUid, dreamerId, normalizedTerm, number, 'cash4'].map(safeId).join('__');
-        rows.push({ docId, termLabel, normalizedTerm, number, gameType: 'cash4' });
-      }
-    }
-
-    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      for (const row of rows.slice(i, i + BATCH_SIZE)) {
-        batch.set(
-          db.collection('termNumberMappings').doc(row.docId),
-          {
-            ownerUid,
-            dreamerId,
-            dreamerName,
-            termLabel:       row.termLabel,
-            normalizedTerm:  row.normalizedTerm,
-            number:          row.number,        // stored as string — leading zeros preserved
-            gameType:        row.gameType,
-            source:          'historical-dream-intake',
-            backtestDreamId,
-            dreamDate,
-            createdAt:       now,
-            updatedAt:       now,
-          },
-          { merge: true }
-        );
-      }
-      await batch.commit();
-    }
+    const backtestDreamId = await createBacktestDreamIntake(ownerUid, {
+      dreamDate,
+      rawText,
+      source,
+      confidence,
+      notes,
+      parseResult,
+      dreamerId,
+      dreamerName,
+    });
 
     return NextResponse.json({
       ok: true,
       backtestDreamId,
       dreamerId,
       dreamerName,
-      termMappingsWritten: rows.length,
-      dream: { id: backtestDreamId, ...dreamDoc },
+      termMappingsWritten,
+      dream: { id: backtestDreamId, backtestDreamId, ...dreamDoc },
     });
   } catch (err) {
     console.error('[save-dream-intake] error:', err);
