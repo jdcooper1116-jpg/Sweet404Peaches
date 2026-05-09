@@ -32,6 +32,9 @@ import { getAdminDb } from '@/lib/firebase/admin';
 import {
   canonicalPmDocId, canonicalEventId, normalizeTerm,
 } from '@/lib/intelligence/hitClassification';
+import { getDreamDbProvider, getStorageAdapter } from '@/lib/storage/provider';
+import { persistBacktestReplayEvidence } from '@/lib/evidence/backtestHitOrchestrator';
+import type { BacktestReplayHitCandidate } from '@/lib/evidence/backtestHitOrchestrator';
 
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
@@ -105,6 +108,109 @@ export async function POST(req: NextRequest) {
     if (!backtestDreamId) return NextResponse.json({ ok: false, error: 'backtestDreamId is required.' }, { status: 400 });
     if (!dreamDate)       return NextResponse.json({ ok: false, error: 'dreamDate is required.'       }, { status: 400 });
 
+    // ── Postgres mode branch ──────────────────────────────────────────────────
+    if (getDreamDbProvider() === 'postgres') {
+      try {
+        const storageAdapter = getStorageAdapter();
+
+        // Resolve dreamerId/dreamerName
+        let resolvedDreamerId = String(body.dreamerId || '').trim();
+        let resolvedDreamerName = String(body.dreamerName || '').trim();
+
+        if (!resolvedDreamerId) {
+          // Lookup from backtest dream
+          const backtestDream = await storageAdapter.backtests.getBacktestDreamById(ownerUid, backtestDreamId);
+          if (backtestDream) {
+            resolvedDreamerId = String(backtestDream.dreamerId || '').trim();
+            resolvedDreamerName = String(backtestDream.dreamerName || '').trim();
+          }
+        }
+
+        // Fail if dreamerId not resolved — never default to owner-self
+        if (!resolvedDreamerId) {
+          return NextResponse.json({
+            ok: false,
+            error: 'dreamerId is required for Postgres mode. Provide in request body or ensure backtest dream has dreamerId.'
+          }, { status: 400 });
+        }
+
+        // Map hits to BacktestReplayHitCandidate[]
+        const candidates: BacktestReplayHitCandidate[] = hits.map(hit => ({
+          dreamerId: resolvedDreamerId,
+          dreamerName: resolvedDreamerName,
+          dreamDate,
+          termLabel: hit.termLabel,
+          numberText: hit.number,  // preserve as string, leading zeros intact
+          gameType: hit.gameType,
+          state: hit.state,
+          drawDate: hit.drawDate,
+          drawTime: hit.drawTime,
+          rawResult: hit.rawResult,
+          normalizedResult: hit.normalizedResult,  // preserve as string
+          resultBoxedKey: hit.resultBoxedKey,
+          hitType: hit.hitType,
+          daysFromDream: hit.daysFromDream,
+          sameDay: hit.sameDay,
+          isVerified: hit.is_verified,
+          sourceName: hit.source_name,
+          replaySource: 'lottery-engine',
+          metadata: hit.canonical_key ? { canonical_key: hit.canonical_key } : undefined,
+        }));
+
+        // Persist evidence
+        const result = await persistBacktestReplayEvidence({
+          ownerUid,
+          backtestDreamId,
+          dreamerId: resolvedDreamerId,
+          dreamerName: resolvedDreamerName,
+          dreamDate,
+          replaySource: 'lottery-engine',
+          hits: candidates,
+        });
+
+        // Compute response stats (similar to Firebase)
+        const straightHits = hits.filter(h => h.hitType === 'straight' || (h.hitType as string) === 'exact').length;
+        const boxedHits = hits.filter(h => h.hitType === 'boxed' || (h.hitType as string) === 'box').length;
+
+        const stateCounts = new Map<string, number>();
+        const termCounts = new Map<string, number>();
+        for (const hit of hits) {
+          if (hit.state) stateCounts.set(hit.state, (stateCounts.get(hit.state) ?? 0) + 1);
+          if (hit.termLabel) termCounts.set(hit.termLabel, (termCounts.get(hit.termLabel) ?? 0) + 1);
+        }
+
+        const uniqueStates = Array.from(stateCounts.keys());
+        const bestState = [...stateCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+        const bestTerm = [...termCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+        // Note: Status updates for backtestDreams/backtestWindows not yet implemented in Postgres storage
+        // Evidence is persisted, but status remains unchanged
+
+        return NextResponse.json({
+          ok: true,
+          totalHits: hits.length,
+          straightHits,
+          boxedHits,
+          uniqueStates,
+          bestState,
+          bestTerm,
+          dreamerId: resolvedDreamerId,
+          // Postgres-specific fields
+          backtestHitsCreated: result.backtestHitsCreated,
+          personalEventsCreated: result.personalEventsCreated,
+          mappingsUpdated: result.mappingsUpdated,
+          warnings: result.warnings || [],
+        });
+      } catch (err) {
+        console.error('[save-engine-replay-hits POSTGRES] error:', err);
+        return NextResponse.json(
+          { ok: false, error: err instanceof Error ? err.message : 'Failed to save engine replay hits in Postgres mode.' },
+          { status: 500 }
+        );
+      }
+    }
+
+    // ── Firebase mode (unchanged) ─────────────────────────────────────────────
     const db  = getAdminDb();
     const now = Timestamp.now();
     const BATCH = 400;
