@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveOwnerUid } from '@/lib/firebase/admin';
 import { listActiveDreamWindows } from '@/lib/storage/dreamWindows';
+import { getDreamDbProvider } from '@/lib/storage/provider';
+import {
+  loadProofIndex,
+  enrichWindowsWithProof,
+  enrichGroupsWithProof,
+} from '@/lib/evidence/enrichActiveWindowsWithProof';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +31,7 @@ export async function GET(req: NextRequest) {
     const dreamerIdFilter = (params.get('dreamerId') ?? '').trim();
     const dreamEntryIdFilter = (params.get('dreamEntryId') ?? '').trim();
     const includeExpired = params.get('includeExpired') === 'true';
+    const includeProof   = params.get('includeProof')   === 'true';
     const maxPerDreamer = Math.min(Math.max(Number(params.get('limit') ?? 250), 1), 250);
     const today = new Date().toISOString().slice(0, 10);
 
@@ -84,6 +91,7 @@ export async function GET(req: NextRequest) {
           numbers: [],
           boxedKeys: [],
           sampleWindows: [],
+          proofWindows: [],
           lastCheckedAt: w.lastCheckedAt ?? null,
           lastHitCount: 0,
           newHitsSinceLastCheck: 0,
@@ -103,6 +111,7 @@ export async function GET(req: NextRequest) {
       if (bk && !g.boxedKeys.includes(bk)) g.boxedKeys.push(bk);
 
       if (g.sampleWindows.length < 12) g.sampleWindows.push(w);
+      g.proofWindows.push(w);
 
       g.lastHitCount += Number(w.lastHitCount ?? 0);
       g.newHitsSinceLastCheck += Number(w.newHitsSinceLastCheck ?? 0);
@@ -114,6 +123,125 @@ export async function GET(req: NextRequest) {
 
     const groups = Array.from(groupMap.values())
       .sort((a, b) => String(b.dreamDate ?? '').localeCompare(String(a.dreamDate ?? '')));
+
+    // ── Proof enrichment (opt-in via includeProof=true) ──────────────────────
+    // Joins personal_hit_mappings evidence onto windows and groups.
+    // Only runs in Postgres mode — Firebase mode has no personal_hit_mappings table.
+    // One broad query loads all proof for the owner; then joins happen in-memory.
+    let proofStats = {
+      proofIndexSize: 0,
+      provenWindows:  0,
+      provenGroups:   0,
+      provider:       getDreamDbProvider() as string,
+    };
+    if (includeProof && getDreamDbProvider() === 'postgres') {
+      try {
+        const proofIndex = await loadProofIndex(
+          ownerUid,
+          dreamerIdFilter || undefined,  // undefined = load all dreamers for cross-dreamer proof
+          5000
+        );
+        proofStats.proofIndexSize = proofIndex.size;
+        enrichWindowsWithProof(allWindows, proofIndex);
+
+        // Group proof must be derived ONLY from exact matched active-window rows.
+        // Do not synthesize term × number combinations at group level; that can
+        // incorrectly label a group as proven when no actual window row matched.
+        const proofByGroup = new Map<string, any>();
+
+        for (const w of allWindows as any[]) {
+          if (!w.hasFellBefore) continue;
+
+          const entryId = String(w.dreamEntryId ?? w.sourceDreamEntryId ?? 'missing');
+          const groupKey = `${String(w.dreamerId ?? 'unknown')}__${entryId}`;
+
+          if (!proofByGroup.has(groupKey)) {
+            proofByGroup.set(groupKey, {
+              fellBeforeHitCount: 0,
+              straightCount: 0,
+              boxedCount: 0,
+              stateStrengthScore: 0,
+              lastHitDate: '',
+              statesWithHits: new Set<string>(),
+              sourceClasses: new Set<string>(),
+              proofEventCount: 0,
+              provenWindowCount: 0,
+            });
+          }
+
+          const acc = proofByGroup.get(groupKey);
+          acc.fellBeforeHitCount += Number(w.fellBeforeHitCount ?? 0);
+          acc.straightCount += Number(w.straightCount ?? 0);
+          acc.boxedCount += Number(w.boxedCount ?? 0);
+          acc.stateStrengthScore += Number(w.stateStrengthScore ?? 0);
+          acc.proofEventCount += Number(w.proofEventCount ?? w.fellBeforeHitCount ?? 0);
+          acc.provenWindowCount += 1;
+
+          for (const s of (Array.isArray(w.statesWithHits) ? w.statesWithHits : [])) {
+            if (s) acc.statesWithHits.add(String(s));
+          }
+
+          for (const s of (Array.isArray(w.sourceClasses) ? w.sourceClasses : [])) {
+            if (s) acc.sourceClasses.add(String(s));
+          }
+
+          const lhd = String(w.lastHitDate ?? '');
+          if (lhd && lhd > acc.lastHitDate) acc.lastHitDate = lhd;
+        }
+
+        for (const g of groups as any[]) {
+          const groupKey = `${String(g.dreamerId ?? 'unknown')}__${String(g.dreamEntryId ?? 'missing')}`;
+          const acc = proofByGroup.get(groupKey);
+
+          if (!acc) {
+            g.hasFellBefore = false;
+            g.fellBeforeHitCount = 0;
+            g.straightCount = 0;
+            g.boxedCount = 0;
+            g.stateStrengthScore = 0;
+            g.lastHitDate = '';
+            g.statesWithHits = [];
+            g.sourceClasses = [];
+            g.proofLabel = '';
+            g.proofEventCount = 0;
+            g.provenWindowCount = 0;
+            continue;
+          }
+
+          const sourceClasses = Array.from(acc.sourceClasses as Set<string>).map(String);
+          const hasBacktest = sourceClasses.some((s) => s.includes('backtest'));
+          const hasLive = sourceClasses.some((s) => s.includes('live'));
+
+          g.hasFellBefore = acc.fellBeforeHitCount > 0;
+          g.fellBeforeHitCount = acc.fellBeforeHitCount;
+          g.straightCount = acc.straightCount;
+          g.boxedCount = acc.boxedCount;
+          g.stateStrengthScore = acc.stateStrengthScore;
+          g.lastHitDate = acc.lastHitDate;
+          g.statesWithHits = Array.from(acc.statesWithHits);
+          g.sourceClasses = sourceClasses;
+          g.proofLabel = hasBacktest && hasLive
+            ? 'Backtest + Live Proven'
+            : hasBacktest
+              ? 'Backtest Proven'
+              : hasLive
+                ? 'Live Proven'
+                : 'Proven';
+          g.proofEventCount = acc.proofEventCount;
+          g.provenWindowCount = acc.provenWindowCount;
+        }
+
+        proofStats.provenWindows = allWindows.filter((w: any) => w.hasFellBefore).length;
+        proofStats.provenGroups  = groups.filter((g: any) => g.hasFellBefore).length;
+      } catch (proofErr) {
+        console.warn('[window-groups] proof enrichment failed (non-fatal):', proofErr);
+      }
+    }
+
+    // proofWindows is internal-only; sampleWindows remains UI-safe.
+    for (const g of groups as any[]) {
+      delete g.proofWindows;
+    }
 
     const dreamerBreakdown: Record<string, number> = {};
     const dreamEntryBreakdown: Record<string, number> = {};
@@ -151,7 +279,9 @@ export async function GET(req: NextRequest) {
         dreamerId: dreamerIdFilter || null,
         dreamEntryId: dreamEntryIdFilter || null,
         includeExpired,
+        includeProof,
       },
+      ...(includeProof ? { proofStats } : {}),
     });
   } catch (err) {
     console.error('[api/dreams/window-groups]', err);

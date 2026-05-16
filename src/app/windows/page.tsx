@@ -155,7 +155,7 @@ export default function ActiveWindowsPage() {
     if (!user) { setRows([]); setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250' });
+      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250', includeProof: 'true' });
       if (dreamerFilter) qs.set('dreamerId', dreamerFilter);
       const res = await fetch(`/api/dreams/window-groups?${qs}`);
       const data = await res.json();
@@ -203,7 +203,7 @@ export default function ActiveWindowsPage() {
             ['Dream Windows',     grouped.length],
             ['Currently Active',  active.length],
             ['Expired',           expired.length],
-            ['Total Watch Items', groupSummary.totalWindows > 0 ? groupSummary.totalWindows : grouped.reduce((s, g) => s + g.totalWatchItems, 0)],
+            ['Total Watch Items', grouped.reduce((s, g) => s + g.totalWatchItems, 0)],
           ].map(([label, val]) => (
             <div key={String(label)} style={{
               background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
@@ -278,6 +278,37 @@ export default function ActiveWindowsPage() {
                     <span key={n} style={{ fontFamily:'monospace', fontWeight:700, fontSize:'11px', padding:'2px 6px', borderRadius:'6px', background:'rgba(255,107,74,0.14)', border:'1px solid rgba(255,107,74,0.26)', color:'#ff8a6a' }}>{n}</span>
                   ))}
                   {g.numbers.length > 10 && <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>+{g.numbers.length - 10} more</span>}
+                </div>
+              )}
+              {/* Proof badge — shown when window-groups returns proof enrichment */}
+              {g.hasFellBefore && (
+                <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:'1px solid rgba(255,255,255,0.07)' }}>
+                  <span style={{
+                    padding:'3px 10px', borderRadius:'999px', fontSize:'10px', fontWeight:800,
+                    background: g.sourceClasses?.includes('backtest-replay') && g.sourceClasses?.includes('live-dream-refresh')
+                      ? 'rgba(160,144,255,0.18)' : g.sourceClasses?.includes('backtest-replay')
+                      ? 'rgba(255,204,80,0.14)' : 'rgba(96,224,154,0.14)',
+                    color: g.sourceClasses?.includes('backtest-replay') && g.sourceClasses?.includes('live-dream-refresh')
+                      ? '#a090ff' : g.sourceClasses?.includes('backtest-replay')
+                      ? '#ffcc50' : '#60e09a',
+                    border: `1px solid ${g.sourceClasses?.includes('backtest-replay') && g.sourceClasses?.includes('live-dream-refresh')
+                      ? 'rgba(160,144,255,0.30)' : g.sourceClasses?.includes('backtest-replay')
+                      ? 'rgba(255,204,80,0.26)' : 'rgba(96,224,154,0.26)'}`,
+                    fontFamily:'system-ui,sans-serif',
+                  }}>
+                    {g.proofLabel || (g.hasFellBefore ? 'Proven' : '')}
+                  </span>
+                  <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.55)' }}>
+                    {g.fellBeforeHitCount} hit{g.fellBeforeHitCount !== 1 ? 's' : ''}
+                    {g.straightCount > 0 && ` · ${g.straightCount}S`}
+                    {g.boxedCount > 0 && ` · ${g.boxedCount}B`}
+                    {g.lastHitDate && <span style={{ marginLeft:'6px', fontFamily:'monospace', fontSize:'10px', color:'rgba(255,255,255,0.35)' }}>last {g.lastHitDate}</span>}
+                  </span>
+                  {g.statesWithHits?.length > 0 && (
+                    <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.40)' }}>
+                      {g.statesWithHits.slice(0,6).join(' · ')}{g.statesWithHits.length > 6 ? ` +${g.statesWithHits.length-6}` : ''}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
