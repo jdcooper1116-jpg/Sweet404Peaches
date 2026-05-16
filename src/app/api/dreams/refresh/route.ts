@@ -10,7 +10,8 @@
 import { NextRequest, NextResponse }             from 'next/server';
 import { initializeApp, getApps, cert }          from 'firebase-admin/app';
 import { getFirestore }                           from 'firebase-admin/firestore';
-import { refreshAllActiveWindows }                from '@/lib/engine/dreamRefresh';
+import { refreshAllActiveWindows, refreshAllActiveWindowsPostgres } from '@/lib/engine/dreamRefresh';
+import { getDreamDbProvider }                     from '@/lib/storage/provider';
 import { format }                                 from 'date-fns';
 
 export const dynamic     = 'force-dynamic';
@@ -48,10 +49,19 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const db    = getAdminDb();    // AdminFirestore — no cast needed
     const today = format(new Date(), 'yyyy-MM-dd');
+
+    // ── Postgres branch ──────────────────────────────────────────────────────
+    if (getDreamDbProvider() === 'postgres') {
+      const result = await refreshAllActiveWindowsPostgres(ownerUid, today);
+      return NextResponse.json(result, { status: 200 });
+    }
+
+    // ── Firebase branch (unchanged) ─────────────────────────────────────────
+    const db    = getAdminDb();
     const result = await refreshAllActiveWindows(db, ownerUid, today);
     // Auto-promote hits to personalHitMappings after every refresh
+    // (kept for Firebase mode; Postgres mode promotes inline via upsertPersonalHitMappingsFromEvents)
     if (result.totalNewHits > 0) {
       try {
         await fetch(`${req.nextUrl.origin}/api/admin/promote-hits`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerUid }) });

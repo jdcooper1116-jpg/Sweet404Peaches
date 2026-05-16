@@ -441,3 +441,302 @@ export async function refreshAllActiveWindows(
     checkedAt: new Date().toISOString(),
   };
 }
+
+
+// ─── Postgres live refresh ─────────────────────────────────────────────────────
+//
+// Reads active_dream_windows from Postgres, calls the same lottery-engine,
+// and writes evidence through the Postgres hit evidence storage.
+//
+// This function is completely self-contained. It does NOT touch:
+//   - Firestore (no getAdminDb calls)
+//   - The existing refreshAllActiveWindows (Firebase mode is unchanged)
+//   - Prisma schema (all columns already exist)
+//
+// Idempotency: bulkUpsertPersonalHitEvents uses skipDuplicates:true against the
+// unique constraint on personal_hit_events. Running twice is safe.
+
+import { postgresDreamWindowsStorage } from '@/lib/storage/postgres/dreamWindows';
+import { postgresHitEvidenceStorage }   from '@/lib/storage/postgres/hitEvidence';
+import { prisma }                        from '@/lib/db/postgres';
+import type { PersonalHitEventEvidenceInput } from '@/lib/storage/types';
+import type { ActiveDreamWindow }         from '@/lib/types';
+
+export async function refreshAllActiveWindowsPostgres(
+  ownerUid: string,
+  today: string
+): Promise<RefreshAllResult> {
+
+  // ── 1. Read all non-expired active windows from Postgres ─────────────────
+  // Include recently expired windows for catch-up.
+  // This prevents missed windows from being skipped if the scheduled refresh
+  // did not run before activeEnd. Example: a 2026-05-09 → 2026-05-15 window
+  // should still be checked on 2026-05-16.
+  const allCandidateWindows: ActiveDreamWindow[] = await postgresDreamWindowsStorage
+    .listActiveDreamWindows(ownerUid, { includeExpired: true, limit: 2000 });
+
+  const todayMs = new Date(`${today}T00:00:00`).getTime();
+  const catchupDays = 7;
+  const catchupStartMs = todayMs - catchupDays * 86_400_000;
+
+  const windows: ActiveDreamWindow[] = allCandidateWindows.filter((w) => {
+    const activeEnd = String(w.activeEnd ?? '');
+    const activeEndMs = new Date(`${activeEnd}T00:00:00`).getTime();
+
+    if (!Number.isFinite(activeEndMs)) return false;
+
+    const isStillActive = activeEnd >= today;
+    const isRecentlyExpired = activeEndMs >= catchupStartMs;
+
+    return isStillActive || isRecentlyExpired;
+  });
+
+  if (windows.length === 0) {
+    return {
+      windowsChecked: 0, windowsWithNewHits: 0, totalNewHits: 0,
+      promotedToMemory: 0, skippedExistingEvents: 0,
+      uniqueDreamersChecked: 0, uniqueDreamEntriesChecked: 0,
+      dreamerBreakdown: {}, dreamEntryBreakdown: {},
+      engineCallsMade: 0, errors: [],
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  // ── 2. Build engine groups (same logic as Firebase branch) ────────────────
+  // Group by (gameType, activeStart, activeEnd) so one engine call covers all
+  // candidates sharing the same window period and game type.
+  type GroupKey = string;
+  const groups = new Map<GroupKey, ActiveDreamWindow[]>();
+  for (const w of windows) {
+    const gt = String(w.gameType ?? '');
+    const key = `${gt}::${w.activeStart}::${w.activeEnd}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(w);
+  }
+
+  // ── 3. Pre-load existing events to avoid writing duplicates ───────────────
+  // Collect Postgres active_dream_window IDs for the dedup query.
+  const windowIds = windows.map(w => w.id).filter(Boolean);
+  const existingEvents = windowIds.length
+    ? await prisma.personalHitEvent.findMany({
+        where: { ownerUid, activeWindowId: { in: windowIds } },
+        select: { activeWindowId: true, numberText: true, state: true, drawDate: true, drawTime: true },
+      })
+    : [];
+
+  // Build a per-window dedup set using the same key as the Firestore branch.
+  const existingByWindow = new Map<string, Set<string>>();
+  for (const ev of existingEvents) {
+    const wid = ev.activeWindowId ?? '';
+    if (!existingByWindow.has(wid)) existingByWindow.set(wid, new Set());
+    existingByWindow.get(wid)!.add(
+      hitKey(ev.numberText, ev.state, ev.drawDate, ev.drawTime)
+    );
+  }
+
+  // ── 4. Call engine, collect new hits ─────────────────────────────────────
+  const errors: Array<{ context: string; error: string }> = [];
+  let engineCallsMade = 0;
+
+  // Map: windowId → new hit count (for lastHitCount update)
+  const newHitsPerWindow = new Map<string, number>();
+
+  // Collect events to persist
+  const eventsToWrite: PersonalHitEventEvidenceInput[] = [];
+
+  for (const [groupKey, groupWindows] of groups.entries()) {
+    const [gameType, activeStart, activeEnd] = groupKey.split('::');
+    const lookahead_days = calcLookahead(activeStart, activeEnd);
+    const states = gameType === 'cash4' ? PICK4_STATES : PICK3_STATES;
+
+    // Dedupe candidates within the group (multiple windows can share a number)
+    const candidateSet = new Set(groupWindows.map(w => String(w.number ?? '')));
+    const candidates   = Array.from(candidateSet).filter(Boolean);
+    if (!candidates.length) continue;
+
+    // Index for quickly finding which windows produced a candidate number
+    const windowsByCandidate = new Map<string, ActiveDreamWindow[]>();
+    for (const w of groupWindows) {
+      const num = String(w.number ?? '');
+      if (!windowsByCandidate.has(num)) windowsByCandidate.set(num, []);
+      windowsByCandidate.get(num)!.push(w);
+    }
+
+    for (const state of states) {
+      try {
+        // Engine expects pick3/pick4 not cash3/cash4
+        const engineGameType = gameType === 'cash4' ? 'pick4' : 'pick3';
+
+        const response = await runBacktest({
+          state,
+          game_type:      engineGameType,
+          anchor_date:    activeStart,
+          lookahead_days,
+          candidates,
+          match_mode:     'both',
+          filters:        { match_mode: 'both' },
+          label:          `pg-refresh::${gameType}::${state}`,
+        } as any);
+
+        engineCallsMade++;
+
+        const hits: Array<EngineHit & { state: string }> =
+          ((response as any).hits ?? []).map((h: EngineHit) => ({ ...h, state }));
+
+        for (const hit of hits) {
+          const matchingWindows = windowsByCandidate.get(hit.candidate) ?? [];
+          // Derive hit type from digit comparison — do NOT trust engine's match_type
+          const isExact = hit.candidate === hit.winning_number;
+          // normalizeHitType expects 'exact'|'box'; we pass that directly
+          // (toHitEventRow maps 'straight'→'exact', 'boxed'→'box' too, but being explicit)
+          const hitTypeForStorage: 'exact' | 'box' = isExact ? 'exact' : 'box';
+
+          for (const w of matchingWindows) {
+            const dupKey = hitKey(hit.candidate, state, hit.draw_date, hit.draw_time);
+            if ((existingByWindow.get(w.id) ?? new Set()).has(dupKey)) continue;
+
+            // Mark in local dedup set so duplicate hits in the same batch are ignored
+            if (!existingByWindow.has(w.id)) existingByWindow.set(w.id, new Set());
+            existingByWindow.get(w.id)!.add(dupKey);
+
+            // Compute daysFromDream
+            let daysFromDream: number | null = null;
+            try {
+              daysFromDream = Math.max(0, Math.round(
+                (new Date(hit.draw_date).getTime() - new Date(activeStart).getTime()) / 86_400_000
+              ));
+            } catch { /* non-fatal */ }
+
+            eventsToWrite.push({
+              dreamerId:          String(w.dreamerId   ?? 'owner-self'),
+              dreamerName:        String(w.dreamerName  ?? ''),
+              sourceType:         'live',               // required by PersonalHitEventEvidenceInput
+              dreamEntryId:       String(w.dreamEntryId ?? ''),
+              sourceDreamEntryId: String(w.dreamEntryId ?? ''),
+              activeWindowId:     String(w.id          ?? ''),
+              termLabel:          String(w.termLabel    ?? ''),
+              normalizedTerm:     normalizeTerm(String(w.termLabel ?? '')),
+              // Number fields — always strings, never Number()/parseInt()
+              numberText:         String(w.number       ?? ''),    // preserves leading zeros
+              gameType:           String(gameType       ?? ''),    // 'cash3' or 'cash4'
+              state,
+              drawDate:           hit.draw_date,
+              drawTime:           hit.draw_time,
+              normalizedResult:   String(hit.winning_number ?? ''), // string, leading zeros
+              rawResult:          String(hit.winning_number ?? ''),
+              hitType:            hitTypeForStorage,
+              daysFromDream:      daysFromDream ?? undefined,
+              sameDay:            daysFromDream === 0,
+            });
+
+            newHitsPerWindow.set(w.id, (newHitsPerWindow.get(w.id) ?? 0) + 1);
+          }
+        }
+      } catch (err) {
+        errors.push({
+          context: `pg-refresh::${gameType}::${state}::${activeStart}`,
+          error:   err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // ── 5. Persist hit events to Postgres ────────────────────────────────────
+  // bulkUpsertPersonalHitEvents uses skipDuplicates:true — safe to call repeatedly
+  let promotedToMemory   = 0;
+  let skippedExistingEvents = 0;
+
+  if (eventsToWrite.length > 0) {
+    const writeResult = await postgresHitEvidenceStorage
+      .bulkUpsertPersonalHitEvents(ownerUid, eventsToWrite);
+    promotedToMemory      = writeResult.created;
+    skippedExistingEvents = writeResult.attempted - writeResult.created;
+  }
+
+  // ── 6. Upsert personal_hit_mappings from the full event ledger ───────────
+  // upsertPersonalHitMappingsFromEvents reads ALL personal_hit_events for the owner
+  // and rebuilds aggregates — handles both new and pre-existing events correctly.
+  if (promotedToMemory > 0) {
+    try {
+      await postgresHitEvidenceStorage.upsertPersonalHitMappingsFromEvents(ownerUid);
+    } catch (mappingErr) {
+      errors.push({
+        context: 'pg-refresh::upsertPersonalHitMappings',
+        error:   mappingErr instanceof Error ? mappingErr.message : String(mappingErr),
+      });
+    }
+  }
+
+  // ── 7. Update active_dream_windows.lastCheckedAt ─────────────────────────
+  // Update all checked windows, not just those with hits — so the UI can show
+  // "last checked at" regardless of whether a hit was found.
+  if (windows.length > 0) {
+    const checkedIds = windows.map(w => w.id).filter(Boolean);
+    try {
+      // Batch: update windows with new hits (different newHitsSinceLastCheck)
+      const haveHits    = checkedIds.filter(id => (newHitsPerWindow.get(id) ?? 0) > 0);
+      const haveNoHits  = checkedIds.filter(id => (newHitsPerWindow.get(id) ?? 0) === 0);
+
+      if (haveHits.length) {
+        // For windows with new hits we must update per-row (different hitCount values).
+        // Batch in chunks to avoid param limits.
+        const CHUNK = 100;
+        for (let i = 0; i < haveHits.length; i += CHUNK) {
+          await Promise.all(haveHits.slice(i, i + CHUNK).map(id =>
+            prisma.activeDreamWindow.updateMany({
+              where: { id, ownerUid },
+              data: {
+                lastCheckedAt:         new Date(),
+                newHitsSinceLastCheck: newHitsPerWindow.get(id) ?? 0,
+                lastHitCount: {
+                  increment: newHitsPerWindow.get(id) ?? 0,
+                },
+                updatedAt: new Date(),
+              },
+            })
+          ));
+        }
+      }
+
+      if (haveNoHits.length) {
+        await prisma.activeDreamWindow.updateMany({
+          where: { id: { in: haveNoHits }, ownerUid },
+          data: { lastCheckedAt: new Date(), newHitsSinceLastCheck: 0, updatedAt: new Date() },
+        });
+      }
+    } catch (updateErr) {
+      errors.push({
+        context: 'pg-refresh::updateWindowCheckedAt',
+        error:   updateErr instanceof Error ? updateErr.message : String(updateErr),
+      });
+    }
+  }
+
+  // ── 8. Build return value ─────────────────────────────────────────────────
+  const windowsWithNewHits = Array.from(newHitsPerWindow.values()).filter(n => n > 0).length;
+  const totalNewHits       = Array.from(newHitsPerWindow.values()).reduce((a, b) => a + b, 0);
+
+  const dreamerBreakdown: Record<string, number>   = {};
+  const dreamEntryBreakdown: Record<string, number> = {};
+  for (const w of windows) {
+    const dn = String(w.dreamerName || w.dreamerId || 'unknown');
+    const de = String(w.dreamEntryId || '');
+    dreamerBreakdown[dn] = (dreamerBreakdown[dn] ?? 0) + 1;
+    if (de) dreamEntryBreakdown[de] = (dreamEntryBreakdown[de] ?? 0) + 1;
+  }
+
+  return {
+    windowsChecked: windows.length,
+    windowsWithNewHits,
+    totalNewHits,
+    promotedToMemory,
+    skippedExistingEvents,
+    uniqueDreamersChecked:     Object.keys(dreamerBreakdown).length,
+    uniqueDreamEntriesChecked: Object.keys(dreamEntryBreakdown).length,
+    dreamerBreakdown,
+    dreamEntryBreakdown,
+    engineCallsMade,
+    errors,
+    checkedAt: new Date().toISOString(),
+  };
+}
