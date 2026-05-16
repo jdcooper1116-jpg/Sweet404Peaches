@@ -109,7 +109,11 @@ export async function GET(req: NextRequest) {
         sameDay:         r.sameDay ?? null,
         createdAt:       String(r.createdAt      ?? ''),
         updatedAt:       String(r.updatedAt      ?? ''),
-        _sourceClass:    String(r.source ?? '').includes('backtest') ? 'backtest-replay' : 'live-dream-refresh',
+        _sourceClass:    (
+          String(r.backtestDreamId ?? '').trim() ||
+          String(r.sourceDreamEntryId ?? '').startsWith('backtest:') ||
+          String(r.source ?? '').includes('backtest')
+        ) ? 'backtest-replay' : 'live-dream-refresh',
       }));
 
       // Apply in-memory filters
