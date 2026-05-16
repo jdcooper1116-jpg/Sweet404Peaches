@@ -154,22 +154,101 @@ export async function GET(req: NextRequest) {
     // personalHitMappings join — only when includeHits=true (saves reads on most calls)
     const hitMap = new Map<string, number>();
 
-    if (includeHits && provider === 'firebase') {
-      const db = getAdminDb();
-      let hitQuery = db.collection('personalHitMappings').where('ownerUid', '==', ownerUid);
-      if (dreamerId) hitQuery = hitQuery.where('dreamerId', '==', dreamerId) as any;
+    if (includeHits) {
+      if (provider === 'postgres') {
+        // ── Postgres: read from personal_hit_mappings ─────────────────────────
+        // personal_hit_mappings unique key: ownerUid + dreamerId + normalizedTerm + numberText + gameType + state
+        // Dictionary join key:              dreamerId + termLabel  + number        + gameType
+        // We build hitMap keyed by `dreamerId::termLabel::number::gameType` to match
+        // how expandDoc keys are looked up below.
+        //
+        // Note: personal_hit_mappings has one row per (dreamer, term, number, gameType, STATE).
+        // A number that hit in multiple states has multiple rows — we sum hitCount across all states.
+        const { prisma } = await import('@/lib/db/postgres');
+        const pgMappings = await prisma.personalHitMapping.findMany({
+          where: {
+            ownerUid,
+            ...(dreamerId ? { dreamerId } : {}),
+            isDeprecated: false,
+            isShadowedByCorrectedMapping: false,
+          },
+          select: {
+            dreamerId: true,
+            dreamerName: true,
+            termLabel: true,
+            normalizedTerm: true,
+            numberText: true,      // string — leading zeros preserved
+            gameType: true,
+            hitCount: true,
+            straightCount: true,
+            boxedCount: true,
+            stateStrengthScore: true,
+            lastHitDate: true,
+            state: true,
+          },
+          take: 2000,
+        });
 
-      const ht = await (hitQuery as any).limit(500).get();
+        // Build per-(dreamer, term, number, gameType) aggregates across all states
+        // Also build a secondary map keyed by normalizedTerm for fuzzy matching
+        const pgHitAgg = new Map<string, {
+          hitCount: number; straight: number; boxed: number; score: number; lastHitDate: string;
+        }>();
+        for (const pm of pgMappings) {
+          const did = String(pm.dreamerId || 'owner-self');
+          const tl  = String(pm.termLabel  || '');
+          const num = String(pm.numberText  || '');  // already a string with leading zeros
+          const gt  = String(pm.gameType    || '');
+          if (!num || !gt || !tl) continue;
 
-      for (const doc of ht.docs) {
-        const d   = doc.data();
-        const did = String(d.dreamerId || 'owner-self');
-        const num = String(d.number    || '');
-        const gt  = String(d.gameType  || '');
-        const tl  = String(d.termLabel || '');
-        if (!num || !gt || !tl) continue;
-        const key = `${did}::${tl}::${num}::${gt}`;
-        hitMap.set(key, (hitMap.get(key) ?? 0) + (Number(d.hitCount) || 1));
+          const key = `${did}::${tl}::${num}::${gt}`;
+          const existing = pgHitAgg.get(key);
+          if (!existing) {
+            pgHitAgg.set(key, {
+              hitCount:  Number(pm.hitCount   ?? 0),
+              straight:  Number(pm.straightCount ?? 0),
+              boxed:     Number(pm.boxedCount   ?? 0),
+              score:     Number(pm.stateStrengthScore ?? 0),
+              lastHitDate: String(pm.lastHitDate ?? ''),
+            });
+          } else {
+            // Aggregate across multiple state rows for the same (dreamer, term, number, gameType)
+            existing.hitCount  += Number(pm.hitCount   ?? 0);
+            existing.straight  += Number(pm.straightCount ?? 0);
+            existing.boxed     += Number(pm.boxedCount   ?? 0);
+            existing.score     += Number(pm.stateStrengthScore ?? 0);
+            if (String(pm.lastHitDate ?? '') > existing.lastHitDate) {
+              existing.lastHitDate = String(pm.lastHitDate ?? '');
+            }
+          }
+
+          // Also add to the legacy hitMap for the hasHit/hitCount fields below
+          hitMap.set(key, (hitMap.get(key) ?? 0) + (Number(pm.hitCount) || 1));
+        }
+
+        // Attach full hit stats to each expanded row (done in the loop below via pgHitAgg)
+        // We expose pgHitAgg via closure — the terms loop below reads it.
+        // Store on the outer scope so terms loop can access it.
+        (req as any).__pgHitAgg = pgHitAgg;
+
+      } else {
+        // ── Firebase: read from Firestore personalHitMappings ─────────────────
+        const db = getAdminDb();
+        let hitQuery = db.collection('personalHitMappings').where('ownerUid', '==', ownerUid);
+        if (dreamerId) hitQuery = hitQuery.where('dreamerId', '==', dreamerId) as any;
+
+        const ht = await (hitQuery as any).limit(500).get();
+
+        for (const doc of ht.docs) {
+          const d   = doc.data();
+          const did = String(d.dreamerId || 'owner-self');
+          const num = String(d.number    || '');
+          const gt  = String(d.gameType  || '');
+          const tl  = String(d.termLabel || '');
+          if (!num || !gt || !tl) continue;
+          const key = `${did}::${tl}::${num}::${gt}`;
+          hitMap.set(key, (hitMap.get(key) ?? 0) + (Number(d.hitCount) || 1));
+        }
       }
     }
 
@@ -177,7 +256,14 @@ export async function GET(req: NextRequest) {
     // In-memory filter is correct because expandDoc() assigns the "owner-self"
     // fallback for legacy docs that never stored dreamerId — a Firestore
     // .where("dreamerId", "==", ...) query would exclude those docs entirely.
-    const terms: Array<FlatRow & { hasHit: boolean; hitCount: number }> = [];
+    const terms: Array<FlatRow & {
+      hasHit: boolean;
+      hitCount: number;
+      straightCount: number;
+      boxedCount: number;
+      stateStrengthScore: number;
+      lastHitDate: string;
+    }> = [];
 
     for (const mapping of mappings as any[]) {
       const docId = String(mapping.id ?? mapping.sourceDocId ?? '');
@@ -190,7 +276,20 @@ export async function GET(req: NextRequest) {
           ? `${row.dreamerId}::${row.termLabel}::${row.number}::${row.gameType}`
           : '';
         const hc = hitKey ? (hitMap.get(hitKey) ?? 0) : 0;
-        terms.push({ ...row, hasHit: hc > 0, hitCount: hc });
+
+        // In Postgres mode with includeHits=true, attach full hit stats
+        const pgAgg = (req as any).__pgHitAgg;
+        const pgHit = (includeHits && pgAgg && hitKey) ? pgAgg.get(hitKey) : null;
+
+        terms.push({
+          ...row,
+          hasHit:            hc > 0 || (pgHit?.hitCount ?? 0) > 0,
+          hitCount:          pgHit?.hitCount ?? hc,
+          straightCount:     pgHit?.straight ?? 0,
+          boxedCount:        pgHit?.boxed    ?? 0,
+          stateStrengthScore:pgHit?.score    ?? 0,
+          lastHitDate:       pgHit?.lastHitDate ?? '',
+        });
       }
     }
 
@@ -203,7 +302,7 @@ export async function GET(req: NextRequest) {
       return a.number.localeCompare(b.number, undefined, { numeric: true });
     });
 
-    const res = NextResponse.json({ ok: true, terms, count: terms.length, includeHits, limit: maxDocs });
+    const res = NextResponse.json({ ok: true, terms, count: terms.length, includeHits, limit: maxDocs, provider });
     res.headers.set('Cache-Control', 'private, max-age=30');
     return res;
   } catch (err) {
