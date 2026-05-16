@@ -74,3 +74,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Dream refresh failed.', detail: message }, { status: 500 });
   }
 }
+
+export async function GET(req: NextRequest) {
+  // Vercel Cron sends GET requests. Use SWEET404_OWNER_UID when no body exists.
+  const ownerUid = process.env.SWEET404_OWNER_UID || req.nextUrl.searchParams.get('ownerUid') || '';
+
+  if (!ownerUid) {
+    return NextResponse.json(
+      { ok: false, error: 'Missing ownerUid. Set SWEET404_OWNER_UID for scheduled refresh.' },
+      { status: 400 }
+    );
+  }
+
+  const synthetic = new NextRequest(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    body: JSON.stringify({ ownerUid }),
+  });
+
+  return POST(synthetic);
+}
+
