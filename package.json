@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "reset:postgres:test-data": "node scripts/reset-postgres-test-data.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

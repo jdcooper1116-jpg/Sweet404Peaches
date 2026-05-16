@@ -188,10 +188,8 @@ export default function DashboardPage() {
         ]);
         if (dreamsData.ok)  setDreams(dreamsData.entries   ?? []);
         if (windowsData.ok) setWindows(windowsData.windows ?? []);
-          setWindowsCapped(false);  // window-groups is not flat-capped
+          setWindowsCapped(windowsData.capped ?? false);
           setWindowsTotal(windowsData.totalActiveWindows ?? 0);
-        setWindowsCapped(windowsData.capped ?? false);
-        setWindowsTotal(windowsData.count ?? 0);
         if (memoryData.ok)  setMemory(memoryData.rows       ?? []);
       } catch (err) {
         console.error(err);
@@ -220,19 +218,32 @@ export default function DashboardPage() {
   const groupedWindows = useMemo(() => {
     const map = new Map<string, any>();
     for (const row of windows) {
+      // Each element of `windows` is a flat active_dream_window row (one number per row).
+      // Key by dreamEntryId so all rows from the same dream become one group.
       const key = row.dreamEntryId || row.id || row.dreamId || Math.random().toString();
       if (!map.has(key)) {
-        map.set(key, { ...row, cash3Numbers: [], cash4Numbers: [], totalWatchItems: 0 });
+        map.set(key, {
+          ...row,
+          cash3Numbers: [],
+          cash4Numbers: [],
+          totalWatchItems: 0,   // count incremented below — row.totalWatchItems is undefined on flat rows
+        });
       }
       const g = map.get(key)!;
-      if (row.cash3Numbers) g.cash3Numbers.push(...row.cash3Numbers);
-      if (row.cash4Numbers) g.cash4Numbers.push(...row.cash4Numbers);
-      g.totalWatchItems = (g.totalWatchItems || 0) + (row.totalWatchItems || 0);
-      // Use latest activeEnd
+      const gt  = String(row.gameType ?? '');
+      const num = String(row.number   ?? '').trim();
+      if (num) {
+        if (gt === 'cash4') { if (!g.cash4Numbers.includes(num)) g.cash4Numbers.push(num); }
+        else                { if (!g.cash3Numbers.includes(num)) g.cash3Numbers.push(num); }
+      }
+      g.totalWatchItems++;   // one flat row = one watch item
+      // Keep latest activeEnd so the group survives the active filter
       if ((row.activeEnd ?? '') > (g.activeEnd ?? '')) {
         g.activeEnd   = row.activeEnd;
         g.activeStart = row.activeStart;
       }
+      // Accumulate newHitsSinceLastCheck across all windows in the group
+      g.newHitsSinceLastCheck = (g.newHitsSinceLastCheck ?? 0) + (Number(row.newHitsSinceLastCheck) || 0);
     }
     return Array.from(map.values());
   }, [windows]);
@@ -282,7 +293,7 @@ export default function DashboardPage() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
               <span style={pill('green')}>Engine-backed</span>
               <span style={pill()}>
-                {activeWindowCount} window{activeWindowCount !== 1 ? 's' : ''} active
+                {windowsTotal > 0 ? windowsTotal : watchItems} watch item{(windowsTotal > 0 ? windowsTotal : watchItems) !== 1 ? 's' : ''} · {activeGroups.length} dream group{activeGroups.length !== 1 ? 's' : ''} active
               </span>
               <span style={pill('plum')}>Duplicate protected</span>
             </div>
@@ -356,8 +367,8 @@ export default function DashboardPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               {([
                 ['Active Dreams',  dreams.length,      T.plum  ],
-                ['Active Windows', activeWindowCount,  T.peach ],
-                ['Watch Items',    watchItems,         T.green ],
+                ['Active Dream Groups', activeGroups.length,  T.peach ],
+                ['Watch Items', windowsTotal > 0 ? windowsTotal : watchItems, T.green ],
                 ['Memory Rows',    memory.length,      T.gold  ],
               ] as [string, number, string][]).map(([label, val, color]) => {
                 const s = statTile(color);
@@ -396,8 +407,8 @@ export default function DashboardPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
         {([
           ['Active Dreams',   dreams.length,      T.plum  ],
-          ['Active Windows',  activeWindowCount,  T.peach ],
-          ['Watch Items',     watchItems,         T.green ],
+          ['Active Dream Groups',  activeGroups.length,  T.peach ],
+          ['Watch Items', windowsTotal > 0 ? windowsTotal : watchItems, T.green ],
           ['Cash 3 Numbers',  cash3Count,         T.gold  ],
           ['Cash 4 Numbers',  cash4Count,         '#50b8ff' ],
           ['New Hits',        newHitsCount,       T.green ],

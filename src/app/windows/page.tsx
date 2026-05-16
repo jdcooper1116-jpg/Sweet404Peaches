@@ -155,7 +155,7 @@ export default function ActiveWindowsPage() {
     if (!user) { setRows([]); setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '50' });
+      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250' });
       if (dreamerFilter) qs.set('dreamerId', dreamerFilter);
       const res = await fetch(`/api/dreams/window-groups?${qs}`);
       const data = await res.json();
@@ -203,7 +203,7 @@ export default function ActiveWindowsPage() {
             ['Dream Windows',     grouped.length],
             ['Currently Active',  active.length],
             ['Expired',           expired.length],
-            ['Total Watch Items', grouped.reduce((s, g) => s + g.totalWatchItems, 0)],
+            ['Total Watch Items', groupSummary.totalWindows > 0 ? groupSummary.totalWindows : grouped.reduce((s, g) => s + g.totalWatchItems, 0)],
           ].map(([label, val]) => (
             <div key={String(label)} style={{
               background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',

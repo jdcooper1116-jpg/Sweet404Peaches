@@ -92,6 +92,7 @@ export default function DreamerProfilePage() {
 
   const [dreamer,   setDreamer]   = useState<any>(null);
   const [windows,   setWindows]   = useState<any[]>([]);
+  const [windowsTotal, setWindowsTotal] = useState(0);
   const [memory,    setMemory]    = useState<any[]>([]);
   const [hits,      setHits]      = useState<any[]>([]);
   const [dictTerms, setDictTerms] = useState<any[]>([]);
@@ -120,7 +121,7 @@ export default function DreamerProfilePage() {
       const [dr, wd, md, hd, td, bt, prof] = await Promise.all([
         // Dreamer profile: load from dreamer list and find ours
         safe(`/api/dreamers?ownerUid=${uid}&limit=100`),
-        safe(`/api/dreams/windows?ownerUid=${uid}&limit=50`),
+        safe(`/api/dreams/window-groups?ownerUid=${uid}&limit=250${dreamerParam}`)  ,
         safe(`/api/fell-before?ownerUid=${uid}&limit=250${dreamerParam}`),
         safe(`/api/dreams/hits?ownerUid=${uid}&limit=100`),
         safe(`/api/dictionary/terms?ownerUid=${uid}&limit=200${dreamerParam}`),
@@ -140,7 +141,10 @@ export default function DreamerProfilePage() {
         if (prof.ok && prof.profile?.displayName) setOwnerDisplayName(prof.profile.displayName);
       }
 
-      if (wd.ok) setWindows(wd.windows   ?? []);
+      if (wd.ok) {
+        setWindows(wd.windows ?? []);
+        setWindowsTotal(wd.totalActiveWindows ?? (wd.windows ?? []).length);
+      }
       if (md.ok) setMemory(md.rows        ?? []);
       if (hd.ok) {
         // Filter hits to this dreamer
@@ -260,7 +264,7 @@ export default function DreamerProfilePage() {
       {/* Stats */}
       {!loading && (
         <section style={{ display:'grid', gap:'10px', gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))' }}>
-          <StatTile label="Active Windows"  val={grouped.length}        color="#ff8a6a" />
+          <StatTile label="Watch Items"  val={windowsTotal > 0 ? windowsTotal : grouped.reduce((s, g) => s + g.cash3.length + g.cash4.length, 0)}        color="#ff8a6a" />
           <StatTile label="Fell-Before Rows" val={memory.length}        color="#60e09a" />
           <StatTile label="Detected Hits"    val={hits.length}          color="#ffcc50" />
           <StatTile label="Dict Terms"       val={dictTerms.length}     color="#a090ff" />
