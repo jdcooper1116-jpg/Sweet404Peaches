@@ -43,6 +43,7 @@ export const postgresBacktestsStorage: Pick<
   | 'getBacktestDreamById'
   | 'listBacktestHitsForDream'
   | 'getBacktestSummaryForDream'
+  | 'updateBacktestDreamStatus'
 > = {
   async createBacktestDreamIntake(
     ownerUid: string,
@@ -367,5 +368,15 @@ export const postgresBacktestsStorage: Pick<
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
+  },
+  async updateBacktestDreamStatus(
+    ownerUid: string,
+    backtestDreamId: string,
+    status: string
+  ): Promise<void> {
+    await prisma.backtestDream.updateMany({
+      where: { ownerUid, id: backtestDreamId },
+      data: { status, updatedAt: new Date() },
+    });
   },
 };

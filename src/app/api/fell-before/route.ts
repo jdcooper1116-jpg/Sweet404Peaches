@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { listFellBeforeMappings } from '@/lib/storage/hitEvidence';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,6 +75,86 @@ export async function GET(req: NextRequest) {
     const btidParam   = (params.get('backtestDreamId') ?? '').trim();
     const browseLimit = Math.min(Number(params.get('limit') ?? 250), 500);
 
+    // ── Postgres branch ────────────────────────────────────────────────────
+    // listFellBeforeMappings returns an array in Postgres mode, null in Firebase mode.
+    const pgRows = await listFellBeforeMappings(ownerUid, {
+      dreamerId:      dreamerId || undefined,
+      normalizedTerm: termRaw ? normalizeTerm(termRaw) : undefined,
+      limit:          browseLimit,
+    });
+
+    if (pgRows !== null) {
+      // ── Map Postgres rows to the same shape as Firestore rows ────────────
+      let rows = pgRows.map((r: any) => ({
+        id:              String(r.id ?? ''),
+        ownerUid:        String(r.ownerUid      ?? ownerUid),
+        dreamerId:       String(r.dreamerId      ?? ''),
+        dreamerName:     String(r.dreamerName    ?? ''),
+        termLabel:       String(r.termLabel      ?? ''),
+        normalizedTerm:  String(r.normalizedTerm ?? ''),
+        number:          String(r.number ?? r.numberText ?? ''),
+        numberText:      String(r.number ?? r.numberText ?? ''),
+        gameType:        String(r.gameType       ?? ''),
+        state:           String(r.state          ?? ''),
+        hitCount:        Number(r.hitCount       ?? 0),
+        straightCount:   Number(r.straightCount  ?? 0),
+        boxedCount:      Number(r.boxedCount     ?? 0),
+        stateStrengthScore: Number(r.stateStrengthScore ?? 0),
+        lastHitDate:     String(r.lastHitDate    ?? ''),
+        source:          String(r.source         ?? ''),
+        backtestDreamId: String(r.backtestDreamId ?? ''),
+        sourceDreamEntryId: String(r.sourceDreamEntryId ?? ''),
+        activeWindowId:  String(r.activeWindowId ?? ''),
+        daysFromDream:   r.daysFromDream ?? null,
+        sameDay:         r.sameDay ?? null,
+        createdAt:       String(r.createdAt      ?? ''),
+        updatedAt:       String(r.updatedAt      ?? ''),
+        _sourceClass:    String(r.source ?? '').includes('backtest') ? 'backtest-replay' : 'live-dream-refresh',
+      }));
+
+      // Apply in-memory filters
+      if (numberParam) {
+        rows = rows.filter((r: any) => r.number === numberParam);
+      }
+      if (stateParam) {
+        rows = rows.filter((r: any) => String(r.state ?? '') === stateParam);
+      }
+      if (gameParam === 'cash3' || gameParam === 'cash4') {
+        rows = rows.filter((r: any) => String(r.gameType ?? '') === gameParam);
+      }
+      if (sourceParam) {
+        const want = sourceParam.toLowerCase();
+        rows = rows.filter((r: any) => {
+          if (want === 'backtest-replay' || want === 'backtest') return r._sourceClass === 'backtest-replay';
+          if (want === 'live-dream-refresh' || want === 'live')  return r._sourceClass === 'live-dream-refresh';
+          return true;
+        });
+      }
+      if (btidParam) {
+        rows = rows.filter((r: any) => String(r.backtestDreamId ?? '') === btidParam);
+      }
+
+      const filtersApplied: string[] = [];
+      if (termRaw)     filtersApplied.push(`term=${termRaw}`);
+      if (dreamerId)   filtersApplied.push(`dreamerId=${dreamerId}`);
+      if (numberParam) filtersApplied.push(`number=${numberParam}`);
+      if (stateParam)  filtersApplied.push(`state=${stateParam}`);
+      if (gameParam)   filtersApplied.push(`gameType=${gameParam}`);
+      if (sourceParam) filtersApplied.push(`source=${sourceParam}`);
+
+      const res = NextResponse.json({
+        ok: true, rows,
+        count: rows.length, totalSampled: rows.length,
+        lookupMode: termRaw ? 'targeted-term-postgres' : 'browse-postgres',
+        filtersApplied: [...new Set(filtersApplied)],
+        limit: browseLimit, dreamerId: dreamerId || 'ALL',
+        provider: 'postgres',
+      });
+      res.headers.set('Cache-Control', 'private, max-age=5');
+      return res;
+    }
+
+    // ── Firebase branch (unchanged) ─────────────────────────────────────────
     const db  = getAdminDb();
     const col = db.collection('personalHitMappings');
     const filtersApplied: string[] = [];

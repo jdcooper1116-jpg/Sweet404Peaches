@@ -59,6 +59,9 @@ const unsupported: BacktestsStorage = {
   saveEngineReplayHits: async () => {
     throw new Error('Firebase backtest saveEngineReplayHits is provided by firestore adapter.');
   },
+  updateBacktestDreamStatus: async () => {
+    throw new Error('Firebase backtest updateBacktestDreamStatus is provided by firebase adapter index or route-specific logic.');
+  },
 };
 
 export const firebaseBacktestsStorage: Pick<

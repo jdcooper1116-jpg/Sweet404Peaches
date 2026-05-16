@@ -313,6 +313,11 @@ export interface BacktestsStorage {
     dreamDate: string,
     hits: EngineReplayHitInput[]
   ): Promise<BacktestReplaySummary>;
+  updateBacktestDreamStatus(
+    ownerUid: string,
+    backtestDreamId: string,
+    status: string
+  ): Promise<void>;
 }
 
 export interface FellBeforeStorage {

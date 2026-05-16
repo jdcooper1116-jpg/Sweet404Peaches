@@ -4,6 +4,7 @@ import { postgresDreamEntriesStorage } from '@/lib/storage/postgres/dreamEntries
 import { postgresDreamersStorage } from '@/lib/storage/postgres/dreamers';
 import { postgresDreamWindowsStorage } from '@/lib/storage/postgres/dreamWindows';
 import { postgresOwnerProfilesStorage } from '@/lib/storage/postgres/ownerProfiles';
+import { postgresHitEvidenceStorage } from '@/lib/storage/postgres/hitEvidence';
 import type { Sweet404StorageAdapter } from '@/lib/storage/types';
 
 function unsupportedStorageOperation(operation: string): never {
@@ -44,6 +45,7 @@ export const postgresStorageAdapter: Sweet404StorageAdapter = {
       unsupportedStorageOperation('backtests.listSafeBacktestSummariesForDreams'),
     saveEngineReplayHits: async () =>
       unsupportedStorageOperation('backtests.saveEngineReplayHits'),
+    updateBacktestDreamStatus: postgresBacktestsStorage.updateBacktestDreamStatus,
   },
   fellBefore: {
     listLotteryResults: async () => unsupportedStorageOperation('fellBefore.listLotteryResults'),

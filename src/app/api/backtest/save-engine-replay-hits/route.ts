@@ -183,8 +183,18 @@ export async function POST(req: NextRequest) {
         const bestState = [...stateCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
         const bestTerm = [...termCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
 
-        // Note: Status updates for backtestDreams/backtestWindows not yet implemented in Postgres storage
-        // Evidence is persisted, but status remains unchanged
+        // Update backtest dream status to engine-replay-complete
+        try {
+          const storageForStatus = getStorageAdapter();
+          await storageForStatus.backtests.updateBacktestDreamStatus(
+            ownerUid,
+            backtestDreamId,
+            'engine-replay-complete'
+          );
+        } catch (statusErr) {
+          // Non-fatal: evidence is already persisted; log and continue
+          console.warn('[save-engine-replay-hits POSTGRES] status update failed:', statusErr);
+        }
 
         return NextResponse.json({
           ok: true,

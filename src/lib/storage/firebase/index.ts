@@ -32,6 +32,12 @@ export const firebaseStorageAdapter: Sweet404StorageAdapter = {
     runBacktestReplayForDream: firestore.runBacktestReplayForDream,
     listSafeBacktestSummariesForDreams: firestore.listSafeBacktestSummariesForDreams,
     saveEngineReplayHits: firestore.saveEngineReplayHits,
+    updateBacktestDreamStatus: async (_ownerUid: string, _backtestDreamId: string, _status: string): Promise<void> => {
+      // Firebase mode: the save-engine-replay-hits Firebase branch handles its own
+      // Firestore status update directly. This adapter method is called only from
+      // the Postgres branch, which does not reach this adapter.
+      // Stub satisfies the BacktestsStorage interface.
+    },
   },
   fellBefore: {
     listLotteryResults: firestore.listLotteryResults,
