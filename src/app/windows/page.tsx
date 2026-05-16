@@ -155,7 +155,7 @@ export default function ActiveWindowsPage() {
     if (!user) { setRows([]); setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250', includeProof: 'true' });
+      const qs = new URLSearchParams({ ownerUid: user.uid, limit: '250', includeProof: 'true', proofScope: 'both' });
       if (dreamerFilter) qs.set('dreamerId', dreamerFilter);
       const res = await fetch(`/api/dreams/window-groups?${qs}`);
       const data = await res.json();
@@ -280,35 +280,55 @@ export default function ActiveWindowsPage() {
                   {g.numbers.length > 10 && <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.35)' }}>+{g.numbers.length - 10} more</span>}
                 </div>
               )}
-              {/* Proof badge — shown when window-groups returns proof enrichment */}
-              {g.hasFellBefore && (
-                <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:'1px solid rgba(255,255,255,0.07)' }}>
-                  <span style={{
-                    padding:'3px 10px', borderRadius:'999px', fontSize:'10px', fontWeight:800,
-                    background: g.sourceClasses?.includes('backtest-replay') && g.sourceClasses?.includes('live-dream-refresh')
-                      ? 'rgba(160,144,255,0.18)' : g.sourceClasses?.includes('backtest-replay')
-                      ? 'rgba(255,204,80,0.14)' : 'rgba(96,224,154,0.14)',
-                    color: g.sourceClasses?.includes('backtest-replay') && g.sourceClasses?.includes('live-dream-refresh')
-                      ? '#a090ff' : g.sourceClasses?.includes('backtest-replay')
-                      ? '#ffcc50' : '#60e09a',
-                    border: `1px solid ${g.sourceClasses?.includes('backtest-replay') && g.sourceClasses?.includes('live-dream-refresh')
-                      ? 'rgba(160,144,255,0.30)' : g.sourceClasses?.includes('backtest-replay')
-                      ? 'rgba(255,204,80,0.26)' : 'rgba(96,224,154,0.26)'}`,
-                    fontFamily:'system-ui,sans-serif',
-                  }}>
-                    {g.proofLabel || (g.hasFellBefore ? 'Proven' : '')}
-                  </span>
-                  <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.55)' }}>
-                    {g.fellBeforeHitCount} hit{g.fellBeforeHitCount !== 1 ? 's' : ''}
-                    {g.straightCount > 0 && ` · ${g.straightCount}S`}
-                    {g.boxedCount > 0 && ` · ${g.boxedCount}B`}
-                    {g.lastHitDate && <span style={{ marginLeft:'6px', fontFamily:'monospace', fontSize:'10px', color:'rgba(255,255,255,0.35)' }}>last {g.lastHitDate}</span>}
-                  </span>
-                  {g.statesWithHits?.length > 0 && (
-                    <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.40)' }}>
-                      {g.statesWithHits.slice(0,6).join(' · ')}{g.statesWithHits.length > 6 ? ` +${g.statesWithHits.length-6}` : ''}
-                    </span>
+              {/* Proof badges — E1.2 dual-layer: personal + universal */}
+              {(g.personalHasFellBefore || g.universalHasFellBefore) && (
+                <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginTop:'8px', paddingTop:'8px', borderTop:'1px solid rgba(255,255,255,0.07)' }}>
+
+                  {/* Personal proof badge */}
+                  {g.personalHasFellBefore && (
+                    <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center' }}>
+                      <span style={{
+                        padding:'2px 9px', borderRadius:'999px', fontSize:'10px', fontWeight:800,
+                        background: g.personalSourceClasses?.includes('backtest-replay') && g.personalSourceClasses?.includes('live-dream-refresh') ? 'rgba(160,144,255,0.18)'
+                          : g.personalSourceClasses?.includes('backtest-replay') ? 'rgba(255,204,80,0.14)' : 'rgba(96,224,154,0.14)',
+                        color: g.personalSourceClasses?.includes('backtest-replay') && g.personalSourceClasses?.includes('live-dream-refresh') ? '#a090ff'
+                          : g.personalSourceClasses?.includes('backtest-replay') ? '#ffcc50' : '#60e09a',
+                        border: `1px solid ${g.personalSourceClasses?.includes('backtest-replay') && g.personalSourceClasses?.includes('live-dream-refresh') ? 'rgba(160,144,255,0.30)'
+                          : g.personalSourceClasses?.includes('backtest-replay') ? 'rgba(255,204,80,0.26)' : 'rgba(96,224,154,0.26)'}`,
+                        fontFamily:'system-ui,sans-serif',
+                      }}>
+                        {g.personalProofLabel || 'Personal Proven'}
+                      </span>
+                      <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.55)' }}>
+                        {g.personalFellBeforeHitCount} hit{g.personalFellBeforeHitCount !== 1 ? 's' : ''}
+                        {g.personalStraightCount > 0 && ` · ${g.personalStraightCount}S`}
+                        {g.personalBoxedCount > 0 && ` · ${g.personalBoxedCount}B`}
+                        {g.personalLastHitDate && <span style={{ marginLeft:'4px', fontFamily:'monospace', fontSize:'10px', color:'rgba(255,255,255,0.35)' }}>{g.personalLastHitDate}</span>}
+                      </span>
+                      {g.personalStatesWithHits?.length > 0 && (
+                        <span style={{ fontSize:'10px', color:'rgba(255,255,255,0.35)' }}>
+                          {g.personalStatesWithHits.slice(0,5).join(' · ')}{g.personalStatesWithHits.length > 5 ? ` +${g.personalStatesWithHits.length-5}` : ''}
+                        </span>
+                      )}
+                    </div>
                   )}
+
+                  {/* Universal proof badge — shown when proof from OTHER dreamers exists */}
+                  {g.universalHasFellBefore && g.universalProofDreamerIds?.some((id: string) => id !== g.dreamerId) && (
+                    <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center' }}>
+                      <span style={{ padding:'2px 9px', borderRadius:'999px', fontSize:'10px', fontWeight:800,
+                        background:'rgba(160,144,255,0.16)', color:'#a090ff', border:'1px solid rgba(160,144,255,0.32)',
+                        fontFamily:'system-ui,sans-serif' }}>
+                        {g.universalProofLabel || 'Universal Proven'}
+                      </span>
+                      <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.45)' }}>
+                        {g.universalFellBeforeHitCount} hit{g.universalFellBeforeHitCount !== 1 ? 's' : ''} across system
+                        {g.universalProofDreamerCount > 0 && ` · ${g.universalProofDreamerCount} dreamer${g.universalProofDreamerCount !== 1 ? 's' : ''}`}
+                        {g.universalLastHitDate && <span style={{ marginLeft:'4px', fontFamily:'monospace', fontSize:'10px', color:'rgba(255,255,255,0.30)' }}>{g.universalLastHitDate}</span>}
+                      </span>
+                    </div>
+                  )}
+
                 </div>
               )}
             </div>

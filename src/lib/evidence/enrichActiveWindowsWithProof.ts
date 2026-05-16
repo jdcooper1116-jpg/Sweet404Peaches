@@ -1,96 +1,63 @@
 /**
- * src/lib/evidence/enrichActiveWindowsWithProof.ts
+ * src/lib/evidence/enrichActiveWindowsWithProof.ts  (E1.2)
  *
- * Joins personal_hit_mappings evidence onto active dream windows and groups.
+ * Two proof layers from ONE Postgres query:
  *
- * DESIGN:
- *   One broad Postgres query loads all personal_hit_mappings for the owner
- *   (filtered by dreamerId if scoped). Results are then aggregated across
- *   all states into per-(dreamer, normalizedTerm, numberText, gameType) totals,
- *   and joined in-memory to each window/group by the same key.
+ * PERSONAL:  dreamerId::normalizedTerm::numberText::gameType
+ *   "This dreamer has personally seen this number fall."
  *
- * This avoids N+1 queries (one per window) while keeping the join logic
- * in one place so window-groups, dreamer profile, and future routes can
- * all consume it identically.
- *
- * PROOF SOURCES:
- *   personal_hit_mappings holds evidence from both:
- *   - live-dream-refresh (live refresh writes personal_hit_events →
- *     upsertPersonalHitMappingsFromEvents rebuilds the aggregates)
- *   - backtest-replay (persistBacktestReplayEvidence writes backtest_hits +
- *     personal_hit_events → upsertPersonalHitMappingsFromEvents)
- *   The `sourceClasses` field on each ProofEntry lists which sources contributed.
- *
- * PROOF LABEL LOGIC (for UI):
- *   - sourceClasses includes 'backtest-replay' only   → "Backtest Proven"
- *   - sourceClasses includes 'live-dream-refresh' only → "Live Proven"
- *   - sourceClasses includes both                      → "Backtest + Live Proven"
- *   - no evidence                                       → no label / hasFellBefore=false
+ * UNIVERSAL: normalizedTerm::numberText::gameType  (all dreamers)
+ *   "Somewhere in your dream system this number has fallen."
+ *   Never re-attributes another dreamer's proof to the current window's dreamer.
  */
 
 import { prisma } from '@/lib/db/postgres';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-/** Aggregated proof for one (dreamer, normalizedTerm, numberText, gameType) group. */
+export type ProofScope = 'personal' | 'universal' | 'both';
+
 export interface ProofEntry {
-  dreamerId:          string;
-  normalizedTerm:     string;
-  numberText:         string;    // string — leading zeros preserved
-  gameType:           string;
-  hitCount:           number;    // total across all states
-  straightCount:      number;
-  boxedCount:         number;
-  stateStrengthScore: number;
-  lastHitDate:        string;
-  statesWithHits:     string[];
-  sourceClasses:      string[];  // ['backtest-replay', 'live-dream-refresh'] etc.
-  proofLabel:         string;    // "Backtest Proven" | "Live Proven" | "Backtest + Live Proven"
+  dreamerId: string; normalizedTerm: string; numberText: string; gameType: string;
+  hitCount: number; straightCount: number; boxedCount: number; stateStrengthScore: number;
+  lastHitDate: string; statesWithHits: string[]; sourceClasses: string[]; proofLabel: string;
 }
 
-/** Result of enriching a window or group with proof. */
-export interface ProofFields {
-  hasFellBefore:      boolean;
-  fellBeforeHitCount: number;
-  straightCount:      number;
-  boxedCount:         number;
-  stateStrengthScore: number;
-  lastHitDate:        string;
-  statesWithHits:     string[];
-  sourceClasses:      string[];
-  proofLabel:         string;
-  proofEventCount:    number;
+export interface UniversalProofEntry {
+  normalizedTerm: string; numberText: string; gameType: string;
+  hitCount: number; straightCount: number; boxedCount: number; stateStrengthScore: number;
+  lastHitDate: string; statesWithHits: string[]; sourceClasses: string[];
+  dreamerIds: string[]; dreamerNames: string[]; dreamerCount: number; proofLabel: string;
 }
 
-const NO_PROOF: ProofFields = {
-  hasFellBefore:      false,
-  fellBeforeHitCount: 0,
-  straightCount:      0,
-  boxedCount:         0,
-  stateStrengthScore: 0,
-  lastHitDate:        '',
-  statesWithHits:     [],
-  sourceClasses:      [],
-  proofLabel:         '',
-  proofEventCount:    0,
-};
+export interface ProofIndexes {
+  personal:  Map<string, ProofEntry>;
+  universal: Map<string, UniversalProofEntry>;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function normTerm(t: string): string {
+export function normTerm(t: string): string {
   return String(t ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
 }
 
-function buildProofLabel(sourceClasses: string[]): string {
-  const hasBacktest = sourceClasses.some(s => s.includes('backtest'));
-  const hasLive     = sourceClasses.some(s => s.includes('live'));
-  if (hasBacktest && hasLive) return 'Backtest + Live Proven';
-  if (hasBacktest)            return 'Backtest Proven';
-  if (hasLive)                return 'Live Proven';
+function srcLabel(sourceClasses: string[]): string {
+  const bt = sourceClasses.some(s => s.includes('backtest'));
+  const lv = sourceClasses.some(s => s.includes('live'));
+  if (bt && lv) return 'Backtest + Live Proven';
+  if (bt)       return 'Backtest Proven';
+  if (lv)       return 'Live Proven';
   return 'Proven';
 }
 
-function classifySource(src: string): string {
+function combinedLabel(pHit: boolean, uHit: boolean, uFromOther: boolean, pSrc: string[], uSrc: string[]): string {
+  if (pHit && uHit && uFromOther) return 'Personal + Universal Proven';
+  if (pHit) return srcLabel(pSrc);
+  if (uHit) return 'Universal Proven';
+  return '';
+}
+
+function classifySrc(src: string): string {
   if (!src) return 'unknown';
   if (src.includes('backtest')) return 'backtest-replay';
   if (src.includes('live'))     return 'live-dream-refresh';
@@ -98,201 +65,249 @@ function classifySource(src: string): string {
   return src;
 }
 
-// ─── Main export ─────────────────────────────────────────────────────────────
+// ─── Index loading ────────────────────────────────────────────────────────────
 
-/**
- * Load all personal_hit_mappings for an owner (and optionally one dreamer),
- * aggregate across states, and return a Map keyed by
- * `dreamerId::normalizedTerm::numberText::gameType` for O(1) window lookups.
- */
-export async function loadProofIndex(
-  ownerUid:   string,
+export async function loadProofIndexes(
+  ownerUid:  string,
   dreamerId?: string,
-  limit = 2000
-): Promise<Map<string, ProofEntry>> {
-  const rows = await prisma.personalHitMapping.findMany({
-    where: {
-      ownerUid,
-      ...(dreamerId ? { dreamerId } : {}),
-      isDeprecated:                 false,
-      isShadowedByCorrectedMapping: false,
-    },
-    select: {
-      dreamerId:          true,
-      termLabel:          true,
-      normalizedTerm:     true,
-      numberText:         true,   // string — never Number() / parseInt()
-      gameType:           true,
-      state:              true,
-      hitCount:           true,
-      straightCount:      true,
-      boxedCount:         true,
-      stateStrengthScore: true,
-      lastHitDate:        true,
-      source:             true,
-    },
-    take: limit,
-  });
+  limit = 5000
+): Promise<ProofIndexes> {
+  const sel = {
+    dreamerId: true, dreamerName: true,
+    termLabel: true, normalizedTerm: true,
+    numberText: true, gameType: true, state: true,
+    hitCount: true, straightCount: true, boxedCount: true,
+    stateStrengthScore: true, lastHitDate: true, source: true,
+  } as const;
 
-  const index = new Map<string, ProofEntry>();
+  const baseWhere = { ownerUid, isDeprecated: false, isShadowedByCorrectedMapping: false };
 
-  for (const row of rows) {
+  const [personalRows, extraUniversalRows] = await Promise.all([
+    prisma.personalHitMapping.findMany({ where: { ...baseWhere, ...(dreamerId ? { dreamerId } : {}) }, select: sel, take: limit }),
+    dreamerId
+      ? prisma.personalHitMapping.findMany({ where: baseWhere, select: sel, take: limit })
+      : Promise.resolve(null),
+  ]);
+
+  const uRows = extraUniversalRows ?? personalRows;
+
+  // ── Personal index ────────────────────────────────────────────────────────
+  const personal = new Map<string, ProofEntry>();
+  for (const row of personalRows) {
     const did  = String(row.dreamerId      ?? '');
     const nt   = String(row.normalizedTerm ?? normTerm(row.termLabel ?? ''));
-    const num  = String(row.numberText     ?? '');  // leading zeros preserved
+    const num  = String(row.numberText     ?? '');  // string — leading zeros
     const gt   = String(row.gameType       ?? '');
-    const state= String(row.state          ?? '');
-    const src  = classifySource(String(row.source ?? ''));
-
+    const st   = String(row.state          ?? '');
+    const src  = classifySrc(String(row.source ?? ''));
     if (!did || !nt || !num || !gt) continue;
-
-    const key = `${did}::${nt}::${num}::${gt}`;
-    if (!index.has(key)) {
-      index.set(key, {
-        dreamerId: did, normalizedTerm: nt, numberText: num, gameType: gt,
-        hitCount: 0, straightCount: 0, boxedCount: 0, stateStrengthScore: 0,
-        lastHitDate: '', statesWithHits: [], sourceClasses: [], proofLabel: '',
-      });
-    }
-    const entry = index.get(key)!;
-    entry.hitCount           += Number(row.hitCount           ?? 0);
-    entry.straightCount      += Number(row.straightCount      ?? 0);
-    entry.boxedCount         += Number(row.boxedCount         ?? 0);
-    entry.stateStrengthScore += Number(row.stateStrengthScore ?? 0);
-    if (state && !entry.statesWithHits.includes(state)) entry.statesWithHits.push(state);
-    if (src   && !entry.sourceClasses.includes(src))    entry.sourceClasses.push(src);
+    const k = `${did}::${nt}::${num}::${gt}`;
+    if (!personal.has(k)) personal.set(k, { dreamerId: did, normalizedTerm: nt, numberText: num, gameType: gt, hitCount: 0, straightCount: 0, boxedCount: 0, stateStrengthScore: 0, lastHitDate: '', statesWithHits: [], sourceClasses: [], proofLabel: '' });
+    const e = personal.get(k)!;
+    e.hitCount           += Number(row.hitCount           ?? 0);
+    e.straightCount      += Number(row.straightCount      ?? 0);
+    e.boxedCount         += Number(row.boxedCount         ?? 0);
+    e.stateStrengthScore += Number(row.stateStrengthScore ?? 0);
+    if (st  && !e.statesWithHits.includes(st))  e.statesWithHits.push(st);
+    if (src && !e.sourceClasses.includes(src))  e.sourceClasses.push(src);
     const lhd = String(row.lastHitDate ?? '');
-    if (lhd && lhd > entry.lastHitDate) entry.lastHitDate = lhd;
+    if (lhd && lhd > e.lastHitDate) e.lastHitDate = lhd;
   }
+  for (const e of personal.values()) e.proofLabel = srcLabel(e.sourceClasses);
 
-  // Build proof labels once aggregation is complete
-  for (const entry of index.values()) {
-    entry.proofLabel = buildProofLabel(entry.sourceClasses);
+  // ── Universal index ───────────────────────────────────────────────────────
+  const universal = new Map<string, UniversalProofEntry>();
+  for (const row of uRows) {
+    const did   = String(row.dreamerId      ?? '');
+    const dname = String(row.dreamerName    ?? '');
+    const nt    = String(row.normalizedTerm ?? normTerm(row.termLabel ?? ''));
+    const num   = String(row.numberText     ?? '');  // string — leading zeros
+    const gt    = String(row.gameType       ?? '');
+    const st    = String(row.state          ?? '');
+    const src   = classifySrc(String(row.source ?? ''));
+    if (!nt || !num || !gt) continue;
+    const k = `${nt}::${num}::${gt}`;
+    if (!universal.has(k)) universal.set(k, { normalizedTerm: nt, numberText: num, gameType: gt, hitCount: 0, straightCount: 0, boxedCount: 0, stateStrengthScore: 0, lastHitDate: '', statesWithHits: [], sourceClasses: [], dreamerIds: [], dreamerNames: [], dreamerCount: 0, proofLabel: '' });
+    const e = universal.get(k)!;
+    e.hitCount           += Number(row.hitCount           ?? 0);
+    e.straightCount      += Number(row.straightCount      ?? 0);
+    e.boxedCount         += Number(row.boxedCount         ?? 0);
+    e.stateStrengthScore += Number(row.stateStrengthScore ?? 0);
+    if (st    && !e.statesWithHits.includes(st))  e.statesWithHits.push(st);
+    if (src   && !e.sourceClasses.includes(src))  e.sourceClasses.push(src);
+    if (did   && !e.dreamerIds.includes(did))   { e.dreamerIds.push(did); if (dname && !e.dreamerNames.includes(dname)) e.dreamerNames.push(dname); }
+    const lhd = String(row.lastHitDate ?? '');
+    if (lhd && lhd > e.lastHitDate) e.lastHitDate = lhd;
   }
+  for (const e of universal.values()) { e.dreamerCount = e.dreamerIds.length; e.proofLabel = srcLabel(e.sourceClasses); }
 
-  return index;
+  return { personal, universal };
 }
 
-/**
- * Look up proof for one active window row.
- *
- * Falls back to termLabel-based lookup when normalizedTerm is not stored.
- */
-export function getWindowProof(
-  proofIndex: Map<string, ProofEntry>,
-  window: {
-    dreamerId:      string;
-    normalizedTerm?: string;
-    termLabel?:     string;
-    number?:        string;
-    gameType?:      string;
+// ─── Window-level proof lookup ────────────────────────────────────────────────
+
+function getWindowProofFields(
+  indexes: ProofIndexes,
+  scope:   ProofScope,
+  w: { dreamerId: string; normalizedTerm?: string; termLabel?: string; number?: string; gameType?: string }
+): Record<string, any> {
+  const did = String(w.dreamerId      ?? '');
+  const nt  = String(w.normalizedTerm ?? normTerm(w.termLabel ?? ''));
+  const num = String(w.number         ?? '');  // leading zeros safe
+  const gt  = String(w.gameType       ?? '');
+  if (!nt || !num || !gt) return buildNoProof();
+
+  // Personal
+  let pHit = false, pCount = 0, pS = 0, pB = 0, pLast = '';
+  const pStates: string[] = [], pSrc: string[] = [];
+  let pLabel = '';
+  if (scope === 'personal' || scope === 'both') {
+    const pe = indexes.personal.get(`${did}::${nt}::${num}::${gt}`);
+    if (pe && pe.hitCount > 0) {
+      pHit = true; pCount = pe.hitCount; pS = pe.straightCount; pB = pe.boxedCount; pLast = pe.lastHitDate;
+      pStates.push(...pe.statesWithHits); pSrc.push(...pe.sourceClasses); pLabel = pe.proofLabel;
+    }
   }
-): ProofFields {
-  const did  = String(window.dreamerId       ?? '');
-  const nt   = String(window.normalizedTerm  ?? normTerm(window.termLabel ?? ''));
-  const num  = String(window.number          ?? '');  // string — leading zeros safe
-  const gt   = String(window.gameType        ?? '');
 
-  if (!nt || !num || !gt) return { ...NO_PROOF };
+  // Universal
+  let uHit = false, uCount = 0, uS = 0, uB = 0, uLast = '';
+  const uStates: string[] = [], uSrc: string[] = [];
+  let uDids: string[] = [], uDnames: string[] = [], uDcount = 0, uLabel = '';
+  if (scope === 'universal' || scope === 'both') {
+    const ue = indexes.universal.get(`${nt}::${num}::${gt}`);
+    if (ue && ue.hitCount > 0) {
+      uHit = true; uCount = ue.hitCount; uS = ue.straightCount; uB = ue.boxedCount; uLast = ue.lastHitDate;
+      uStates.push(...ue.statesWithHits); uSrc.push(...ue.sourceClasses);
+      uDids = ue.dreamerIds; uDnames = ue.dreamerNames; uDcount = ue.dreamerCount;
+      uLabel = uHit && ue.dreamerIds.some(id => id !== did) ? 'Universal Proven' : srcLabel(uSrc);
+    }
+  }
 
-  const entry = proofIndex.get(`${did}::${nt}::${num}::${gt}`);
-  if (!entry) return { ...NO_PROOF };
+  const uFromOther = uHit && uDids.some(id => id !== did);
+  const allSrc = Array.from(new Set([...pSrc, ...uSrc]));
+  const combo = combinedLabel(pHit, uHit, uFromOther, pSrc, uSrc);
 
   return {
-    hasFellBefore:      entry.hitCount > 0,
-    fellBeforeHitCount: entry.hitCount,
-    straightCount:      entry.straightCount,
-    boxedCount:         entry.boxedCount,
-    stateStrengthScore: entry.stateStrengthScore,
-    lastHitDate:        entry.lastHitDate,
-    statesWithHits:     entry.statesWithHits,
-    sourceClasses:      entry.sourceClasses,
-    proofLabel:         entry.proofLabel,
-    proofEventCount:    entry.hitCount,   // synonym for UI
+    // Personal fields
+    personalHasFellBefore: pHit, personalFellBeforeHitCount: pCount,
+    personalStraightCount: pS, personalBoxedCount: pB, personalLastHitDate: pLast,
+    personalStatesWithHits: pStates, personalSourceClasses: pSrc, personalProofLabel: pLabel,
+    // Universal fields
+    universalHasFellBefore: uHit, universalFellBeforeHitCount: uCount,
+    universalStraightCount: uS, universalBoxedCount: uB, universalLastHitDate: uLast,
+    universalStatesWithHits: uStates, universalSourceClasses: uSrc,
+    universalProofDreamerIds: uDids, universalProofDreamerNames: uDnames,
+    universalProofDreamerCount: uDcount, universalProofLabel: uLabel,
+    // Compatibility / combined
+    hasFellBefore:      pHit || uHit,
+    fellBeforeHitCount: pCount || uCount,
+    straightCount:      pS || uS,
+    boxedCount:         pB || uB,
+    stateStrengthScore: pB + pS * 3 + (uHit && !pHit ? uB + uS * 3 : 0),
+    lastHitDate:        [pLast, uLast].filter(Boolean).sort().pop() ?? '',
+    statesWithHits:     Array.from(new Set([...pStates, ...uStates])),
+    sourceClasses:      allSrc,
+    proofLabel:         combo,
+    proofEventCount:    pCount || uCount,
   };
 }
 
-/**
- * Enrich an array of flat active-window rows with proof fields.
- * Mutates in place and also returns the array.
- */
+function buildNoProof(): Record<string, any> {
+  return {
+    personalHasFellBefore: false, personalFellBeforeHitCount: 0,
+    personalStraightCount: 0, personalBoxedCount: 0, personalLastHitDate: '',
+    personalStatesWithHits: [], personalSourceClasses: [], personalProofLabel: '',
+    universalHasFellBefore: false, universalFellBeforeHitCount: 0,
+    universalStraightCount: 0, universalBoxedCount: 0, universalLastHitDate: '',
+    universalStatesWithHits: [], universalSourceClasses: [],
+    universalProofDreamerIds: [], universalProofDreamerNames: [],
+    universalProofDreamerCount: 0, universalProofLabel: '',
+    hasFellBefore: false, fellBeforeHitCount: 0, straightCount: 0, boxedCount: 0,
+    stateStrengthScore: 0, lastHitDate: '', statesWithHits: [], sourceClasses: [],
+    proofLabel: '', proofEventCount: 0,
+  };
+}
+
+// ─── Public enrichment functions ──────────────────────────────────────────────
+
 export function enrichWindowsWithProof(
-  windows: any[],
-  proofIndex: Map<string, ProofEntry>
+  windows: any[], indexes: ProofIndexes, scope: ProofScope = 'personal'
 ): any[] {
   for (const w of windows) {
-    const proof = getWindowProof(proofIndex, {
-      dreamerId:     String(w.dreamerId      ?? ''),
-      normalizedTerm:String(w.normalizedTerm ?? ''),
-      termLabel:     String(w.termLabel      ?? ''),
-      number:        String(w.number         ?? ''),
-      gameType:      String(w.gameType       ?? ''),
+    const proof = getWindowProofFields(indexes, scope, {
+      dreamerId: String(w.dreamerId ?? ''), normalizedTerm: String(w.normalizedTerm ?? ''),
+      termLabel: String(w.termLabel ?? ''), number: String(w.number ?? ''), gameType: String(w.gameType ?? ''),
     });
     Object.assign(w, proof);
   }
   return windows;
 }
 
-/**
- * Enrich window GROUP objects with aggregated proof from all their windows.
- * A group is "proven" if ANY of its windows has proof.
- * Hit counts are summed across all windows in the group.
- */
 export function enrichGroupsWithProof(
-  groups: any[],
-  proofIndex: Map<string, ProofEntry>
+  groups: any[], indexes: ProofIndexes, scope: ProofScope = 'personal'
 ): any[] {
   for (const g of groups) {
-    // Accumulate proof across all windows in this group
-    let totalHits       = 0;
-    let totalStraight   = 0;
-    let totalBoxed      = 0;
-    let totalScore      = 0;
-    let lastDate        = '';
-    const statesSet     = new Set<string>();
-    const sourcesSet    = new Set<string>();
-    let provenWindowCount = 0;
+    let pH=0,pS=0,pB=0,pLast='',uH=0,uS=0,uB=0,uLast='';
+    const pStates=new Set<string>(), pSrc=new Set<string>();
+    const uStates=new Set<string>(), uSrc=new Set<string>();
+    const uDids=new Set<string>(), uDnames=new Set<string>();
+    let pWins=0, uWins=0;
 
-    // Use exact active-window rows only.
-    // Do NOT create synthetic term × number combinations here; that can create
-    // false positives by pairing a proven number with the wrong dream term.
-    // The route supplies proofWindows as the full set of rows for this group.
-    const allToCheck: any[] = Array.isArray(g.proofWindows)
-      ? g.proofWindows
-      : (Array.isArray(g.sampleWindows) ? g.sampleWindows : []);
-
-    for (const w of allToCheck) {
-      const proof = getWindowProof(proofIndex, {
-        dreamerId:     String(w.dreamerId      ?? g.dreamerId ?? ''),
-        normalizedTerm:String(w.normalizedTerm ?? normTerm(w.termLabel ?? '')),
-        termLabel:     String(w.termLabel      ?? ''),
-        number:        String(w.number         ?? ''),
-        gameType:      String(w.gameType       ?? ''),
+    // Use exact real window rows only. proofWindows contains all rows for this group;
+    // sampleWindows is only a UI preview fallback.
+    for (const w of (g.proofWindows ?? g.sampleWindows ?? [])) {
+      const proof = getWindowProofFields(indexes, scope, {
+        dreamerId: String(w.dreamerId ?? g.dreamerId ?? ''), normalizedTerm: String(w.normalizedTerm ?? normTerm(w.termLabel ?? '')),
+        termLabel: String(w.termLabel ?? ''), number: String(w.number ?? ''), gameType: String(w.gameType ?? ''),
       });
-      if (proof.hasFellBefore) {
-        provenWindowCount++;
-        totalHits     += proof.fellBeforeHitCount;
-        totalStraight += proof.straightCount;
-        totalBoxed    += proof.boxedCount;
-        totalScore    += proof.stateStrengthScore;
-        for (const s of proof.statesWithHits) statesSet.add(s);
-        for (const s of proof.sourceClasses)  sourcesSet.add(s);
-        if (proof.lastHitDate > lastDate) lastDate = proof.lastHitDate;
+      if (proof.personalHasFellBefore) {
+        pWins++; pH+=proof.personalFellBeforeHitCount; pS+=proof.personalStraightCount; pB+=proof.personalBoxedCount;
+        for(const s of proof.personalStatesWithHits) pStates.add(s);
+        for(const s of proof.personalSourceClasses) pSrc.add(s);
+        if(proof.personalLastHitDate > pLast) pLast=proof.personalLastHitDate;
+      }
+      if (proof.universalHasFellBefore) {
+        uWins++; uH+=proof.universalFellBeforeHitCount; uS+=proof.universalStraightCount; uB+=proof.universalBoxedCount;
+        for(const s of proof.universalStatesWithHits) uStates.add(s);
+        for(const s of proof.universalSourceClasses) uSrc.add(s);
+        for(const id of proof.universalProofDreamerIds) uDids.add(id);
+        for(const nm of proof.universalProofDreamerNames) uDnames.add(nm);
+        if(proof.universalLastHitDate > uLast) uLast=proof.universalLastHitDate;
       }
     }
 
-    const sourceClasses = Array.from(sourcesSet);
-    g.hasFellBefore       = totalHits > 0;
-    g.fellBeforeHitCount  = totalHits;
-    g.straightCount       = totalStraight;
-    g.boxedCount          = totalBoxed;
-    g.stateStrengthScore  = totalScore;
-    g.lastHitDate         = lastDate;
-    g.statesWithHits      = Array.from(statesSet);
-    g.sourceClasses       = sourceClasses;
-    g.proofLabel          = buildProofLabel(sourceClasses);
-    g.proofEventCount     = totalHits;
-    g.provenWindowCount   = provenWindowCount;
+    const pSrcArr=Array.from(pSrc), uSrcArr=Array.from(uSrc);
+    const pHit=pH>0, uHit=uH>0;
+    const uFromOther = uHit && Array.from(uDids).some(id=>id!==g.dreamerId);
+
+    Object.assign(g, {
+      personalHasFellBefore: pHit, personalFellBeforeHitCount: pH,
+      personalStraightCount: pS, personalBoxedCount: pB, personalLastHitDate: pLast,
+      personalStatesWithHits: Array.from(pStates), personalSourceClasses: pSrcArr,
+      personalProofLabel: pHit ? srcLabel(pSrcArr) : '', personalProvenWindowCount: pWins,
+      universalHasFellBefore: uHit, universalFellBeforeHitCount: uH,
+      universalStraightCount: uS, universalBoxedCount: uB, universalLastHitDate: uLast,
+      universalStatesWithHits: Array.from(uStates), universalSourceClasses: uSrcArr,
+      universalProofDreamerIds: Array.from(uDids), universalProofDreamerNames: Array.from(uDnames),
+      universalProofDreamerCount: uDids.size, universalProvenWindowCount: uWins,
+      universalProofLabel: uHit ? (uFromOther ? 'Universal Proven' : srcLabel(uSrcArr)) : '',
+      hasFellBefore: pHit||uHit, fellBeforeHitCount: pH||uH,
+      straightCount: pS||uS, boxedCount: pB||uB, stateStrengthScore: pB+pS*3,
+      lastHitDate: [pLast,uLast].filter(Boolean).sort().pop()??'',
+      statesWithHits: Array.from(new Set([...pStates,...uStates])),
+      sourceClasses: Array.from(new Set([...pSrc,...uSrc])),
+      proofLabel: combinedLabel(pHit,uHit,uFromOther,pSrcArr,uSrcArr),
+      proofEventCount: pH||uH, proofScope: scope,
+    });
   }
   return groups;
+}
+
+// ─── Backward-compat (E1 callers) ────────────────────────────────────────────
+export async function loadProofIndex(ownerUid: string, dreamerId?: string, limit=5000) {
+  const { personal } = await loadProofIndexes(ownerUid, dreamerId, limit);
+  return personal;
+}
+export function getWindowProof(proofIndex: Map<string,ProofEntry>, w: any): any {
+  return getWindowProofFields({ personal: proofIndex, universal: new Map() }, 'personal', w);
 }

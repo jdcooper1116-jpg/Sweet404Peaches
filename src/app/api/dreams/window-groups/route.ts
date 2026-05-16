@@ -3,9 +3,9 @@ import { resolveOwnerUid } from '@/lib/firebase/admin';
 import { listActiveDreamWindows } from '@/lib/storage/dreamWindows';
 import { getDreamDbProvider } from '@/lib/storage/provider';
 import {
-  loadProofIndex,
+  loadProofIndexes,
   enrichWindowsWithProof,
-  enrichGroupsWithProof,
+  type ProofScope,
 } from '@/lib/evidence/enrichActiveWindowsWithProof';
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +32,9 @@ export async function GET(req: NextRequest) {
     const dreamEntryIdFilter = (params.get('dreamEntryId') ?? '').trim();
     const includeExpired = params.get('includeExpired') === 'true';
     const includeProof   = params.get('includeProof')   === 'true';
+    const proofScopeRaw  = (params.get('proofScope') ?? 'personal').trim();
+    const proofScope: ProofScope = (proofScopeRaw === 'universal' || proofScopeRaw === 'both')
+      ? proofScopeRaw : 'personal';  // default to personal for backward compat
     const maxPerDreamer = Math.min(Math.max(Number(params.get('limit') ?? 250), 1), 250);
     const today = new Date().toISOString().slice(0, 10);
 
@@ -136,65 +139,232 @@ export async function GET(req: NextRequest) {
     };
     if (includeProof && getDreamDbProvider() === 'postgres') {
       try {
-        const proofIndex = await loadProofIndex(
+        const indexes = await loadProofIndexes(
           ownerUid,
-          dreamerIdFilter || undefined,  // undefined = load all dreamers for cross-dreamer proof
+          // Universal/both always loads all dreamers; personal can be dreamer-scoped.
+          // When proofScope=personal AND a dreamerFilter is set, limit index to that dreamer.
+          // Universal needs the full cross-dreamer set regardless.
+          proofScope === 'personal' ? (dreamerIdFilter || undefined) : undefined,
           5000
         );
-        proofStats.proofIndexSize = proofIndex.size;
-        enrichWindowsWithProof(allWindows, proofIndex);
+        proofStats.proofIndexSize = indexes.personal.size + indexes.universal.size;
+        enrichWindowsWithProof(allWindows, indexes, proofScope);
 
-        // Group proof must be derived ONLY from exact matched active-window rows.
-        // Do not synthesize term × number combinations at group level; that can
-        // incorrectly label a group as proven when no actual window row matched.
-        const proofByGroup = new Map<string, any>();
+        // Rebuild group proof ONLY from exact enriched window rows.
+        // This prevents a group from being marked proven when no actual window is proven.
+        const groupProof = new Map<string, any>();
 
         for (const w of allWindows as any[]) {
-          if (!w.hasFellBefore) continue;
+          const personal = Boolean(w.personalHasFellBefore);
+          const universal = Boolean(w.universalHasFellBefore);
+          if (!personal && !universal) continue;
 
           const entryId = String(w.dreamEntryId ?? w.sourceDreamEntryId ?? 'missing');
-          const groupKey = `${String(w.dreamerId ?? 'unknown')}__${entryId}`;
+          const key = `${String(w.dreamerId ?? 'unknown')}__${entryId}`;
 
-          if (!proofByGroup.has(groupKey)) {
-            proofByGroup.set(groupKey, {
+          if (!groupProof.has(key)) {
+            groupProof.set(key, {
+              personalHitCount: 0,
+              personalStraightCount: 0,
+              personalBoxedCount: 0,
+              personalLastHitDate: '',
+              personalStates: new Set<string>(),
+              personalSources: new Set<string>(),
+              personalWindowCount: 0,
+
+              universalHitCount: 0,
+              universalStraightCount: 0,
+              universalBoxedCount: 0,
+              universalLastHitDate: '',
+              universalStates: new Set<string>(),
+              universalSources: new Set<string>(),
+              universalDreamerIds: new Set<string>(),
+              universalDreamerNames: new Set<string>(),
+              universalWindowCount: 0,
+            });
+          }
+
+          const acc = groupProof.get(key);
+
+          if (personal) {
+            acc.personalHitCount += Number(w.personalFellBeforeHitCount ?? 0);
+            acc.personalStraightCount += Number(w.personalStraightCount ?? 0);
+            acc.personalBoxedCount += Number(w.personalBoxedCount ?? 0);
+            acc.personalWindowCount += 1;
+
+            const last = String(w.personalLastHitDate ?? '');
+            if (last && last > acc.personalLastHitDate) acc.personalLastHitDate = last;
+
+            for (const s of (Array.isArray(w.personalStatesWithHits) ? w.personalStatesWithHits : [])) {
+              if (s) acc.personalStates.add(String(s));
+            }
+            for (const s of (Array.isArray(w.personalSourceClasses) ? w.personalSourceClasses : [])) {
+              if (s) acc.personalSources.add(String(s));
+            }
+          }
+
+          if (universal) {
+            acc.universalHitCount += Number(w.universalFellBeforeHitCount ?? 0);
+            acc.universalStraightCount += Number(w.universalStraightCount ?? 0);
+            acc.universalBoxedCount += Number(w.universalBoxedCount ?? 0);
+            acc.universalWindowCount += 1;
+
+            const last = String(w.universalLastHitDate ?? '');
+            if (last && last > acc.universalLastHitDate) acc.universalLastHitDate = last;
+
+            for (const s of (Array.isArray(w.universalStatesWithHits) ? w.universalStatesWithHits : [])) {
+              if (s) acc.universalStates.add(String(s));
+            }
+            for (const s of (Array.isArray(w.universalSourceClasses) ? w.universalSourceClasses : [])) {
+              if (s) acc.universalSources.add(String(s));
+            }
+            for (const id of (Array.isArray(w.universalProofDreamerIds) ? w.universalProofDreamerIds : [])) {
+              if (id) acc.universalDreamerIds.add(String(id));
+            }
+            for (const name of (Array.isArray(w.universalProofDreamerNames) ? w.universalProofDreamerNames : [])) {
+              if (name) acc.universalDreamerNames.add(String(name));
+            }
+          }
+        }
+
+        const sourceLabel = (sources: string[]) => {
+          const backtest = sources.some((s) => s.includes('backtest'));
+          const live = sources.some((s) => s.includes('live'));
+          if (backtest && live) return 'Backtest + Live Proven';
+          if (backtest) return 'Backtest Proven';
+          if (live) return 'Live Proven';
+          return 'Proven';
+        };
+
+        for (const g of groups as any[]) {
+          const key = `${String(g.dreamerId ?? 'unknown')}__${String(g.dreamEntryId ?? 'missing')}`;
+          const acc = groupProof.get(key);
+
+          if (!acc) {
+            Object.assign(g, {
+              personalHasFellBefore: false,
+              personalFellBeforeHitCount: 0,
+              personalStraightCount: 0,
+              personalBoxedCount: 0,
+              personalLastHitDate: '',
+              personalStatesWithHits: [],
+              personalSourceClasses: [],
+              personalProofLabel: '',
+              personalProvenWindowCount: 0,
+
+              universalHasFellBefore: false,
+              universalFellBeforeHitCount: 0,
+              universalStraightCount: 0,
+              universalBoxedCount: 0,
+              universalLastHitDate: '',
+              universalStatesWithHits: [],
+              universalSourceClasses: [],
+              universalProofDreamerIds: [],
+              universalProofDreamerNames: [],
+              universalProofDreamerCount: 0,
+              universalProofLabel: '',
+              universalProvenWindowCount: 0,
+
+              hasFellBefore: false,
               fellBeforeHitCount: 0,
               straightCount: 0,
               boxedCount: 0,
               stateStrengthScore: 0,
               lastHitDate: '',
-              statesWithHits: new Set<string>(),
-              sourceClasses: new Set<string>(),
+              statesWithHits: [],
+              sourceClasses: [],
+              proofLabel: '',
               proofEventCount: 0,
-              provenWindowCount: 0,
+              proofScope,
             });
+            continue;
           }
 
-          const acc = proofByGroup.get(groupKey);
-          acc.fellBeforeHitCount += Number(w.fellBeforeHitCount ?? 0);
-          acc.straightCount += Number(w.straightCount ?? 0);
-          acc.boxedCount += Number(w.boxedCount ?? 0);
-          acc.stateStrengthScore += Number(w.stateStrengthScore ?? 0);
-          acc.proofEventCount += Number(w.proofEventCount ?? w.fellBeforeHitCount ?? 0);
-          acc.provenWindowCount += 1;
+          const personalSources = Array.from(acc.personalSources).map(String);
+          const universalSources = Array.from(acc.universalSources).map(String);
+          const universalDreamerIds = Array.from(acc.universalDreamerIds).map(String);
 
-          for (const s of (Array.isArray(w.statesWithHits) ? w.statesWithHits : [])) {
-            if (s) acc.statesWithHits.add(String(s));
+          const personal = acc.personalHitCount > 0;
+          const universal = acc.universalHitCount > 0;
+          const universalFromOther = universalDreamerIds.some((id) => id !== String(g.dreamerId ?? ''));
+
+          const personalLabel = personal ? sourceLabel(personalSources) : '';
+          const universalLabel = universal ? (universalFromOther ? 'Universal Proven' : sourceLabel(universalSources)) : '';
+
+          const combinedLabel = personal && universal && universalFromOther
+            ? 'Personal + Universal Proven'
+            : personal
+              ? personalLabel
+              : universal
+                ? universalLabel
+                : '';
+
+          Object.assign(g, {
+            personalHasFellBefore: personal,
+            personalFellBeforeHitCount: acc.personalHitCount,
+            personalStraightCount: acc.personalStraightCount,
+            personalBoxedCount: acc.personalBoxedCount,
+            personalLastHitDate: acc.personalLastHitDate,
+            personalStatesWithHits: Array.from(acc.personalStates),
+            personalSourceClasses: personalSources,
+            personalProofLabel: personalLabel,
+            personalProvenWindowCount: acc.personalWindowCount,
+
+            universalHasFellBefore: universal,
+            universalFellBeforeHitCount: acc.universalHitCount,
+            universalStraightCount: acc.universalStraightCount,
+            universalBoxedCount: acc.universalBoxedCount,
+            universalLastHitDate: acc.universalLastHitDate,
+            universalStatesWithHits: Array.from(acc.universalStates),
+            universalSourceClasses: universalSources,
+            universalProofDreamerIds: universalDreamerIds,
+            universalProofDreamerNames: Array.from(acc.universalDreamerNames),
+            universalProofDreamerCount: universalDreamerIds.length,
+            universalProofLabel: universalLabel,
+            universalProvenWindowCount: acc.universalWindowCount,
+
+            hasFellBefore: personal || universal,
+            fellBeforeHitCount: personal ? acc.personalHitCount : acc.universalHitCount,
+            straightCount: personal ? acc.personalStraightCount : acc.universalStraightCount,
+            boxedCount: personal ? acc.personalBoxedCount : acc.universalBoxedCount,
+            stateStrengthScore: (personal ? acc.personalBoxedCount + acc.personalStraightCount * 3 : 0)
+              + (!personal && universal ? acc.universalBoxedCount + acc.universalStraightCount * 3 : 0),
+            lastHitDate: [acc.personalLastHitDate, acc.universalLastHitDate].filter(Boolean).sort().pop() ?? '',
+            statesWithHits: Array.from(new Set([...acc.personalStates, ...acc.universalStates])),
+            sourceClasses: Array.from(new Set([...personalSources, ...universalSources])),
+            proofLabel: combinedLabel,
+            proofEventCount: personal ? acc.personalHitCount : acc.universalHitCount,
+            proofScope,
+          });
+        }
+        // Final consistency pass:
+        // A group/window is proven only if personal OR universal proof is explicitly true.
+        // This prevents stale compatibility fields from marking a group proven when
+        // no real active-window row matched proof.
+        for (const w of allWindows as any[]) {
+          const personal = Boolean(w.personalHasFellBefore);
+          const universal = Boolean(w.universalHasFellBefore);
+
+          w.hasFellBefore = personal || universal;
+          if (!w.hasFellBefore) {
+            w.fellBeforeHitCount = 0;
+            w.straightCount = 0;
+            w.boxedCount = 0;
+            w.stateStrengthScore = 0;
+            w.lastHitDate = '';
+            w.statesWithHits = [];
+            w.sourceClasses = [];
+            w.proofLabel = '';
+            w.proofEventCount = 0;
           }
-
-          for (const s of (Array.isArray(w.sourceClasses) ? w.sourceClasses : [])) {
-            if (s) acc.sourceClasses.add(String(s));
-          }
-
-          const lhd = String(w.lastHitDate ?? '');
-          if (lhd && lhd > acc.lastHitDate) acc.lastHitDate = lhd;
         }
 
         for (const g of groups as any[]) {
-          const groupKey = `${String(g.dreamerId ?? 'unknown')}__${String(g.dreamEntryId ?? 'missing')}`;
-          const acc = proofByGroup.get(groupKey);
+          const personal = Boolean(g.personalHasFellBefore);
+          const universal = Boolean(g.universalHasFellBefore);
 
-          if (!acc) {
-            g.hasFellBefore = false;
+          g.hasFellBefore = personal || universal;
+          if (!g.hasFellBefore) {
             g.fellBeforeHitCount = 0;
             g.straightCount = 0;
             g.boxedCount = 0;
@@ -204,35 +374,18 @@ export async function GET(req: NextRequest) {
             g.sourceClasses = [];
             g.proofLabel = '';
             g.proofEventCount = 0;
-            g.provenWindowCount = 0;
-            continue;
+            g.personalProvenWindowCount = 0;
+            g.universalProvenWindowCount = 0;
           }
-
-          const sourceClasses = Array.from(acc.sourceClasses as Set<string>).map(String);
-          const hasBacktest = sourceClasses.some((s) => s.includes('backtest'));
-          const hasLive = sourceClasses.some((s) => s.includes('live'));
-
-          g.hasFellBefore = acc.fellBeforeHitCount > 0;
-          g.fellBeforeHitCount = acc.fellBeforeHitCount;
-          g.straightCount = acc.straightCount;
-          g.boxedCount = acc.boxedCount;
-          g.stateStrengthScore = acc.stateStrengthScore;
-          g.lastHitDate = acc.lastHitDate;
-          g.statesWithHits = Array.from(acc.statesWithHits);
-          g.sourceClasses = sourceClasses;
-          g.proofLabel = hasBacktest && hasLive
-            ? 'Backtest + Live Proven'
-            : hasBacktest
-              ? 'Backtest Proven'
-              : hasLive
-                ? 'Live Proven'
-                : 'Proven';
-          g.proofEventCount = acc.proofEventCount;
-          g.provenWindowCount = acc.provenWindowCount;
         }
 
-        proofStats.provenWindows = allWindows.filter((w: any) => w.hasFellBefore).length;
-        proofStats.provenGroups  = groups.filter((g: any) => g.hasFellBefore).length;
+        proofStats.provenWindows        = allWindows.filter((w: any) => w.personalHasFellBefore || w.universalHasFellBefore).length;
+        proofStats.provenGroups         = groups.filter((g: any) => g.personalHasFellBefore || g.universalHasFellBefore).length;
+        (proofStats as any).personalProvenWindows  = allWindows.filter((w: any) => w.personalHasFellBefore).length;
+        (proofStats as any).universalProvenWindows = allWindows.filter((w: any) => w.universalHasFellBefore).length;
+        (proofStats as any).personalProvenGroups   = groups.filter((g: any) => g.personalHasFellBefore).length;
+        (proofStats as any).universalProvenGroups  = groups.filter((g: any) => g.universalHasFellBefore).length;
+        (proofStats as any).proofScope             = proofScope;
       } catch (proofErr) {
         console.warn('[window-groups] proof enrichment failed (non-fatal):', proofErr);
       }
@@ -280,6 +433,7 @@ export async function GET(req: NextRequest) {
         dreamEntryId: dreamEntryIdFilter || null,
         includeExpired,
         includeProof,
+        proofScope,
       },
       ...(includeProof ? { proofStats } : {}),
     });
