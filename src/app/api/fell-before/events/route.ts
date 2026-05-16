@@ -21,6 +21,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { getDreamDbProvider }           from '@/lib/storage/provider';
+import { prisma }                        from '@/lib/db/postgres';
 
 export const dynamic = 'force-dynamic';
 
@@ -112,7 +114,158 @@ export async function GET(req: NextRequest) {
 
     // term is now optional — can query by number/state/gameType/backtestDreamId alone
 
-    const normalizedT = normalizeTerm(termRaw);
+    const deidParam     = (params.get('dreamEntryId') ?? params.get('sourceDreamEntryId') ?? '').trim();
+    const wIdParam      = (params.get('activeWindowId') ?? '').trim();
+    const normalizedT   = normalizeTerm(termRaw);
+
+    // ── Postgres branch ─────────────────────────────────────────────────────────
+    if (getDreamDbProvider() === 'postgres') {
+      // Build Prisma where clause — all filters applied server-side
+      const where: Record<string, any> = {
+        ownerUid,
+        isDeprecated:                  false,
+        isShadowedByCorrectedMapping:  false,
+      };
+      if (dreamerP)   where.dreamerId = dreamerP;
+      if (stateP)     where.state     = stateP;
+      if (gameP === 'cash3' || gameP === 'cash4') where.gameType = gameP;
+      if (btidParam)  where.backtestDreamId = btidParam;
+      if (numParam)   where.numberText = numParam;  // string equality — leading zeros exact match
+      if (wIdParam)   where.activeWindowId = wIdParam;
+      if (deidParam)  where.sourceDreamEntryId = deidParam;
+
+      // Term filter: match normalizedTerm OR termLabel
+      // Prisma doesn't support OR on two different fields in a single where key without
+      // an explicit OR block, so we use OR when both a normalizedTerm and raw term differ
+      if (normalizedT) {
+        where.OR = [
+          { normalizedTerm: normalizedT },
+          { termLabel: termRaw },
+        ];
+      }
+
+      const pgRows = await prisma.personalHitEvent.findMany({
+        where,
+        orderBy: [
+          { drawDate: 'desc' },
+          { drawTime: 'desc' },
+          { createdAt: 'desc' },
+        ],
+        take: limit,
+      });
+
+      // Map to the same shape as the Firestore mapHitDoc output
+      // plus every alias field the UI or callers may reference
+      const rows = pgRows.map(row => {
+        const gameType = (() => {
+          const raw = String(row.gameType ?? '');
+          if (raw === 'pick3') return 'cash3';
+          if (raw === 'pick4') return 'cash4';
+          return raw;
+        })();
+        const hitType = (() => {
+          const raw = String(row.hitType ?? '');
+          return raw === 'exact' || raw === 'straight' ? 'straight' : 'boxed';
+        })();
+        const src = (() => {
+          const s = String(row.source ?? '');
+          const btid = String(row.backtestDreamId ?? '');
+          if (s.includes('backtest') || btid.length > 0) return 'backtest-replay';
+          if (s.includes('live') || s === '') return 'live-dream-refresh';
+          if (s.includes('repair')) return 'repair';
+          return s || 'live-dream-refresh';
+        })();
+        const number = String(row.numberText ?? '');  // preserved as string — leading zeros intact
+        const winning = String(row.winningNumber ?? row.normalizedResult ?? '');
+
+        return {
+          id:                 row.id,
+          ownerUid:           row.ownerUid,
+          dreamerId:          row.dreamerId,          // never defaulted to owner-self
+          dreamerName:        row.dreamerName ?? '',
+          termLabel:          row.termLabel,
+          normalizedTerm:     row.normalizedTerm,
+          // number aliases — all strings, leading zeros preserved
+          number,
+          numberText:         number,
+          candidate:          number,
+          candidateNumber:    number,
+          // winning number aliases
+          winningNumber:      winning,
+          winning_number:     winning,
+          normalizedResult:   row.normalizedResult ?? winning,
+          // game type aliases
+          gameType,
+          game_type:          gameType,
+          // state
+          state:              row.state,
+          // draw date/time aliases
+          drawDate:           row.drawDate,
+          draw_date:          row.drawDate,
+          drawTime:           row.drawTime,
+          draw_time:          row.drawTime,
+          // hit type aliases
+          hitType,
+          match_type:         hitType === 'straight' ? 'exact' : 'box',
+          matchMode:          hitType,
+          // source
+          source:             src,
+          sourceClass:        src,
+          _sourceClass:       src,
+          sourceType:         row.source ?? src,
+          // source context IDs
+          sourceDreamEntryId: row.sourceDreamEntryId ?? '',
+          dreamEntryId:       row.sourceDreamEntryId ?? '',
+          activeWindowId:     row.activeWindowId ?? '',
+          backtestDreamId:    row.backtestDreamId ?? '',
+          sourceContextId:    row.sourceContextId ?? '',
+          // timing
+          daysFromDream:      row.daysFromDream ?? null,
+          sameDay:            row.sameDay ?? false,
+          // timestamps — already JS Date objects from Prisma
+          createdAt:          row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt ?? ''),
+          updatedAt:          row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ''),
+          detectedAt:         row.createdAt instanceof Date ? row.createdAt.toISOString() : null,
+        };
+      });
+
+      // Apply source filter in-memory (sourceP was not applied server-side)
+      let filtered = rows;
+      if (sourceP) {
+        const want = sourceP.toLowerCase();
+        filtered = rows.filter(r => {
+          const sc = r._sourceClass;
+          if (want === 'backtest-replay' || want === 'backtest') return sc === 'backtest-replay';
+          if (want === 'live-dream-refresh' || want === 'live')  return sc === 'live-dream-refresh';
+          return true;
+        });
+      }
+
+      const filtersApplied: string[] = [];
+      if (termRaw)    filtersApplied.push(`term=${termRaw}`);
+      if (numParam)   filtersApplied.push(`number=${numParam}`);
+      if (stateP)     filtersApplied.push(`state=${stateP}`);
+      if (gameP)      filtersApplied.push(`gameType=${gameP}`);
+      if (dreamerP)   filtersApplied.push(`dreamerId=${dreamerP}`);
+      if (btidParam)  filtersApplied.push(`backtestDreamId=${btidParam}`);
+      if (deidParam)  filtersApplied.push(`dreamEntryId=${deidParam}`);
+      if (wIdParam)   filtersApplied.push(`activeWindowId=${wIdParam}`);
+      if (sourceP)    filtersApplied.push(`source=${sourceP}`);
+
+      const res = NextResponse.json({
+        ok: true,
+        events:   filtered,
+        rows:     filtered,
+        count:    filtered.length,
+        term:     termRaw,
+        provider: 'postgres',
+        filtersApplied,
+      });
+      res.headers.set('Cache-Control', 'private, max-age=30');
+      return res;
+    }
+
+    // ── Firebase branch (unchanged) ──────────────────────────────────────────
     const db = getAdminDb();
 
     // Shared constraints
