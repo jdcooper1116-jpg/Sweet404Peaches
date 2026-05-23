@@ -16,6 +16,7 @@
  *   limit      optional, max 500
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getDreamDbProvider } from '@/lib/storage/provider';
 import { Timestamp }                 from 'firebase-admin/firestore';
 import { getAdminDb }                from '@/lib/firebase/admin';
 import {
@@ -42,6 +43,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'ownerUid is required.' }, { status: 400 });
     }
 
+    // ── Postgres branch ────────────────────────────────────────────────────────
+    // Prevents writing new Firebase playlist snapshots while in Postgres mode.
+    // Postgres candidate snapshots will be implemented in E2B.
+    if (getDreamDbProvider() === 'postgres') {
+      return NextResponse.json({
+        ok: true, provider: 'postgres', saved: 0, hitsFound: 0, candidatesSaved: 0,
+        message: 'Postgres playlist candidate snapshots are not implemented yet; Firebase snapshot suppressed.',
+      });
+    }
+
+    // ── Firebase branch (unchanged) ────────────────────────────────────────────
     const db           = getAdminDb();
     const now          = Timestamp.now();
     const snapshotDate = new Date().toISOString().slice(0, 10);

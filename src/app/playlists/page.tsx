@@ -574,6 +574,12 @@ export default function PlaylistsPage() {
               ? 'No active dream windows. Write a dream entry to generate candidates.'
               : 'Active windows exist but no historical fell-before evidence for these terms yet. Run a refresh, then check As They Fell Before.'}
           </p>
+          {/* Postgres rebuild notice — shown when evidence-backed returns postgres-safe-empty */}
+          {(ebCandidates.length === 0 && ebNoEvidence.length === 0) && (
+            <p style={{ margin:'10px 0 0', fontSize:'12px', color:'rgba(255,255,255,0.30)', lineHeight:1.6 }}>
+              Postgres playlist intelligence rebuild pending (E2B). Stale Firebase playlist data has been suppressed.
+            </p>
+          )}
         </section>
       )}
 

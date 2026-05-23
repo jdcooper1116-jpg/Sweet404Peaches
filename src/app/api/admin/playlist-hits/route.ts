@@ -14,6 +14,7 @@
  * If no statePlaylistCandidates exist yet, returns a friendly message.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getDreamDbProvider } from '@/lib/storage/provider';
 import { Timestamp }                 from 'firebase-admin/firestore';
 import { getAdminDb }                from '@/lib/firebase/admin';
 import { normalizeTerm as normT }    from '@/lib/intelligence/hitClassification';
@@ -36,6 +37,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'ownerUid required.', hits: [] }, { status: 400 });
     }
 
+    // ── Postgres branch ────────────────────────────────────────────────────────
+    // Suppresses stale Firebase statePlaylistHits (celebrity/boat/beg test rows).
+    // Postgres playlist hits will be implemented in E2B.
+    if (getDreamDbProvider() === 'postgres') {
+      return NextResponse.json({
+        ok: true, provider: 'postgres', hits: [], count: 0,
+        message: 'Postgres playlist hits are not persisted yet; stale Firebase playlist hits suppressed.',
+      });
+    }
+
+    // ── Firebase branch (unchanged) ────────────────────────────────────────────
     const db   = getAdminDb();
     const snap = await db.collection('statePlaylistHits')
       .where('ownerUid', '==', ownerUid)
@@ -68,6 +80,13 @@ export async function POST(req: NextRequest) {
 
     if (!ownerUid) {
       return NextResponse.json({ ok: false, error: 'ownerUid required.' }, { status: 400 });
+    }
+
+    if (getDreamDbProvider() === 'postgres') {
+      return NextResponse.json({
+        ok: true, provider: 'postgres', hitsFound: 0, hitsSkipped: 0, repairRan: false,
+        message: 'Postgres playlist repair not implemented yet; suppressed in Postgres mode.',
+      });
     }
 
     const db  = getAdminDb();

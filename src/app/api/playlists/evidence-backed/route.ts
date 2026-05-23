@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
+import { getDreamDbProvider } from '@/lib/storage/provider';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -81,6 +82,32 @@ export async function GET(req: NextRequest) {
     const perDreamerLimit = Math.min(Math.max(Number(params.get('limit') ?? 250), 1), 250);
     const today = new Date().toISOString().slice(0, 10);
 
+    // ── Postgres branch ─────────────────────────────────────────────────────────
+    // Returns a clean empty response so the Playlists page shows no stale Firebase
+    // evidence. Postgres playlist intelligence will be implemented in E2B.
+    if (getDreamDbProvider() === 'postgres') {
+      return NextResponse.json({
+        ok:                        true,
+        provider:                  'postgres',
+        candidates:                [],
+        evidenceCandidates:        [],
+        convergenceCandidates:     [],
+        recentHitOnlyCandidates:   [],
+        noEvidenceCandidates:      [],
+        count:                     0,
+        noEvidenceCount:           0,
+        recentHitOnlyCount:        0,
+        activeWindowCount:         0,
+        activeTermCount:           0,
+        dreamerBreakdown:          {},
+        debug: {
+          source:  'postgres-safe-empty',
+          message: 'Postgres playlist intelligence will be rebuilt in E2B; stale Firebase evidence suppressed.',
+        },
+      });
+    }
+
+    // ── Firebase branch (unchanged) ──────────────────────────────────────────────
     const db = getAdminDb();
 
     // 1. Load active windows safely, per dreamer.
