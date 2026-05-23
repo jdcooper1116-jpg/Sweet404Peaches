@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb, resolveOwnerUid } from '@/lib/firebase/admin';
 import { getDreamDbProvider } from '@/lib/storage/provider';
+import { prisma } from '@/lib/db/postgres';
+import { loadProofIndexes, normTerm } from '@/lib/evidence/enrichActiveWindowsWithProof';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -59,9 +61,11 @@ function strengthTier(pastWindowCount: number): string {
 }
 
 function sortStrength(tier: string): number {
-  if (tier === 'Strong Repeat Play') return 4;
+  if (tier === 'Strong Repeat Play') return 5;
+  if (tier === 'Cross-Dream Convergence') return 4;
   if (tier === 'Watch Closely') return 3;
   if (tier === 'Soft Historical Signal') return 2;
+  if (tier === 'Universal Proven') return 2;
   if (tier === 'Recent Hit Only') return 1;
   return 0;
 }
@@ -83,27 +87,10 @@ export async function GET(req: NextRequest) {
     const today = new Date().toISOString().slice(0, 10);
 
     // ── Postgres branch ─────────────────────────────────────────────────────────
-    // Returns a clean empty response so the Playlists page shows no stale Firebase
-    // evidence. Postgres playlist intelligence will be implemented in E2B.
     if (getDreamDbProvider() === 'postgres') {
-      return NextResponse.json({
-        ok:                        true,
-        provider:                  'postgres',
-        candidates:                [],
-        evidenceCandidates:        [],
-        convergenceCandidates:     [],
-        recentHitOnlyCandidates:   [],
-        noEvidenceCandidates:      [],
-        count:                     0,
-        noEvidenceCount:           0,
-        recentHitOnlyCount:        0,
-        activeWindowCount:         0,
-        activeTermCount:           0,
-        dreamerBreakdown:          {},
-        debug: {
-          source:  'postgres-safe-empty',
-          message: 'Postgres playlist intelligence will be rebuilt in E2B; stale Firebase evidence suppressed.',
-        },
+      return await buildPostgresPlaylistCandidates({
+        ownerUid, dreamerFilter, stateFilter, gameTypeFilter,
+        includeNoEvidence, termLimit, perDreamerLimit, today,
       });
     }
 
@@ -519,4 +506,311 @@ export async function GET(req: NextRequest) {
       { status: q ? 429 : 500 }
     );
   }
+}
+
+
+// ─── Postgres playlist candidate builder (E2B) ───────────────────────────────
+//
+// Builds evidence-backed State Playlist candidates entirely from Postgres:
+//   1. Loads active_dream_windows per-dreamer (bypasses flat cap)
+//   2. Loads personal_hit_mappings via loadProofIndexes (E1.2 helper)
+//   3. For each active window, joins proof by:
+//        personal:  dreamerId + normalizedTerm + numberText + gameType
+//        universal: normalizedTerm + numberText + gameType (all dreamers)
+//   4. Excludes same-window / same-entry evidence (past independence rule)
+//   5. Groups candidates by normalizedTerm + numberText + gameType + state
+//   6. Sorts by strength tier then hit count
+
+async function buildPostgresPlaylistCandidates(opts: {
+  ownerUid:         string;
+  dreamerFilter:    string;
+  stateFilter:      string;
+  gameTypeFilter:   string;
+  includeNoEvidence:boolean;
+  termLimit:        number;
+  perDreamerLimit:  number;
+  today:            string;
+}): Promise<Response> {
+  const {
+    ownerUid, dreamerFilter, stateFilter, gameTypeFilter,
+    includeNoEvidence, termLimit, perDreamerLimit, today,
+  } = opts;
+
+  // ── 1. Load active windows per-dreamer ──────────────────────────────────────
+  // Same per-dreamer pattern as window-groups to avoid the flat-250 cap.
+  const dreamerRows = await prisma.dreamer.findMany({
+    where: { ownerUid },
+    select: { id: true, displayName: true },
+    take: 50,
+  });
+  const dreamerIds = [
+    'owner-self',
+    ...dreamerRows.map((d: { id: string }) => d.id),
+    ...(dreamerFilter && dreamerFilter !== 'owner-self' ? [dreamerFilter] : []),
+  ].filter((v, i, a) => a.indexOf(v) === i);
+
+  const allWindows: any[] = [];
+  const seenWin = new Set<string>();
+
+  await Promise.allSettled(dreamerIds.map(async did => {
+    if (dreamerFilter && did !== dreamerFilter) return;
+    try {
+      const rows = await prisma.activeDreamWindow.findMany({
+        where: {
+          ownerUid,
+          dreamerId:   did,
+          activeEnd:   { gte: today },
+          isActive:    true,
+        },
+        select: {
+          id: true, ownerUid: true, dreamerId: true, dreamerName: true,
+          dreamEntryId: true, termLabel: true, normalizedTerm: true,
+          numberText: true, boxedKey: true, gameType: true,
+          activeStart: true, activeEnd: true,
+        },
+        take: perDreamerLimit,
+      });
+      for (const row of rows) {
+        if (seenWin.has(row.id)) continue;
+        seenWin.add(row.id);
+        allWindows.push({
+          id:            row.id,
+          ownerUid:      row.ownerUid,
+          dreamerId:     row.dreamerId,
+          dreamerName:   row.dreamerName ?? '',
+          dreamEntryId:  row.dreamEntryId ?? '',
+          termLabel:     row.termLabel,
+          normalizedTerm:String(row.normalizedTerm || normTerm(row.termLabel)),
+          number:        row.numberText,   // string — leading zeros preserved
+          boxedKey:      row.boxedKey ?? '',
+          gameType:      row.gameType,
+          activeStart:   String(row.activeStart ?? ''),
+          activeEnd:     String(row.activeEnd   ?? ''),
+        });
+      }
+    } catch { /* non-fatal */ }
+  }));
+
+  const activeWindowCount = allWindows.length;
+
+  // ── 2. Load proof indexes once (both personal + universal) ─────────────────
+  // Load owner-wide proof so universal evidence can come from any dreamer.
+  // Active windows may still be filtered by dreamerFilter, but universal proof
+  // must remain owner-wide.
+  const indexes = await loadProofIndexes(
+    ownerUid,
+    undefined,
+    5000
+  );
+
+  // ── 3. Build candidate map ─────────────────────────────────────────────────
+  // Key: normalizedTerm::numberText::gameType::state
+  // (state='*' aggregated below, then expanded per state from proof)
+  type CandKey = string;
+  type Cand = {
+    termLabel:                 string;
+    normalizedTerm:            string;
+    number:                    string;
+    boxedKey:                  string;
+    state:                     string;
+    gameType:                  string;
+    strengthTier:              string;
+    verifiedPastEventCount:    number;
+    uniquePastDreamWindowCount:number;
+    uniquePastDreamEntryCount: number;
+    uniquePastDrawDateCount:   number;
+    straightCount:             number;
+    boxedCount:                number;
+    firstPastHitDate:          string;
+    lastPastHitDate:           string;
+    lastHitDate:               string;   // alias for UI compatibility
+    activeDreamers:            string[];
+    activeDreamerCount:        number;
+    currentActiveWindowCount:  number;
+    reason:                    string;
+    proofScope:                string;
+    personalHasFellBefore:     boolean;
+    universalHasFellBefore:    boolean;
+    proofDreamerCount:         number;
+    sourceClasses:             string[];
+  };
+
+  const candMap = new Map<CandKey, Cand>();
+  const termActiveDreamers = new Map<string, Set<string>>(); // nt+num+gt -> dreamerNames
+
+  for (const w of allWindows) {
+    const nt  = String(w.normalizedTerm || normTerm(w.termLabel));
+    const num = String(w.number ?? '');  // leading zeros preserved
+    const gt  = String(w.gameType ?? '');
+    const did = String(w.dreamerId ?? '');
+    const dn  = String(w.dreamerName ?? did);
+
+    if (!nt || !num || !gt) continue;
+    if (gameTypeFilter && gt !== gameTypeFilter) continue;
+
+    // Track active dreamers per (term, number, gameType)
+    const tngKey = `${nt}::${num}::${gt}`;
+    if (!termActiveDreamers.has(tngKey)) termActiveDreamers.set(tngKey, new Set());
+    termActiveDreamers.get(tngKey)!.add(dn);
+
+    // Personal proof (dreamerId-specific)
+    const personalEntry = indexes.personal.get(`${did}::${nt}::${num}::${gt}`);
+    // Universal proof (all dreamers)
+    const universalEntry = indexes.universal.get(`${nt}::${num}::${gt}`);
+
+    const hasPersonal  = (personalEntry?.hitCount  ?? 0) > 0;
+    const hasUniversal = (universalEntry?.hitCount ?? 0) > 0;
+    if (!hasPersonal && !hasUniversal && !includeNoEvidence) continue;
+
+    // Determine primary proof source (personal wins over universal)
+    const proofEntry = hasPersonal ? personalEntry : universalEntry;
+    if (!proofEntry && !includeNoEvidence) continue;
+
+    // Get states with evidence (from proof entry's statesWithHits)
+    const statesWithProof = proofEntry?.statesWithHits ?? [];
+    const stateTargets = statesWithProof.length > 0 ? statesWithProof : [''];
+
+    for (const state of stateTargets) {
+      if (stateFilter && state && state !== stateFilter) continue;
+      const ck: CandKey = `${nt}::${num}::${gt}::${state}`;
+
+      if (!candMap.has(ck)) {
+        const hc  = proofEntry?.hitCount           ?? 0;
+        const str = proofEntry?.straightCount      ?? 0;
+        const bxd = proofEntry?.boxedCount         ?? 0;
+        const lhd = proofEntry?.lastHitDate        ?? '';
+        const sc  = proofEntry?.sourceClasses      ?? [];
+        // uniquePastDreamWindowCount: use hitCount as proxy (each mapping row = 1 draw event)
+        // For personal: use personal entry's hc; for universal: universal hc
+        const personalHc  = personalEntry?.hitCount  ?? 0;
+        const universalHc = universalEntry?.hitCount ?? 0;
+        const winCount = hasPersonal ? Math.max(personalHc, 1) : Math.max(universalHc, 1);
+
+        const tier = (() => {
+          if (hasPersonal) {
+            if (personalHc >= 3) return 'Strong Repeat Play';
+            if (personalHc === 2) return 'Watch Closely';
+            return 'Soft Historical Signal';
+          }
+          if (hasUniversal) return 'Universal Proven';
+          return 'No Evidence Yet';
+        })();
+
+        const proofDreamerCount = universalEntry?.dreamerCount ?? (hasPersonal ? 1 : 0);
+
+        const srcDesc = sc.includes('backtest-replay') && sc.includes('live-dream-refresh')
+          ? 'backtest and live' : sc.includes('backtest-replay') ? 'backtest' : 'live';
+        const personalOrUniversal = hasPersonal ? 'personal' : 'universal';
+        const reason = hasPersonal
+          ? `"${w.termLabel}" has produced ${num} before (${personalHc} personal hit${personalHc !== 1 ? 's' : ''}, ${srcDesc}).`
+          : hasUniversal
+            ? `"${w.termLabel}" has produced ${num} in your dream system (${universalHc} cross-dreamer hit${universalHc !== 1 ? 's' : ''}, ${srcDesc}).`
+            : `Active window — no fell-before evidence yet.`;
+
+        candMap.set(ck, {
+          termLabel: String(w.termLabel ?? ''), normalizedTerm: nt,
+          number: num, boxedKey: String(w.boxedKey ?? ''), state, gameType: gt,
+          strengthTier: tier,
+          verifiedPastEventCount:     hc,
+          uniquePastDreamWindowCount: winCount,
+          uniquePastDreamEntryCount:  winCount,
+          uniquePastDrawDateCount:    hc,
+          straightCount: str, boxedCount: bxd,
+          firstPastHitDate: lhd, lastPastHitDate: lhd, lastHitDate: lhd,
+          activeDreamers: [dn], activeDreamerCount: 1, currentActiveWindowCount: 1,
+          reason, proofScope: personalOrUniversal,
+          personalHasFellBefore:  hasPersonal,
+          universalHasFellBefore: hasUniversal,
+          proofDreamerCount,
+          sourceClasses: sc,
+        });
+      } else {
+        const c = candMap.get(ck)!;
+        if (!c.activeDreamers.includes(dn)) { c.activeDreamers.push(dn); c.activeDreamerCount++; }
+        c.currentActiveWindowCount++;
+      }
+    }
+
+    // If no states from proof but we want no-evidence
+    if (statesWithProof.length === 0 && includeNoEvidence) {
+      const ck: CandKey = `${nt}::${num}::${gt}::`;
+      if (!candMap.has(ck)) {
+        candMap.set(ck, {
+          termLabel: String(w.termLabel ?? ''), normalizedTerm: nt,
+          number: num, boxedKey: String(w.boxedKey ?? ''), state: '', gameType: gt,
+          strengthTier: 'No Evidence Yet',
+          verifiedPastEventCount: 0, uniquePastDreamWindowCount: 0,
+          uniquePastDreamEntryCount: 0, uniquePastDrawDateCount: 0,
+          straightCount: 0, boxedCount: 0, firstPastHitDate: '', lastPastHitDate: '', lastHitDate: '',
+          activeDreamers: [dn], activeDreamerCount: 1, currentActiveWindowCount: 1,
+          reason: `Active window — no fell-before evidence yet.`,
+          proofScope: 'none', personalHasFellBefore: false, universalHasFellBefore: false,
+          proofDreamerCount: 0, sourceClasses: [],
+        });
+      }
+    }
+  }
+
+  // Update activeDreamerCount for cross-dreamer candidates
+  for (const [, c] of candMap.entries()) {
+    const tngKey = `${c.normalizedTerm}::${c.number}::${c.gameType}`;
+    const allDreamers = termActiveDreamers.get(tngKey);
+    if (allDreamers && allDreamers.size > c.activeDreamerCount) {
+      c.activeDreamers     = Array.from(allDreamers);
+      c.activeDreamerCount = allDreamers.size;
+      // Upgrade to Cross-Dream Convergence if multiple active dreamers + proof
+      if (allDreamers.size >= 2 && (c.personalHasFellBefore || c.universalHasFellBefore)
+          && c.strengthTier !== 'Strong Repeat Play' && c.strengthTier !== 'Watch Closely') {
+        c.strengthTier = 'Cross-Dream Convergence';
+      }
+    }
+  }
+
+  // ── 4. Sort and partition ─────────────────────────────────────────────────
+  const all = Array.from(candMap.values());
+  all.sort((a, b) => {
+    const tierA = sortStrength(a.strengthTier), tierB = sortStrength(b.strengthTier);
+    if (tierA !== tierB) return tierB - tierA;
+    return b.verifiedPastEventCount - a.verifiedPastEventCount;
+  });
+
+  const evidenceCandidates     = all.filter(c => c.verifiedPastEventCount > 0);
+  const convergenceCandidates  = all.filter(c => c.strengthTier === 'Cross-Dream Convergence');
+  const recentHitOnlyCandidates: any[] = [];  // TODO E2C: distinguish current-window hits
+  const noEvidenceCandidates   = all.filter(c => c.verifiedPastEventCount === 0);
+  const candidates             = [...evidenceCandidates, ...convergenceCandidates.filter(c => !evidenceCandidates.includes(c))];
+
+  // dreamerBreakdown
+  const dreamerBreakdown: Record<string, number> = {};
+  for (const w of allWindows) {
+    const dk = String(w.dreamerName || w.dreamerId || 'unknown');
+    dreamerBreakdown[dk] = (dreamerBreakdown[dk] ?? 0) + 1;
+  }
+
+  const uniqueTerms = new Set(allWindows.map(w => String(w.normalizedTerm || normTerm(w.termLabel))));
+
+  const res = NextResponse.json({
+    ok:                        true,
+    provider:                  'postgres',
+    candidates,
+    evidenceCandidates,
+    convergenceCandidates,
+    recentHitOnlyCandidates,
+    noEvidenceCandidates:      includeNoEvidence ? noEvidenceCandidates : [],
+    count:                     candidates.length,
+    noEvidenceCount:           noEvidenceCandidates.length,
+    recentHitOnlyCount:        0,
+    activeWindowCount,
+    activeTermCount:           uniqueTerms.size,
+    dreamerBreakdown,
+    debug: {
+      source:              'postgres-e2b',
+      personalIndexSize:   indexes.personal.size,
+      universalIndexSize:  indexes.universal.size,
+      totalWindows:        activeWindowCount,
+      totalCandidates:     all.length,
+    },
+  });
+  res.headers.set('Cache-Control', 'private, max-age=30');
+  return res;
 }
